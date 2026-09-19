@@ -1,20 +1,40 @@
 import http from 'node:http';
 import { randomBytes, randomUUID } from 'node:crypto';
+import { execFile } from 'node:child_process';
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import {createReadStream} from 'node:fs';
-import { FF,FP,run,probe,video,scan,summarize,compare } from './engine.mjs';
+import { FF,FP,run,probe,video,scan,summarize,compare,normalizeMediaPath } from './engine.mjs';
 import {allPackets,structure,metadataSummary,complexity,trial} from './analysis.mjs';
 const root=path.dirname(fileURLToPath(import.meta.url)),token=randomBytes(24).toString('hex'),jobs=new Map();
 const port=Number(process.env.PORT||4317),origin=`http://127.0.0.1:${port}`;
-let active=null;
+const execFileAsync=promisify(execFile);
+let active=null,pickerActive=false;
 const versions={};
 for(const [key,exe] of [['ffmpeg',FF],['ffprobe',FP]]){try{versions[key]=(await run(exe,['-version'])).split('\n')[0]}catch(e){versions[key]=`不可用：${e.message}`}}
 let filters='';try{filters=await run(FF,['-hide_banner','-filters'])}catch{}
 const capabilities={versions,metrics:['psnr','ssim','vmaf'].filter(m=>filters.includes(m==='vmaf'?'libvmaf':m))};
 function send(res,status,data){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data))}
 async function body(req){let s='';for await(const b of req){s+=b;if(s.length>16384)throw Error('请求过大')}return JSON.parse(s||'{}')}
+function normalizeInputPaths(input){
+  if(input.type==='inspect'||input.type==='analyze'||input.type==='trial')input.file=normalizeMediaPath(input.file);
+  if(input.type==='compare'){input.reference=normalizeMediaPath(input.reference);input.candidate=normalizeMediaPath(input.candidate)}
+  return input;
+}
+async function selectMediaFile(){
+  if(process.platform!=='win32')throw Error('当前文件选择器仅支持 Windows，请输入绝对路径');
+  if(pickerActive)throw Error('文件选择器已经打开，请先在 Windows 对话框中选择或取消');
+  pickerActive=true;
+  const script=`[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false)\nAdd-Type -AssemblyName System.Windows.Forms\nAdd-Type -AssemblyName System.Drawing\nAdd-Type @'\nusing System;\nusing System.Runtime.InteropServices;\npublic static class MediaScopeWindow {\n  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);\n}\n'@\n$owner=New-Object System.Windows.Forms.Form\n$owner.ShowInTaskbar=$false\n$owner.TopMost=$true\n$owner.StartPosition=[System.Windows.Forms.FormStartPosition]::Manual\n$owner.Location=New-Object System.Drawing.Point(-32000,-32000)\n$owner.FormBorderStyle=[System.Windows.Forms.FormBorderStyle]::FixedToolWindow\n$owner.Size=New-Object System.Drawing.Size(1,1)\n$owner.Opacity=0.01\n$dialog=New-Object System.Windows.Forms.OpenFileDialog\n$dialog.Title='选择要分析的媒体文件'\n$dialog.Filter='媒体文件|*.mov;*.mp4;*.mkv;*.mxf;*.avi;*.webm;*.m4v;*.ts;*.mts;*.m2ts;*.wav;*.flac;*.aac;*.m4a;*.mp3;*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.exr|视频文件|*.mov;*.mp4;*.mkv;*.mxf;*.avi;*.webm;*.m4v;*.ts;*.mts;*.m2ts|所有文件|*.*'\n$dialog.Multiselect=$false\n$dialog.CheckFileExists=$true\n$dialog.RestoreDirectory=$true\ntry{$owner.Show();$owner.Activate();[MediaScopeWindow]::SetForegroundWindow($owner.Handle)|Out-Null;if($dialog.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK){[Console]::Write($dialog.FileName)}}finally{$dialog.Dispose();$owner.Close();$owner.Dispose()}`;
+  const encoded=Buffer.from(script,'utf16le').toString('base64');
+  let stdout;
+  try{({stdout}=await execFileAsync('powershell.exe',['-NoProfile','-STA','-EncodedCommand',encoded],{encoding:'utf8',windowsHide:false,maxBuffer:1024*1024,timeout:600000}))}
+  catch(e){throw Error(`文件选择器未能完成：${e.stderr?.trim()||e.message}`)}
+  finally{pickerActive=false}
+  return stdout?normalizeMediaPath(stdout):null;
+}
 async function execute(job,input){
   const cwd=path.join(root,'.mediascope',job.id);await mkdir(cwd,{recursive:true});
   await writeFile(path.join(cwd,'job-input.json'),JSON.stringify(input,null,2));
@@ -53,6 +73,7 @@ const server=http.createServer(async(req,res)=>{
     if(url.pathname.startsWith('/api/')){
       if(req.headers['x-mediascope-token']!==token||(req.headers.origin&&req.headers.origin!==origin)){send(res,403,{error:'访问校验失败，请刷新本机页面'});return}
       if(req.method==='GET'&&url.pathname==='/api/status'){send(res,200,{...capabilities,jobs:[...jobs.values()].map(({controller,result,...j})=>j)});return}
+      if(req.method==='POST'&&url.pathname==='/api/select-file'){send(res,200,{file:await selectMediaFile()});return}
       const match=url.pathname.match(/^\/api\/jobs\/([a-f0-9-]+)(\/report)?$/);
       if(match){const j=jobs.get(match[1]);if(!j){send(res,404,{error:'任务不存在'});return}
         if(req.method==='DELETE'){j.controller.abort();send(res,200,{ok:true});return}
@@ -60,7 +81,7 @@ const server=http.createServer(async(req,res)=>{
       }
       if(req.method==='POST'&&url.pathname==='/api/jobs'){
         if(active){send(res,409,{error:'已有任务正在运行，请等待完成或取消'});return}
-        const input=await body(req);if(active){send(res,409,{error:'已有任务正在运行，请等待完成或取消'});return}if(!['inspect','analyze','compare','trial'].includes(input.type))throw Error('无效任务类型');
+        const input=await body(req);if(active){send(res,409,{error:'已有任务正在运行，请等待完成或取消'});return}if(!['inspect','analyze','compare','trial'].includes(input.type))throw Error('无效任务类型');normalizeInputPaths(input);
         // Keep at most five in-memory reports. Completed reports remain on disk.
         while(jobs.size>=5){const key=jobs.keys().next().value;jobs.delete(key)}
         const j={id:randomUUID(),type:input.type,status:'running',message:'准备分析',startedAt:new Date().toISOString(),controller:new AbortController()};jobs.set(j.id,j);active=j.id;

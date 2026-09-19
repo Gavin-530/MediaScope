@@ -1,4 +1,4 @@
 .mediascope/
 test-work/
 .build/
-releases/
+releases/*.zip

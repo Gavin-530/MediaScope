@@ -22,8 +22,17 @@ export async function run(exe,args,ctx={},line) {
     p.on('error',reject);p.on('close',code=>failure?reject(failure):code===0&&!(args.includes('error')&&err.trim())?resolve(out):reject(Error(err||`进程退出 ${code}`)));
   });
 }
+export function normalizeMediaPath(file){
+  if(typeof file!=='string')throw Error('请输入本机文件的绝对路径');
+  let value=file.replace(/[\u200e\u200f\u202a-\u202e\u2060\ufeff]/g,'').trim();
+  const pairs=[['"','"'],["'","'"],['“','”'],['‘','’']];
+  for(const [left,right] of pairs)if(value.startsWith(left)&&value.endsWith(right)){value=value.slice(left.length,-right.length).trim();break}
+  value=value.replace(/^([a-zA-Z])：(?=[\\/])/,'$1:');
+  if(!path.isAbsolute(value))throw Error('请输入本机文件的绝对路径');
+  return path.normalize(value);
+}
 export async function probe(file,ctx={}){
-  if(typeof file!=='string'||!path.isAbsolute(file)) throw Error('请输入本机文件的绝对路径');
+  file=normalizeMediaPath(file);
   const s=await stat(file);if(!s.isFile())throw Error('路径不是文件');
   const raw=JSON.parse(await run(FP,['-v','error','-show_format','-show_streams','-show_chapters','-of','json',file],ctx));
   let frameSample=null;

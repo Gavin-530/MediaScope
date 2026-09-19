@@ -2,7 +2,7 @@ import {test,before} from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdir} from 'node:fs/promises';
 import path from 'node:path';
-import {FF,probe,run,scan,packets,summarize,alignment,compare} from '../engine.mjs';
+import {FF,probe,run,scan,packets,summarize,alignment,compare,normalizeMediaPath} from '../engine.mjs';
 import {allPackets,structure,metadataSummary,complexity,trial,av1ShortRefs} from '../analysis.mjs';
 import {readdir} from 'node:fs/promises';
 const dir=path.resolve('test-work'),source=path.join(dir,'参考 多音轨.mp4'),candidate=path.join(dir,'candidate.mp4');
@@ -13,6 +13,7 @@ before(async()=>{
  await run(FF,['-hide_banner','-v','error','-y','-i',source,'-map','0:v','-c:v','libx264','-crf','42','-pix_fmt','yuv420p','-color_primaries','bt709','-color_trc','bt709','-colorspace','bt709','-color_range','tv','-bsf:v','h264_metadata=colour_primaries=1:transfer_characteristics=1:matrix_coefficients=1',candidate]);
 });
 test('Unicode path, complete audio inventory, frame and packet accounting',async()=>{
+ assert.equal(normalizeMediaPath(`“${source}”`),source);assert.equal(normalizeMediaPath(source.replace(/^([A-Za-z]):/,'$1：')),source);
  const p=await probe(source);assert.equal(p.raw.streams.filter(s=>s.codec_type==='audio').length,2);
  const frames=await scan(source,0),stats=await packets(source,0);assert.equal(frames.length,12);assert.equal(summarize(frames).nonIncreasing,0);assert.equal(stats.count,12);assert.ok(stats.bytes>0);assert.ok(stats.bytes<p.size);assert.equal(stats.missing,0);
  assert.ok(Math.abs(stats.bins.reduce((s,b)=>s+b.mbps,0)*1e6/8-stats.bytes)<.001);
