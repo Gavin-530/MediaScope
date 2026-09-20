@@ -5,8 +5,8 @@ Windows 本地媒体结构与质量分析工具。原生 Node.js + 浏览器 + F
 ## 使用与测试包
 
 - **当前源码版**：双击 `start.cmd`，或 `npm start`，打开 http://127.0.0.1:4317 。需要 Node.js 22+ 和 FFmpeg/FFprobe；也可使用 FFMPEG_PATH / FFPROBE_PATH 指定程序。
-- **当前轻量测试包**：`releases/MediaScope-0.1.2-beta.zip`。包内保留版本号和逐文件 SHA-256 清单，不包含 Node.js、FFmpeg 或 FFprobe；换到其他设备前需安装这些依赖。
-- 已发布的 `0.1.0-beta`、`0.1.1-beta` 保持不可变。修复和功能调整递增前三段版本号，当前为 `0.1.2-beta`；只有需要同时区分同一源码版本的多个构建时才增加 `beta.1`、`beta.2`。
+- **当前轻量测试包**：[MediaScope-0.1.2-beta.zip](https://github.com/Gavin-530/MediaScope/releases/download/v0.1.2-beta/MediaScope-0.1.2-beta.zip)。包内保留版本号和逐文件 SHA-256 清单，不包含 Node.js、FFmpeg 或 FFprobe；换到其他设备前需安装这些依赖。
+- 历史版本及其校验值见 [GitHub Releases](https://github.com/Gavin-530/MediaScope/releases)。已发布版本保持不可变；修复和功能调整递增前三段版本号，当前为 `0.1.2-beta`，只有需要同时区分同一源码版本的多个构建时才增加 `beta.1`、`beta.2`。
 - 包内没有个人媒体、分析报告或测试生成文件。只有明确指定的正式版才构建包含运行环境的 Windows x64 完整便携包。
 - 保持服务窗口运行，Ctrl+C 停止。通过 PORT 环境变量可改变端口。程序只监听本机回环地址，API 检查会话令牌与来源。
 
@@ -68,7 +68,7 @@ Windows 本地媒体结构与质量分析工具。原生 Node.js + 浏览器 + F
 
 `npm test` 会在 `test-work` 生成合成素材。测试覆盖中文路径、多音轨、H.264/HEVC/AV1、HDR、错位拒绝、IDR/CRA、AV1 隐藏/show-existing/参考槽、SI/TI、包字节汇总以及三种编码器的片段实验。测试用素材不是用户媒体。
 
-`scripts/package-prerelease.ps1 -Version <预发布版本>` 生成不含运行时的轻量测试 ZIP。版本使用 `x.y.z-alpha`、`x.y.z-beta` 或 `x.y.z-rc`，确有多个构建时可增加 `.1`、`.2`。`scripts/package.ps1 -Version <正式版本> -Formal` 只用于明确指定的正式版，生成带运行环境的 Windows x64 便携 ZIP。两个脚本都不覆盖已有包。使用 `scripts/cleanup.ps1` 清理已验证的打包暂存和合成测试输出；它保留真实文件报告。
+`scripts/package-prerelease.ps1 -Version <预发布版本>` 在本地 `releases/` 目录生成不含运行时的轻量测试 ZIP；该目录中的 ZIP 不提交到 Git，公开下载包上传到 GitHub Releases。版本使用 `x.y.z-alpha`、`x.y.z-beta` 或 `x.y.z-rc`，确有多个构建时可增加 `.1`、`.2`。`scripts/package.ps1 -Version <正式版本> -Formal` 只用于明确指定的正式版，生成带运行环境的 Windows x64 便携 ZIP。两个脚本都不覆盖已有包。使用 `scripts/cleanup.ps1` 清理已验证的打包暂存和合成测试输出；它保留真实文件报告。
 
 依据：
 
