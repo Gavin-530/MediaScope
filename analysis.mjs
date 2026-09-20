@@ -1,6 +1,6 @@
-import {mkdir,unlink} from 'node:fs/promises';
+import {mkdir,unlink,access} from 'node:fs/promises';
 import path from 'node:path';
-import {FF,FP,run,probe,video,scan,compare} from './engine.mjs';
+import {FF,FP,run,probe,video,scan,compare,bitDepthPlan,bitDepthReductionFilter,verifyBitDepthReduction,alignment} from './engine.mjs';
 
 const HEVC={0:'TRAIL_N',1:'TRAIL_R',2:'TSA_N',3:'TSA_R',4:'STSA_N',5:'STSA_R',6:'RADL_N',7:'RADL_R',8:'RASL_N',9:'RASL_R',16:'BLA_W_LP',17:'BLA_W_RADL',18:'BLA_N_LP',19:'IDR_W_RADL',20:'IDR_N_LP',21:'CRA_NUT'};
 const AV1_TYPES=['KEY','INTER','INTRA_ONLY','SWITCH'];
@@ -126,37 +126,76 @@ export async function complexity(file,stream,ctx){
   return {available:true,points,si:distribution(points.map(p=>p.si)),ti:distribution(points.slice(1).map(p=>p.ti)),notes:['SI 表示亮度空间细节；TI 表示相邻帧亮度变化（排除首帧 TI=0 的汇总）。','TI 峰值可能来自运动、剪辑、闪光或噪声，不能直接认定为场景切换。','这些是复杂度描述，不是剩余压缩空间或质量评分。只在相同分辨率、帧率、位深、范围和传递函数下对比。','HDR 结果在编码值域计算，不代表感知亮度复杂度。']};
 }
 
+export function trialOptions(input){
+  const encoder=input.encoder;
+  if(!['libx264','libx265','libaom-av1'].includes(encoder))throw Error('不支持的试编码器');
+  const presetNames=['ultrafast','superfast','veryfast','faster','fast','medium','slow','slower','veryslow','placebo'];
+  const depthMode=input.depthMode??'native';if(!['native','both'].includes(depthMode))throw Error('实验位深模式无效');
+  if(!Array.isArray(input.crfs))throw Error('CRF 必须为数组');
+  const crfs=input.crfs.map(Number);
+  if(crfs.length<1||crfs.length>12||new Set(crfs).size!==crfs.length||crfs.some(c=>!Number.isFinite(c)||c<0||c>(encoder==='libaom-av1'?63:51)||(encoder==='libaom-av1'&&!Number.isInteger(c))))throw Error('请提供 1–12 个不重复的有效 CRF；x264/x265 为 0–51，可用小数，AV1 为 0–63 整数');
+  const cpuUsed=input.cpuUsed??6;if(!Number.isInteger(cpuUsed)||cpuUsed<0||cpuUsed>8)throw Error('AV1 cpu-used 需为 0–8 整数');
+  const presets=encoder==='libaom-av1'?[`cpu-used=${cpuUsed}`]:(input.presets??['medium']);
+  if(!Array.isArray(presets)||presets.length<1||presets.length>4||new Set(presets).size!==presets.length||(encoder!=='libaom-av1'&&presets.some(p=>!presetNames.includes(p))))throw Error('请选择 1–4 个不重复的 preset');
+  const points=crfs.length*presets.length*(depthMode==='both'?2:1);if(points>64)throw Error('单次实验最多 64 个编码点，请减少 CRF 或 preset');
+  const metrics=input.metrics??['psnr','ssim'];if(!Array.isArray(metrics)||!metrics.length||metrics.some(m=>!['psnr','ssim','vmaf'].includes(m)))throw Error('试编码指标无效');
+  if(depthMode==='both'&&metrics.every(m=>m==='vmaf'))throw Error('8/10-bit 对照实验仅提供 PSNR / SSIM，请至少选择一项');
+  return {encoder,depthMode,crfs,presets,cpuUsed,points,metrics:depthMode==='both'?metrics.filter(m=>m!=='vmaf'):metrics,skippedMetrics:depthMode==='both'&&metrics.includes('vmaf')?{vmaf:'双位深各组统一使用 10-bit 域 PSNR / SSIM，暂不提供 VMAF。'}:{}};
+}
 export async function trial(input,ctx){
+  const options=trialOptions(input),{crfs,presets,cpuUsed,depthMode,metrics}=options;
   const info=await probe(input.file,ctx),s=video(info,input.stream),start=Number(input.start),duration=Number(input.duration),encoder=input.encoder;
   if(!Number.isFinite(start)||start<0||!Number.isFinite(duration)||duration<1||duration>20)throw Error('实验片段需为 1–20 秒，起点不能为负');
   if(!['libx264','libx265','libaom-av1'].includes(encoder))throw Error('不支持的试编码器');
   if(!['yuv420p','yuv420p10le'].includes(s.pix_fmt))throw Error('试编码首版仅接受原生 4:2:0 8/10-bit，避免隐式采样转换');
   if(s.field_order&&!['unknown','progressive'].includes(s.field_order))throw Error('试编码暂不处理隔行视频');
-  const crfs=(input.crfs||[]).map(Number);if(crfs.length<2||crfs.length>4||new Set(crfs).size!==crfs.length||crfs.some(c=>!Number.isInteger(c)||c<0||c>(encoder==='libaom-av1'?63:51)))throw Error('请提供 2–4 个不重复的有效整数 CRF');
-  const metrics=input.metrics??['psnr','ssim'];if(metrics.some(m=>!['psnr','ssim','vmaf'].includes(m)))throw Error('试编码指标无效');
+  if(depthMode==='both')bitDepthPlan({...s,pix_fmt:'yuv420p'},{...s,pix_fmt:'yuv420p10le'},'bt709-limited-8-10');
   if(metrics.includes('vmaf')&&!(s.color_primaries==='bt709'&&s.color_transfer==='bt709'&&s.color_space==='bt709'))throw Error('此片段不满足 SDR BT.709 VMAF 条件，请取消 VMAF');
   const files=[],reference=path.join(ctx.cwd,'reference.mkv');let retained=false;
+  const register=async file=>{try{await access(file);throw Error('实验目标文件已存在，拒绝覆盖或清理：'+file)}catch(e){if(e.code!=='ENOENT')throw e}files.push(file)};
   try{
-    ctx.update('解码实验片段，写入无损参考');files.push(reference);
+    ctx.update('解码实验片段，写入无损参考');await register(reference);
     // FFV1 preserves decoded sample values. Limit temporary data by requested duration and available frame count.
     const fpsParts=(s.avg_frame_rate||'0/1').split('/').map(Number),fps=fpsParts[0]/fpsParts[1];
-    const estimate=s.width*s.height*(s.pix_fmt==='yuv420p10le'?3:1.5)*(fps||60)*duration;
+    const estimate=s.width*s.height*(depthMode==='both'?4.5:s.pix_fmt==='yuv420p10le'?3:1.5)*(fps||60)*duration;
     if(estimate>8*1024**3)throw Error('所选片段原始像素预算超过 8 GiB，请缩短片段');
     const sourceColor=[];for(const [field,flag]of [['color_primaries','-color_primaries'],['color_transfer','-color_trc'],['color_space','-colorspace'],['color_range','-color_range'],['chroma_location','-chroma_sample_location']])if(s[field]&&s[field]!=='unknown')sourceColor.push(flag,s[field]);
     await run(FF,['-hide_banner','-nostdin','-v','error','-xerror','-noauto_conversion_filters','-noautorotate','-ss',String(start),'-accurate_seek','-i',input.file,'-t',String(duration),'-map',`0:${s.index}`,'-an','-sn','-vf','setpts=PTS-STARTPTS','-c:v','ffv1','-level','3',...sourceColor,'-fps_mode','passthrough',reference],ctx);
-    const refInfo=await probe(reference,ctx),refStream=video(refInfo,0),refFrames=await scan(reference,0,ctx);if(refFrames.length<2)throw Error('实验片段没有足够的视频帧');
+    const refInfo=await probe(reference,ctx),refStream=video(refInfo,0),refFrames=await scan(reference,0,{...ctx,comparisonStream:refStream,requireProgressive:depthMode==='both'});if(refFrames.length<2)throw Error('实验片段没有足够的视频帧');
+    alignment(s,refStream,refFrames,refFrames);
+    const nativeDepth=refStream.pix_fmt==='yuv420p10le'?10:8;
+    const inputs={[nativeDepth]:reference},depths=depthMode==='both'?[8,10]:[nativeDepth],preparation={sourceDepth:nativeDepth};
+    if(depthMode==='both'){
+      const otherDepth=nativeDepth===8?10:8,otherStream={...refStream,pix_fmt:otherDepth===8?'yuv420p':'yuv420p10le'};
+      const other=path.join(ctx.cwd,`input-${otherDepth}bit.mkv`);await register(other);
+      let filter;
+      if(nativeDepth===8)filter=bitDepthPlan(refStream,otherStream,'bt709-limited-8-10').referenceFilter+'null';
+      else{preparation.reductionCheck=await verifyBitDepthReduction(refStream,ctx);filter=bitDepthReductionFilter(refStream);}
+      ctx.update(`准备 ${otherDepth}-bit 无损编码输入`);
+      await run(FF,['-hide_banner','-nostdin','-v','error','-xerror','-noauto_conversion_filters','-i',reference,'-map','0:v:0','-vf',filter,'-c:v','ffv1','-level','3','-pix_fmt',otherStream.pix_fmt,...sourceColor,'-fps_mode','passthrough',other],ctx);
+      inputs[otherDepth]=other;
+      const preDir=path.join(ctx.cwd,'metrics-preparation');await mkdir(preDir,{recursive:true});
+      const baseline=await compare(inputs[10],inputs[8],0,0,['psnr','ssim'],{...ctx,cwd:preDir},'bt709-limited-8-10');
+      if(nativeDepth===8&&baseline.metrics.psnr.pooled!=='Infinity')throw Error('8→10-bit 输入准备未保持精确码值映射');
+      preparation.mapping=nativeDepth===8?'code10 = code8 × 4（不增加源精度）':'code8 = floor(code10 / 4)（固定截断，无抖动；实验选择，不是唯一标准量化方法）';
+      preparation.baseline=baseline.metrics;preparation.normalization=baseline.normalization;
+    }
+    const qualityReference=depthMode==='both'?inputs[10]:reference;
     const rows=[];
-    for(const crf of crfs){
-      ctx.update(`试编码 ${encoder} / CRF ${crf}`);const output=path.join(ctx.cwd,`crf-${crf}.mkv`);files.push(output);
-      const opts=encoder==='libaom-av1'?['-cpu-used','6','-b:v','0']:['-preset','medium'];
+    for(const preset of presets)for(const crf of crfs)for(const depth of depths){
+      const id=`${depth}bit-${preset.replace('=','-')}-crf-${crf}`;
+      ctx.update(`试编码 ${rows.length+1}/${options.points}：${encoder} / ${depth}-bit / ${preset} / CRF ${crf}`);const output=path.join(ctx.cwd,id+'.mkv');await register(output);
+      const opts=encoder==='libaom-av1'?['-cpu-used',String(cpuUsed),'-b:v','0']:['-preset',preset];
       if(encoder==='libx265')opts.push('-x265-params','log-level=error');
       const color=[];for(const [field,flag]of [['color_primaries','-color_primaries'],['color_transfer','-color_trc'],['color_space','-colorspace'],['color_range','-color_range'],['chroma_location','-chroma_sample_location']])if(refStream[field]&&refStream[field]!=='unknown')color.push(flag,refStream[field]);
-      const t=performance.now();await run(FF,['-hide_banner','-nostdin','-v','error','-xerror','-noauto_conversion_filters','-i',reference,'-map','0:v:0','-an','-c:v',encoder,...opts,'-crf',String(crf),'-pix_fmt',refStream.pix_fmt,...color,'-fps_mode','passthrough',output],ctx);const elapsed=(performance.now()-t)/1000;
-      const metricDir=path.join(ctx.cwd,`metrics-crf-${crf}`);await mkdir(metricDir,{recursive:true});
-      const comparison=await compare(reference,output,0,0,metrics,{...ctx,cwd:metricDir}),pi=await probe(output,ctx),p=(await allPackets(output,pi.raw.streams,ctx))[0];
-      rows.push({crf,encoder,settings:opts,encodeSeconds:elapsed,encodeFps:refFrames.length/elapsed,videoBytes:p.bytes,videoMbps:p.averageMbps,metrics:Object.fromEntries(Object.entries(comparison.metrics).map(([k,m])=>[k,{pooled:m.pooled,p05:m.p05,min:m.min,model:m.model}]))});
+      const pix=depth===8?'yuv420p':'yuv420p10le';
+      const t=performance.now();await run(FF,['-hide_banner','-nostdin','-v','error','-xerror','-noauto_conversion_filters','-i',inputs[depth],'-map','0:v:0','-an','-c:v',encoder,...opts,'-crf',String(crf),'-pix_fmt',pix,...color,'-fps_mode','passthrough',output],ctx);const elapsed=(performance.now()-t)/1000;
+      const pi=await probe(output,ctx);if(video(pi,0).pix_fmt!==pix)throw Error('编码输出位深与实验请求不一致，拒绝采纳结果');
+      const metricDir=path.join(ctx.cwd,'metrics-'+id);await mkdir(metricDir,{recursive:true});
+      const comparison=await compare(qualityReference,output,0,0,metrics,{...ctx,cwd:metricDir},depthMode==='both'?'bt709-limited-8-10':'native'),p=(await allPackets(output,pi.raw.streams,ctx))[0];
+      rows.push({id,crf,encoder,preset,bitDepth:depth,pixelFormat:pix,settings:opts,encodeSeconds:elapsed,encodeFps:refFrames.length/elapsed,videoBytes:p.bytes,videoMbps:p.averageMbps,metrics:comparison.metrics,normalization:comparison.normalization,skippedMetrics:comparison.skippedMetrics});
     }
     if(input.keepFiles===true)retained=true;
-    return {source:info,stream:s.index,experiment:{start,duration,actualFrames:refFrames.length,encoder,preset:encoder==='libaom-av1'?'cpu-used=6':'medium',crfs,retainedFiles:retained?files:[],metrics},rows,warnings:['仅代表这一片段及此编码器/预设/CRF，不外推全片大小，不跨编码器比较 CRF 数值。','无损参考来自源文件的解码像素，并非相机原始信号。','试编码只评价像素质量与视频包体积；不承诺保留 Dolby Vision、HDR10+、字幕或音频。','HDR 只比较编码值域 PSNR/SSIM；未评价动态元数据的观看效果。','编码速度含进程启动与文件 I/O，仅代表本机本次实验。']};
+    return {source:info,stream:s.index,experiment:{start,duration,actualFrames:refFrames.length,encoder,preset:presets.join(', '),presets,crfs,depthMode,depths,points:options.points,preparation,comparisonDomain:depthMode==='both'?'全部结果相对于同一 10-bit 无损参考；PSNR 峰值 1023，8-bit 输出精确乘 4 后测量总差异。':'原生位深参考',retainedFiles:retained?files:[],metrics},skippedMetrics:options.skippedMetrics,rows,warnings:['仅代表这一片段及此编码器/预设/CRF，不外推全片大小；相同 CRF 不保证不同位深/预设具有相同质量或码率。','无损参考来自源文件的解码像素，并非相机原始信号。',...(depthMode==='both'?['8/10-bit 对照保持采样、色彩标签、分辨率、帧序和所选 preset 相同；编码器内部算法可能随位深改变。','总差异包含位深量化与编码的共同影响；基准分数不能与成片分数直接相减。','8-bit 源升至 10-bit 不会恢复原有精度。SSIM 日志舍入可能掩盖微小误差，需结合 PSNR。']:[]),'试编码只评价像素质量与视频包体积；不承诺保留 Dolby Vision、HDR10+、字幕或音频。','HDR 只比较编码值域 PSNR/SSIM；未评价动态元数据的观看效果。','编码耗时不含参考准备和质量测量，包含进程启动与文件 I/O。各点顺序运行且只测一次，会受负载、缓存和温度影响，不能据此推断稳定速度优势。']};
   }finally{if(!retained)for(const f of files)await unlink(f).catch(()=>{});}
 }

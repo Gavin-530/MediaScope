@@ -26,3 +26,26 @@ test('API protects local data and streams a reproducible completed report',async
 test('API cancellation ends the job and does not leave experiment video files',async()=>{
  const job=await(await request('jobs','POST',{type:'trial',file:source,stream:0,start:0,duration:1,encoder:'libx265',crfs:[20,32],metrics:['psnr']})).json();await request('jobs/'+job.id,'DELETE');const result=await finished(job.id);assert.equal(result.status,'cancelled');const files=await readdir(path.resolve('.mediascope',job.id));assert.ok(!files.some(f=>f.endsWith('.mkv')));assert.ok(files.includes('job-input.json'));
 });
+
+test('API requires cross-depth opt-in and exports normalization evidence',async()=>{
+ const files=[];
+ for(const depth of [8,10]){
+  const file=path.resolve(`test-work/http-depth-${depth}.mkv`),factor=depth===8?1:4;
+  await run(FF,['-v','error','-y','-f','lavfi','-i',`nullsrc=s=96x64:r=2:d=1,format=yuv444p${depth===8?'':'10le'},geq=lum=${64*factor}:cb=${128*factor}:cr=${128*factor},setfield=prog,setparams=range=limited:color_primaries=bt709:color_trc=bt709:colorspace=bt709`,'-c:v','ffv1','-level','3',file]);
+  files.push(file);
+ }
+ const input={type:'compare',reference:files[1],candidate:files[0],refStream:0,candidateStream:0,metrics:['psnr','ssim','vmaf'],confirm:true};
+ for(const comparisonMode of [undefined,'invalid','bt709-limited-8-10']){
+  const job=await(await request('jobs','POST',{...input,comparisonMode})).json(),status=await finished(job.id);
+  if(comparisonMode!=='bt709-limited-8-10'){
+   assert.equal(status.status,'error');assert.match(status.message,comparisonMode===undefined?/pix_fmt/:/模式无效/);continue;
+  }
+  assert.equal(status.status,'done',status.message);
+  const report=await(await request(`jobs/${job.id}/report`)).json();
+  assert.equal(report.metrics.psnr.pooled,'Infinity');assert.equal(report.metrics.ssim.pooled,1);
+  assert.equal(report.normalization.mode,comparisonMode);assert.equal(report.normalization.verification.passed,true);
+  assert.equal(report.normalization.psnrPeak,1023);assert.match(report.skippedMetrics.vmaf,/跨位深/);
+  assert.ok(report.commands.some(c=>c.args.some(a=>a.includes('scale=w=iw:h=ih'))));
+ }
+ const html=await(await fetch(base)).text();assert.match(html,/id="comparison-mode"/);assert.match(html,/value="bt709-limited-8-10"/);
+});

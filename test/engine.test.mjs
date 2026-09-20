@@ -2,7 +2,7 @@ import {test,before} from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdir} from 'node:fs/promises';
 import path from 'node:path';
-import {FF,probe,run,scan,packets,summarize,alignment,compare,normalizeMediaPath} from '../engine.mjs';
+import {FF,probe,run,scan,packets,summarize,alignment,compare,comparisonProfile,normalizeMediaPath} from '../engine.mjs';
 import {allPackets,structure,metadataSummary,complexity,trial,av1ShortRefs} from '../analysis.mjs';
 import {readdir} from 'node:fs/promises';
 const dir=path.resolve('test-work'),source=path.join(dir,'参考 多音轨.mp4'),candidate=path.join(dir,'candidate.mp4');
@@ -69,4 +69,43 @@ test('H.265 HDR and AV1 trials preserve comparable sample formats',async()=>{
  for(const [encoder,file]of [['libx265',path.join(dir,'hdr-pcm.mov')],['libaom-av1',source]]){
   const cwd=path.join(dir,'trial-'+encoder);await mkdir(cwd,{recursive:true});const r=await trial({file,stream:0,start:0,duration:1,encoder,crfs:[24,36],metrics:['psnr','ssim']},{...context(),cwd});assert.equal(r.rows.length,2);assert.ok(r.rows.every(x=>Number.isFinite(x.metrics.psnr.pooled)));assert.ok(!(await readdir(cwd)).some(f=>f.endsWith('.mkv')));
  }
+});
+
+test('native YUV matrix: 420/422/444, 8/10/12-bit, BT.709/PQ/HLG, chroma-only error',async()=>{
+ for(const sampling of ['420','422','444'])for(const depth of [8,10,12]){
+  const pix=`yuv${sampling}p${depth===8?'':depth+'le'}`;
+  const transfer=depth===8?'bt709':depth===10?'smpte2084':'arib-std-b67';
+  const primaries=depth===8?'bt709':'bt2020',matrix=depth===8?'bt709':'bt2020nc';
+  const a=path.join(dir,`${pix}-ref.mkv`),b=path.join(dir,`${pix}-chroma.mkv`),step=2**(depth-8);
+  for(const [file,delta] of [[a,0],[b,4*step]])await run(FF,['-v','error','-y','-f','lavfi','-i',`nullsrc=s=96x64:r=2:d=1,format=${pix},geq=lum=${64*step}:cb=${128*step+delta}:cr=${128*step},setparams=range=limited:color_primaries=${primaries}:color_trc=${transfer}:colorspace=${matrix}`,'-c:v','ffv1','-level','3','-pix_fmt',pix,'-color_primaries',primaries,'-color_trc',transfer,'-colorspace',matrix,'-color_range','tv',file]);
+  const identical=await compare(a,a,0,0,['psnr','ssim','vmaf'],context());
+  assert.equal(identical.profile.pixelFormat,pix);assert.equal(identical.metrics.psnr.pooled,'Infinity');assert.equal(identical.metrics.ssim.pooled,1);
+  if(depth===8)assert.equal(identical.metrics.vmaf.values.length,2);else assert.match(identical.skippedMetrics.vmaf,/HDR/);
+  const changed=await compare(a,b,0,0,['psnr','ssim'],context());
+  assert.equal(changed.metrics.psnr.components.y,'Infinity');assert.equal(changed.metrics.psnr.components.v,'Infinity');
+  const expected=20*Math.log10((2**depth-1)/(4*step));
+  assert.ok(Math.abs(changed.metrics.psnr.components.u-expected)<0.02,`${pix}: chroma PSNR`);
+  const weight=sampling==='420'?1/6:sampling==='422'?1/4:1/3;
+  assert.ok(Math.abs(changed.metrics.psnr.pooled-(expected-10*Math.log10(weight)))<0.02,`${pix}: weighted PSNR`);
+  assert.ok(changed.metrics.ssim.pooled<1);
+ }
+});
+
+test('SDR 10/12-bit native 422/444 VMAF and BT.601 full-range code values',async()=>{
+ for(const [pix,primaries,transfer,matrix,range]of [['yuv422p10le','bt709','bt709','bt709','tv'],['yuv444p12le','bt709','bt709','bt709','tv'],['yuv444p','smpte170m','smpte170m','smpte170m','pc']]){
+  const file=path.join(dir,`color-${pix}.mkv`);
+  await run(FF,['-v','error','-y','-f','lavfi','-i',`testsrc2=s=96x64:r=2:d=1,format=${pix},setparams=range=${range}:color_primaries=${primaries}:color_trc=${transfer}:colorspace=${matrix}`,'-c:v','ffv1','-level','3','-color_primaries',primaries,'-color_trc',transfer,'-colorspace',matrix,'-color_range',range,file]);
+  const result=await compare(file,file,0,0,['psnr','ssim','vmaf'],context());
+  assert.equal(result.metrics.psnr.pooled,'Infinity');assert.equal(result.metrics.ssim.pooled,1);
+  if(range==='tv')assert.equal(result.metrics.vmaf.values.length,2);else assert.ok(result.skippedMetrics.vmaf);
+ }
+});
+
+test('comparison rejects unverified formats and detects decoded format changes',async()=>{
+ assert.throws(()=>comparisonProfile({pix_fmt:'rgb24'}),/尚未验证/);
+ const p=await probe(source),s=p.raw.streams[0];
+ await assert.rejects(()=>scan(source,0,{...context(),comparisonStream:{...s,width:s.width+1}}),/第 1 帧 width/);
+ for(const field of ['color_transfer','color_space','color_primaries','color_range'])assert.throws(()=>alignment(s,{...s,[field]:'different'},[{t:0}],[{t:0}]),new RegExp(field));
+ assert.match(comparisonProfile({...s,color_range:'pc'}).vmafReason,/有限范围/);
+ assert.match(comparisonProfile({...s,color_transfer:undefined}).vmafReason,/BT.709/);
 });
