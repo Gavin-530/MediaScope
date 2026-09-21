@@ -72,6 +72,8 @@ Windows 本地媒体结构与质量分析工具。原生 Node.js + 浏览器 + F
 
 `scripts/package-prerelease.ps1 -Version <预发布版本>` 在本地 `releases/` 目录生成不含运行时的轻量测试 ZIP；该目录中的 ZIP 不提交到 Git，公开下载包上传到 GitHub Releases。版本使用 `x.y.z-alpha`、`x.y.z-beta` 或 `x.y.z-rc`，确有多个构建时可增加 `.1`、`.2`。`scripts/package.ps1 -Version <正式版本> -Formal` 只用于明确指定的正式版，生成带运行环境的 Windows x64 便携 ZIP。两个脚本都不覆盖已有包。使用 `scripts/cleanup.ps1` 清理已验证的打包暂存和合成测试输出；它保留真实文件报告。
 
+发布前按 [RELEASING.md](RELEASING.md) 执行测试、归档校验和正文审查，并使用统一的 Release 模板。
+
 依据：
 
 - [FFprobe](https://ffmpeg.org/ffprobe.html)
