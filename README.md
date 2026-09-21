@@ -1,12 +1,12 @@
-# MediaScope 0.1.2-beta
+# MediaScope 0.1.3-beta
 
 Windows 本地媒体结构与质量分析工具。原生 Node.js + 浏览器 + FFmpeg/FFprobe，无 npm 依赖，媒体不上传。
 
 ## 使用与测试包
 
 - **当前源码版**：双击 `start.cmd`，或 `npm start`，打开 http://127.0.0.1:4317 。需要 Node.js 22+ 和 FFmpeg/FFprobe；也可使用 FFMPEG_PATH / FFPROBE_PATH 指定程序。
-- **当前轻量测试包**：[MediaScope-0.1.2-beta.zip](https://github.com/Gavin-530/MediaScope/releases/download/v0.1.2-beta/MediaScope-0.1.2-beta.zip)。包内保留版本号和逐文件 SHA-256 清单，不包含 Node.js、FFmpeg 或 FFprobe；换到其他设备前需安装这些依赖。
-- 历史版本及其校验值见 [GitHub Releases](https://github.com/Gavin-530/MediaScope/releases)。已发布版本保持不可变；修复和功能调整递增前三段版本号，当前为 `0.1.2-beta`，只有需要同时区分同一源码版本的多个构建时才增加 `beta.1`、`beta.2`。
+- **当前轻量测试包**：[MediaScope-0.1.3-beta.zip](https://github.com/Gavin-530/MediaScope/releases/download/v0.1.3-beta/MediaScope-0.1.3-beta.zip)。包内保留版本号和逐文件 SHA-256 清单，不包含 Node.js、FFmpeg 或 FFprobe；换到其他设备前需安装这些依赖。
+- 历史版本及其校验值见 [GitHub Releases](https://github.com/Gavin-530/MediaScope/releases)。已发布版本保持不可变；修复和功能调整递增前三段版本号，当前为 `0.1.3-beta`，只有需要同时区分同一源码版本的多个构建时才增加 `beta.1`、`beta.2`。
 - 包内没有个人媒体、分析报告或测试生成文件。只有明确指定的正式版才构建包含运行环境的 Windows x64 完整便携包。
 - 保持服务窗口运行，Ctrl+C 停止。通过 PORT 环境变量可改变端口。程序只监听本机回环地址，API 检查会话令牌与来源。
 
@@ -57,8 +57,9 @@ Windows 本地媒体结构与质量分析工具。原生 Node.js + 浏览器 + F
 
 ## 报告与资源边界
 
-- 导出 JSON 包含工具版本、完整命令/工作目录、测量结果和警告；CSV 提供显示帧列表。可从页面「打开已保存报告」读取旧版/新版 JSON，无需重跑分析。
-- 报告位于 `.mediascope/<任务编号>/report.json`。服务端完成后释放大结果对象，下载时从磁盘流式读取；界面一次展示一份报告。
+- 导出 JSON 包含工具版本、完整命令/工作目录、测量结果和警告；CSV 提供显示帧列表。可从页面「导入 JSON 报告」读取旧版/新版 JSON，无需重跑分析。
+- 导入在浏览器本地读取（上限 256 MiB），无需原媒体文件；支持 MediaScope/0.1、0.2，拒绝未知版本和缺少必要结构的报告。导入与计算完成使用同一预览逻辑，保留数值精度、逐帧数据及复现证据。旧报告未保存的字段不会补造；缩放、分页和选中位置从默认视图开始。导入后仍可再次导出 JSON。
+- 报告位于 `.mediascope/<任务编号>/report.json`。服务端完成后释放大结果对象，下载时从磁盘流式读取；三个页签在当前会话中各保留一份报告及图表交互状态；切换不重绘，后台计算完成只更新所属页签，不抢占当前查看页。仍然一次运行一个计算任务。
 - 单次一个任务，可取消。显示帧/压缩包上限 500,000，AV1 编码事件上限 750,000。完整头解析可能较慢。多层 AV1 保留各层事件；涉及无法唯一映射的显示帧或缺少前置状态时明确标记，不伪造依赖。
 - GOP 是显示帧区间视图，不能仅凭关键帧间隔判断是否存在跨 GOP 引用；不把 CRA 自动认定为闭合 GOP。未完整验证解码依赖图。
 - 首版仍不提供精确剩余压缩率、设备兼容性保证、运动矢量/编码块深度解析、HDR 显示校准或通用播放器。
@@ -76,3 +77,14 @@ Windows 本地媒体结构与质量分析工具。原生 Node.js + 浏览器 + F
 - [FFmpeg trace_headers](https://ffmpeg.org/ffmpeg-bitstream-filters.html#trace_005fheaders)
 - [FFmpeg 分析滤镜](https://ffmpeg.org/ffmpeg-filters.html)
 - [AV1 规范](https://aomediacodec.github.io/av1-spec/)
+
+图表通用操作说明集中在每页报告顶部的折叠说明中，不再逐图重复。
+
+### 图表读法
+
+- 默认以视频平均码率（Mbit/s）为横轴、质量指标为纵轴；同等质量下比较码率，同等码率下比较质量。编码成本图使用散点，避免把耗时顺序误读为参数连续变化。
+- CRF 四图是参数扫描：每条线固定 preset 与位深，圆点为实测 CRF；连线仅辅助读图，不是拟合。同 CRF 不代表同质量或同码率。
+- 逐帧叠加图固定 preset 和位深，勾选多个 CRF 并列比较；新实验保存参考帧的真实相对时间戳，旧报告使用从 0 开始的帧序号，不按平均帧率估算秒数。
+- PSNR 单位 dB（汇总在 MSE 域）；SSIM 无量纲；VMAF 是指定模型分数。码率仅计视频包，1 Mbit/s = 10⁶ bit/s；1 KiB = 1024 B。
+- 默认纵轴固定为该图全部数据范围，可主动切换局部缩放；纵轴可能不从零开始，各图范围独立，应读刻度而非仅比较视觉斜率。无限值和缺失值保留断点，密集时保留像素列内极值。
+- 这些图用于客观测量探索，并非主观质量实验或统计显著性证明。耗时为本机单次测量，不提供误差条；科研报告还需规定测试集、参考与比较域、指标/模型版本、硬件和重复测量方法。

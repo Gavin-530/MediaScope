@@ -27,7 +27,7 @@ test('expanded settings and CRF ranges reject invalid or excessive matrices',()=
 });
 test('10-bit source: exact full-code truncation, common-domain scores, metadata and presets',async()=>{
  const ctx=await context('ten'),result=await trial({...input,file:sources[10],presets:['ultrafast','fast'],keepFiles:true},ctx);
- assert.equal(result.rows.length,4);assert.equal(result.experiment.preparation.reductionCheck.passed,true);
+ assert.equal(result.rows.length,4);assert.equal(result.experiment.frameTimes.length,result.experiment.actualFrames);assert.equal(result.experiment.frameTimes[0],0);assert.ok(result.experiment.frameTimes.every((t,i,a)=>Number.isFinite(t)&&(i===0||t>a[i-1])));assert.equal(result.experiment.preparation.reductionCheck.passed,true);
  assert.equal(result.experiment.preparation.normalization.verification.passed,true);
  assert.deepEqual(new Set(result.rows.map(r=>r.preset)),new Set(['ultrafast','fast']));
  assert.deepEqual(new Set(result.rows.map(r=>r.bitDepth)),new Set([8,10]));

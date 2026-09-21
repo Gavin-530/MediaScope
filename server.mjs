@@ -89,7 +89,7 @@ const server=http.createServer(async(req,res)=>{
       }
       send(res,404,{error:'接口不存在'});return;
     }
-    const files={'/':'index.html','/app.js':'app.js','/charts.js':'charts.js','/trial-model.js':'trial-model.js','/style.css':'style.css'};
+    const files={'/':'index.html','/app.js':'app.js','/report.js':'report.js','/charts.js':'charts.js','/trial-model.js':'trial-model.js','/style.css':'style.css'};
     if(req.method!=='GET'||!files[url.pathname]){res.writeHead(404);res.end();return}
     const name=files[url.pathname];let data=await readFile(path.join(root,'public',name));if(name==='index.html')data=Buffer.from(data.toString().replace('__TOKEN__',token));
     res.writeHead(200,{'Content-Type':name.endsWith('.html')?'text/html; charset=utf-8':name.endsWith('.js')?'text/javascript; charset=utf-8':'text/css; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' blob:; object-src 'none'; frame-ancestors 'none'"});res.end(data);

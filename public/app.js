@@ -1,18 +1,27 @@
+import {parseReport} from './report.js';
 import {plot,gopOverview} from './charts.js';
-import {parseCrfs,rowLabel,trialValue,trialPlotData} from './trial-model.js';
-const $=s=>document.querySelector(s),token=$('meta[name=token]').content;
-let current=null,report=null,infoPath=null,hasVideo=false,charts=[];
+import {parseCrfs,rowLabel,trialValue,trialPlotData,trialFramePlotData,metricLabels,trialSortFields,sortTrialRows} from './trial-model.js';
+const modes=['inspect','compare','trial'],reports={},viewCharts={inspect:[],compare:[],trial:[]};
+let activeMode='inspect',renderingMode=null;
+const modeOf=r=>r.type==='analyze'?'inspect':r.type;
+const $=s=>document.querySelector(/^#(result|result-title|summary|details|export)$/.test(s)?'#'+(renderingMode||activeMode)+'-'+s.slice(1):s),token=$('meta[name=token]').content;
+let current=null,report=null,infoPath=null,hasVideo=false,charts=[],importing=false;
 const esc=v=>String(v??'未报告').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt=(v,d=3)=>typeof v==='number'?v.toLocaleString('zh-CN',{maximumFractionDigits:d}):v??'未报告';
 const size=v=>v==null?'未报告':v>=1073741824?`${fmt(v/1073741824)} GiB`:v>=1048576?`${fmt(v/1048576)} MiB`:v>=1024?`${fmt(v/1024)} KiB`:`${v} B`;
 const clean=v=>v.trim().replace(/^"|"$/g,'');
 async function api(url,options={}){const r=await fetch('/api/'+url,{...options,headers:{'Content-Type':'application/json','X-MediaScope-Token':token}}),d=await r.json();if(!r.ok)throw Error(d.error||'请求失败');return d}
 function message(text,error=false){$('#task').classList.remove('hidden');$('#task').classList.toggle('error',error);$('#task-label').textContent=error?'任务未完成':'分析任务';$('#task-message').textContent=text;$('#cancel').classList.toggle('hidden',!current)}
-function busy(value){for(const id of ['inspect','analyze','compare','trial'])$('#'+id).disabled=value||(id==='analyze'&&(!infoPath||!hasVideo));$('#import-report').disabled=value;document.querySelectorAll('.file-picker').forEach(b=>b.disabled=value)}
+function busy(value){for(const id of ['inspect','analyze','compare','trial'])$('#'+id).disabled=value||(id==='analyze'&&(!infoPath||!hasVideo));$('#import-report').disabled=value;$('#import-button').disabled=value;document.querySelectorAll('.file-picker').forEach(b=>b.disabled=value)}
 async function launch(data){try{busy(true);current=(await api('jobs',{method:'POST',body:JSON.stringify(data)})).id;message('任务已开始');poll()}catch(e){message(e.message,true);busy(false)}}
-async function poll(){try{const j=await api('jobs/'+current);message(j.message,j.status==='error');if(j.status==='running'){setTimeout(poll,900);return}const id=current;current=null;busy(false);$('#cancel').classList.add('hidden');if(j.status==='done'){report=await api('jobs/'+id+'/report');render(report)}}catch(e){current=null;busy(false);message(e.message,true)}}
+async function poll(){try{const j=await api('jobs/'+current);message(j.message,j.status==='error');if(j.status==='running'){setTimeout(poll,900);return}const id=current;current=null;$('#cancel').classList.add('hidden');if(j.status==='done'){const result=await api('jobs/'+id+'/report');render(result,false)}busy(false)}catch(e){current=null;busy(false);message(e.message,true)}}
 $('#cancel').onclick=async()=>{try{await api('jobs/'+current,{method:'DELETE'})}catch(e){message(e.message,true)}};
-document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('selected',t===b));for(const mode of ['inspect','compare','trial'])$('#'+mode+'-panel').classList.toggle('hidden',b.dataset.mode!==mode)});
+function switchMode(mode){
+ activeMode=mode;report=reports[mode]??null;charts=viewCharts[mode];
+ document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('selected',t.dataset.mode===mode));
+ for(const name of modes){document.querySelector('#'+name+'-panel').classList.toggle('hidden',name!==mode);document.querySelector('#'+name+'-result').classList.toggle('hidden',name!==mode||!reports[name])}
+}
+document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>switchMode(b.dataset.mode));
 document.querySelectorAll('.file-picker').forEach(button=>button.onclick=async()=>{button.disabled=true;const label=button.textContent;button.textContent='正在打开…';message('正在打开 Windows 文件选择器；如果没有出现在前台，请查看任务栏。');try{const result=await api('select-file',{method:'POST',body:'{}'});if(result.file){const input=$('#'+button.dataset.target);input.value=result.file;input.dispatchEvent(new Event('input'));message('已选择文件：'+result.file)}else message('已取消选择文件')}catch(e){message(e.message==='Failed to fetch'?'本机分析服务未运行，请重新启动 MediaScope':e.message,true)}finally{button.textContent=label;button.disabled=false}});
 $('#file').oninput=()=>{infoPath=null;$('#analyze').disabled=true};
 $('#inspect').onclick=()=>launch({type:'inspect',file:clean($('#file').value)});
@@ -27,8 +36,21 @@ function trialControls(){
 for(const id of ['trial-encoder','trial-depth','trial-crfs','trial-cpu'])$('#'+id).addEventListener('input',trialControls);
 document.querySelectorAll('[name=trial-preset]').forEach(x=>x.addEventListener('change',trialControls));trialControls();
 $('#trial').onclick=()=>{try{launch(trialInput())}catch(e){message(e.message,true)}};
-$('#export').onclick=()=>download(JSON.stringify(report,null,2),'MediaScope-'+report.type+'.json','application/json');
-$('#import-report').onchange=async e=>{try{const f=e.target.files[0];if(!f)return;if(f.size>256*1024*1024)throw Error('报告超过 256 MiB 导入上限');const data=JSON.parse(await f.text());if(!String(data.schema).startsWith('MediaScope/')||!['inspect','analyze','compare','trial'].includes(data.type))throw Error('不是有效的 MediaScope 报告');report=data;render(report);message('已打开保存的报告（没有重新分析原文件）')}catch(err){message(err.message,true)}e.target.value=''};
+for(const mode of modes)document.querySelector('#'+mode+'-export').onclick=()=>{const saved=reports[mode];if(saved)download(JSON.stringify(saved,null,2),'MediaScope-'+saved.type+'.json','application/json')};
+$('#import-button').onclick=()=>$('#import-report').click();
+$('#import-report').onchange=async e=>{
+ const input=e.target,f=input.files[0];if(!f)return;
+ if(current||importing){input.value='';return}
+ importing=true;busy(true);message('正在读取并校验报告…');
+ try{
+  if(f.size>256*1024*1024)throw Error('报告超过 256 MiB 导入上限');
+  const data=parseReport(await f.text()),previous=reports[modeOf(data)];
+  if(current)throw Error('分析任务正在运行，请在任务完成后导入报告');
+  try{render(data)}catch(err){if(previous)render(previous);else document.querySelector('#'+modeOf(data)+'-result').classList.add('hidden');throw Error('报告无法完整显示：'+err.message)}
+  switchMode(modeOf(data));
+  message('已导入 '+f.name+'；使用保存的原始测量数据，无需原媒体文件或重新计算。');
+ }catch(err){message(err.message,true)}finally{importing=false;busy(!!current);input.value=''}
+};
 function download(text,name,type){const url=URL.createObjectURL(new Blob([text],{type})),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}
 function cards(items){$('#summary').innerHTML=items.map(([k,v])=>`<div class="card"><span>${esc(k)}</span><strong>${esc(v)}</strong></div>`).join('')}
 function section(title,html){return `<section class="section"><h3>${esc(title)}</h3>${html}</section>`}
@@ -36,7 +58,14 @@ function table(headers,rows){return `<div class="table-wrap"><table><thead><tr>$
 function raw(data,title='展开证据 / 原始数据'){return `<details><summary>${esc(title)}</summary><pre>${esc(JSON.stringify(data,null,2))}</pre></details>`}
 function notices(items){return (items||[]).map(w=>`<p class="notice">${esc(w)}</p>`).join('')}
 function draw(id,data,options){const host=$('#'+id);if(host){const p=plot(host,data,options);if(p)charts.push(p);return p}}
-function render(r){charts.forEach(c=>c.dispose?.());charts=[];$('#result').classList.remove('hidden');$('#result-title').textContent=r.type==='compare'?'质量对比报告':r.type==='trial'?'片段率失真实验':'媒体分析报告';if(r.type==='compare')return renderComparison(r);if(r.type==='trial')return renderTrial(r);renderMedia(r)}
+function render(r,activate=true){
+ const mode=modeOf(r);renderingMode=mode;charts=viewCharts[mode];charts.forEach(c=>c.dispose?.());charts=[];
+ try{
+  $('#result-title').textContent=r.type==='compare'?'质量对比报告':r.type==='trial'?'片段率失真实验':'媒体分析报告';
+  if(r.type==='compare')renderComparison(r);else if(r.type==='trial')renderTrial(r);else renderMedia(r);
+  reports[mode]=r;
+ }finally{viewCharts[mode]=charts;renderingMode=null;switchMode(activate?mode:activeMode);busy(!!current||importing)}
+}
 function metadataHTML(r){
   const data=r.metadata;if(!data)return raw({frameSample:r.frameSample,scope:r.frameSampleScope},'旧版报告附加数据（重新分析可获得去重摘要）');
   return `<p class="hint">${esc(data.note)} ${esc(data.scope)}</p>`+(data.items.length?data.items.map(item=>`<div class="evidence"><strong>${esc(item.name)}</strong><span>${esc(item.sources.join('、'))} · ${item.occurrences} 次相同记录</span>${raw(item.value,'查看此项数据')}</div>`).join(''):'<p class="hint">本次探测范围未报告附加数据；不能据此认定全片不存在。</p>');
@@ -44,7 +73,7 @@ function metadataHTML(r){
 function renderMedia(r){
   const streams=r.raw.streams,videos=streams.filter(s=>s.codec_type==='video');infoPath=r.file;hasVideo=!!videos.length;$('#file').value=r.file;
   $('#stream').innerHTML=videos.map(s=>`<option value="${s.index}">${s.index} · ${esc(s.codec_name)} · ${s.width} × ${s.height}</option>`).join('');if(r.stream!==undefined)$('#stream').value=r.stream;$('#analyze').disabled=!hasVideo;
-  $('#trial-file').value=r.file;$('#trial-stream').value=r.stream??videos[0]?.index??0;
+  if(!$('#trial-file').value){$('#trial-file').value=r.file;$('#trial-stream').value=r.stream??videos[0]?.index??0}
   cards([['文件大小',size(r.size)],['容器时长',r.raw.format.duration?`${fmt(Number(r.raw.format.duration))} s`:'未报告'],['轨道数',streams.length],['容器',r.raw.format.format_name]]);
   let html=`<p class="path">${esc(r.file)}</p>`;
   html+=section('轨道清单',table(['索引 / 类型','编码 / 标记','视频 / 音频属性','时长 / 起始秒','语言 / 默认'],streams.map(s=>[`${s.index} / ${s.codec_type}`,`${s.codec_name??'?'} / ${s.codec_tag_string??'?'}`,s.codec_type==='video'?`${s.width}×${s.height} · ${s.pix_fmt} · fps ${s.avg_frame_rate}`:s.codec_type==='audio'?`${s.sample_rate} Hz · ${s.channels} ch · ${s.channel_layout??'布局未报告'} · ${s.sample_fmt}`:'详见原始数据',`${s.duration??'?'} / ${s.start_time??'?'}`,`${s.tags?.language??'未标记'} / ${s.disposition?.default?'是':'否'}`])));
@@ -61,7 +90,7 @@ function renderMedia(r){
   }
   html+=section('元数据证据 · 去重与来源',metadataHTML(r));html+=section('原始探测与复现记录',raw({file:r.file,tools:r.tools,commands:r.commands,raw:r.raw}));$('#details').innerHTML=html;
   if(r.frames){
-    initFrames(r);draw('bitrate',r.packets.bins.map(p=>[p.second,p.mbps]),{unit:'Mbps'});
+    if(r.frames.length)initFrames(r);else $('#gop-overview').textContent='报告中没有显示帧';draw('bitrate',r.packets.bins.map(p=>[p.second,p.mbps]),{unit:'Mbps'});
     for(const t of (r.tracks||[]).filter(t=>t.type==='audio'))draw('audio-'+t.index,t.bins.map(p=>[p.second,p.mbps*1000]),{unit:'kbps'});
     if(r.content?.available){draw('si',r.content.points.map(p=>[p.t,p.si]),{unit:'SI'});draw('ti',r.content.points.map(p=>[p.t,p.ti]),{unit:'TI'})}
   }
@@ -89,23 +118,36 @@ function renderComparison(r){
   for(const [key,m]of Object.entries(r.metrics))if(m.components)html+=section(`${key.toUpperCase()} 分量`,table(['Y 亮度','U 色度','V 色度'],[[fmt(m.components.y,5),fmt(m.components.u,5),fmt(m.components.v,5)]]));
   if(r.videoSize)html+=section('仅视频数据量',table(['参考视频包','候选视频包','候选 / 参考'],[[size(r.videoSize.reference),size(r.videoSize.candidate),`${fmt(r.videoSize.candidate/r.videoSize.reference*100)}%`]])+'<p class="hint">此比例排除了音轨与容器体积，便于评价视频编码的实际节省。</p>');
   for(const [key,m]of Object.entries(r.metrics))html+=section(key.toUpperCase(),table(['整体值','P05','最低帧','统计方式'],[[fmt(m.pooled,5),fmt(m.p05,5),fmt(m.min,5),key==='psnr'?'MSE 域汇总 / dB':key==='vmaf'?m.model:'逐帧均值']])+`<div id="metric-${key}"></div>`+(m.worst?'<h4>最低质量的 1 秒区间（相对参考起点）</h4>'+table(['起点 / 秒','帧范围','区间整体值','最低帧值'],m.worst.map(w=>[w.start,`${w.first}–${w.last}`,fmt(w.value,5),fmt(w.min,5)])):'')+'<p class="hint">最低区间用于定位复查，不自动判定画面不可接受。末尾区间可能不足 1 秒。</p>');
-  html+=notices(r.warnings)+section('复现记录',raw({tools:r.tools,commands:r.commands,alignment:r.alignment}));$('#details').innerHTML=html;for(const [k,m]of Object.entries(r.metrics))draw('metric-'+k,m.values.map((v,i)=>[i,v==='Infinity'?null:v]),{unit:k==='psnr'?'dB':k,axis:'显示帧'});
+  html+=notices(r.warnings)+section('复现记录',raw({tools:r.tools,commands:r.commands,alignment:r.alignment}));$('#details').innerHTML=html;for(const [k,m]of Object.entries(r.metrics))draw('metric-'+k,m.values.map((v,i)=>[i,v==='Infinity'?null:v]),{unit:metricLabels[k],axis:'显示帧序号（从 0 开始）'});
 }
 function renderTrial(r){
   cards([['片段起点',`${r.experiment.start} s`],['请求片段长度',`${r.experiment.duration} s`],['实际显示帧',r.experiment.actualFrames],['编码器',r.experiment.encoder]]);
-  const rows=r.rows.map(x=>({...x,preset:x.preset??r.experiment.preset})),metrics=['psnr','ssim','vmaf'].filter(m=>rows.some(x=>x.metrics[m]));
+  const rows=r.rows.map(x=>({...x,preset:x.preset??r.experiment.preset})),groups=[...new Set(rows.map(rowLabel))],metrics=['psnr','ssim','vmaf'].filter(m=>rows.some(x=>x.metrics[m]));
   let html=`<p class="path">${esc(r.source.file)}</p>`+notices([r.experiment.comparisonDomain??'原生位深参考',...Object.values(r.skippedMetrics??{})]);
   if(r.experiment.preparation?.baseline)html+=section('编码前的位深转换基准',notices([r.experiment.preparation.mapping])+table(['PSNR / dB','SSIM','含义'],[[fmt(r.experiment.preparation.baseline.psnr.pooled,5),fmt(r.experiment.preparation.baseline.ssim.pooled,6),'两种无损输入在统一 10-bit 域的差异；尚未试编码，不与成片分数相减。']]));
-  html+=section('实验采样点',table(['位深 / preset','CRF','视频包体积','平均 Mbps','PSNR / dB','SSIM','VMAF','编码秒 / fps'],rows.map(x=>[rowLabel(x),x.crf,size(x.videoBytes),fmt(x.videoMbps),fmt(x.metrics.psnr?.pooled),fmt(x.metrics.ssim?.pooled,6),fmt(x.metrics.vmaf?.pooled),`${fmt(x.encodeSeconds)} / ${fmt(x.encodeFps)}`])));
-  html+=section('CRF、质量与耗时变化','<div class="trial-chart-grid"><div><h4>CRF → PSNR</h4><div id="trial-psnr"></div></div><div><h4>CRF → 编码秒数</h4><div id="trial-time"></div></div><div><h4>CRF → 视频码率</h4><div id="trial-rate"></div></div><div><h4>CRF → SSIM</h4><div id="trial-ssim"></div></div></div><p class="hint">不同位深 / preset 使用独立曲线和共同坐标。仅连接实测点；无限值和缺失值不绘制，原值见表格。同 CRF 不保证同质量或码率。</p>');
-  html+=section('质量与体积 / 耗时',`<div class="two"><label>横轴<select id="rd-axis"><option value="videoKiB">视频包 KiB</option><option value="encodeSeconds">编码秒数</option><option value="encodeFps">编码 fps</option></select></label><label>纵轴指标<select id="rd-metric">${metrics.map(m=>`<option>${esc(m)}</option>`).join('')}</select></label></div><div id="rd"></div>`);
-  html+=section('单个编码点的逐帧质量',`<div class="two"><label>编码点<select id="trial-row">${rows.map((x,i)=>`<option value="${i}">${esc(rowLabel(x))} · CRF ${esc(x.crf)}</option>`).join('')}</select></label><label>指标<select id="trial-frame-metric">${metrics.map(m=>`<option>${esc(m)}</option>`).join('')}</select></label></div><div id="trial-frames"></div>`);
+  html+=section('实验采样点',`<details id="trial-samples" ${rows.length<=12?'open':''}><summary>查看 ${rows.length} 个实测点</summary><div class="sample-sort"><label>排序参数<select id="sample-sort-key">${Object.entries(trialSortFields).map(([k,v])=>`<option value="${k}">${esc(v)}</option>`).join('')}</select></label><label>顺序<select id="sample-sort-direction"><option value="asc">升序</option><option value="desc">降序</option></select></label></div><div id="trial-sample-table"></div></details>`);
+  html+=section('CRF 参数扫描 · 固定每条曲线的位深与 preset','<div class="trial-chart-grid"><div><h4>① CRF 与质量：PSNR（越高越好）</h4><div id="trial-psnr"></div></div><div><h4>② CRF 与编码耗时（越低越快）</h4><div id="trial-time"></div></div><div><h4>③ CRF 与视频码率（数据开销）</h4><div id="trial-rate"></div></div><div><h4>④ CRF 与质量：SSIM（越高越好）</h4><div id="trial-ssim"></div></div></div><p class="hint">每个圆点是一个 CRF 实测结果，每条线固定一个位深 / preset；连线仅辅助读图，不是拟合或插值预测。横轴 CRF 是编码器参数，无量纲；同 CRF 不保证同质量或码率。耗时仅为本机单次测量，无误差条，不宜据微小差异排名。</p>');
+  html+=section('码率—质量与编码成本',`<div class="two"><label>横轴<select id="rd-axis"><option value="videoMbps">视频平均码率（Mbit/s）</option><option value="videoKiB">视频包体积（KiB）</option><option value="encodeSeconds">编码耗时（s）</option><option value="encodeFps">编码速度（frame/s）</option></select></label><label>纵轴指标<select id="rd-metric">${metrics.map(m=>`<option value="${m}">${esc(metricLabels[m])}</option>`).join('')}</select></label></div><div id="rd"></div><p class="hint">码率—质量图：同等质量时越靠左越省码率，同等码率时越高越好；需比较同一参考片段及指标域。成本图仅显示散点：相同质量下比较编码时间或速度。Mbit/s = 10⁶ bit/s；KiB = 1024 B，仅计视频包。PSNR 为 MSE 域汇总，SSIM / VMAF 为逐帧均值。</p>`);
+  html+=section('逐帧质量叠加 · 固定位深与 preset，对比 CRF',`<div class="two"><label>固定对比组<select id="trial-group">${groups.map((g,i)=>`<option value="${i}">${esc(g)}</option>`).join('')}</select></label><label>纵轴质量指标<select id="trial-frame-metric">${metrics.map(m=>`<option value="${m}">${esc(metricLabels[m])}</option>`).join('')}</select></label></div><div id="trial-crf-select" class="checks"></div><p id="trial-frame-note" class="hint"></p><div id="trial-frames"></div>`);
   html+=notices(r.warnings)+section('实验文件与复现记录',`<p class="hint">${r.experiment.retainedFiles.length?'已保留实验文件：'+esc(r.experiment.retainedFiles.join('；')):'实验视频已自动清理；报告保留数据与运行参数。'}</p>`+raw({experiment:r.experiment,tools:r.tools,commands:r.commands}));$('#details').innerHTML=html;
-  const labels={psnr:'PSNR / dB',ssim:'SSIM',vmaf:'VMAF',videoKiB:'视频包 KiB',videoMbps:'Mbps',encodeSeconds:'编码秒数',encodeFps:'编码 fps',crf:'CRF'};
-  const seriesPlot=(id,x,y)=>{const {data,series}=trialPlotData(rows,x,y);return draw(id,data,{series,unit:labels[y],axis:labels[x],describe:p=>rows.filter(row=>trialValue(row,x)===p[0]).map(row=>`${rowLabel(row)} · CRF ${row.crf} · ${labels[y]} ${fmt(['psnr','ssim','vmaf'].includes(y)?row.metrics[y]?.pooled:trialValue(row,y),6)}`).join(' | ')})};
+  const labels={...metricLabels,videoKiB:'视频包体积（KiB）',videoMbps:'视频平均码率（Mbit/s）',encodeSeconds:'编码耗时（s）↓',encodeFps:'编码速度（frame/s）↑',crf:'CRF（无量纲）'};
+  const drawSamples=()=>{$('#trial-sample-table').innerHTML=table(['位深 / preset','CRF','视频包体积','视频码率 / Mbit/s','PSNR / dB','SSIM / 无量纲','VMAF / 模型分数','编码耗时 s / 速度 frame/s'],sortTrialRows(rows,$('#sample-sort-key').value,$('#sample-sort-direction').value).map(x=>[rowLabel(x),x.crf,size(x.videoBytes),fmt(x.videoMbps),fmt(x.metrics.psnr?.pooled),fmt(x.metrics.ssim?.pooled,6),fmt(x.metrics.vmaf?.pooled),`${fmt(x.encodeSeconds)} / ${fmt(x.encodeFps)}`]))};
+  const seriesPlot=(id,x,y)=>{const {data,series}=trialPlotData(rows,x,y);return draw(id,data,{series,connect:!['encodeSeconds','encodeFps'].includes(x),unit:labels[y],axis:labels[x],describe:p=>`${rowLabel(p[2])} · CRF ${p[2].crf} · ${labels[y]} ${fmt(['psnr','ssim','vmaf'].includes(y)?p[2].metrics[y]?.pooled:trialValue(p[2],y),6)}`})};
   seriesPlot('trial-psnr','crf','psnr');seriesPlot('trial-time','crf','encodeSeconds');seriesPlot('trial-rate','crf','videoMbps');seriesPlot('trial-ssim','crf','ssim');
   let rd,framePlot;const update=()=>{rd?.dispose();rd=seriesPlot('rd',$('#rd-axis').value,$('#rd-metric').value)};
-  const updateFrames=()=>{framePlot?.dispose();const row=rows[Number($('#trial-row').value)],metric=$('#trial-frame-metric').value,values=row.metrics[metric]?.values;if(!values){$('#trial-frames').textContent='该报告未保存此点的逐帧数据（旧报告无需重算也可查看已有汇总）。';return}framePlot=draw('trial-frames',values.map((v,i)=>[i,typeof v==='number'?v:null]),{axis:'片段显示帧',unit:labels[metric],describe:p=>`帧 ${p[0]} · ${metric} ${fmt(values[p[0]],6)}`})};
-  $('#rd-axis').onchange=update;$('#rd-metric').onchange=update;$('#trial-row').onchange=updateFrames;$('#trial-frame-metric').onchange=updateFrames;update();updateFrames();
+  let selectedCrfs=[];
+  const updateFrames=()=>{
+    framePlot?.dispose();const group=groups[Number($('#trial-group').value)||0],metric=$('#trial-frame-metric').value||metrics[0];
+    const result=trialFramePlotData(rows,metric,group,selectedCrfs,r.experiment.frameTimes);
+    $('#trial-frame-note').textContent=(result.timed?'横轴：相对片段首帧的时间（s），使用保存的参考帧时间戳。':'横轴：片段显示帧序号（从 0 开始）；报告未保存可用时间戳，不估算秒数。')+' 同一参考片段、位深与 preset；仅改变 CRF。悬停可并列读取各曲线；无限值和缺失值留空，不跨空缺连线。'+(result.missing.length?' 未保存逐帧数据的 CRF：'+result.missing.join('、'):'');
+    if(!result.data.length){$('#trial-frames').textContent=selectedCrfs.length?'该报告未保存所选指标的逐帧数据。':'请至少选择一个 CRF。';return}
+    framePlot=draw('trial-frames',result.data,{series:result.series,markers:false,height:440,axis:result.timed?'相对片段首帧时间（s）':'片段显示帧序号（从 0 开始）',unit:labels[metric],describe:p=>'CRF '+p[2].crf+' · 帧 '+p[2].frame+' · '+labels[metric]+' '+(p[2].value==='Infinity'?'∞':p[2].value==null?'缺失':fmt(p[2].value,6))});
+  };
+  const updateGroup=()=>{
+    selectedCrfs=rows.filter(row=>rowLabel(row)===groups[Number($('#trial-group').value)||0]).map(row=>row.crf).sort((a,b)=>a-b);
+    $('#trial-crf-select').innerHTML=selectedCrfs.map(crf=>'<label><input type="checkbox" name="plot-crf" value="'+crf+'" checked>CRF '+crf+'</label>').join('');
+    document.querySelectorAll('[name=plot-crf]').forEach(box=>box.onchange=()=>{selectedCrfs=[...document.querySelectorAll('[name=plot-crf]:checked')].map(x=>Number(x.value));updateFrames()});updateFrames();
+  };
+  $('#sample-sort-key').onchange=drawSamples;$('#sample-sort-direction').onchange=drawSamples;$('#rd-axis').onchange=update;$('#rd-metric').onchange=update;$('#trial-group').onchange=updateGroup;$('#trial-frame-metric').onchange=updateFrames;drawSamples();update();updateGroup();
 }
 api('status').then(s=>{$('#environment').textContent=s.versions.ffmpeg;for(const box of document.querySelectorAll('[name=metric]'))if(!s.metrics.includes(box.value)){box.checked=false;box.disabled=true}const active=s.jobs.find(j=>j.status==='running');if(active){current=active.id;busy(true);poll()}}).catch(e=>message(e.message,true));

@@ -1,3 +1,4 @@
+import {parseReport} from '../public/report.js';
 import {test,before,after} from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
@@ -21,7 +22,7 @@ test('API protects local data and streams a reproducible completed report',async
  assert.equal((await fetch(base+'/api/status',{headers:{'x-mediascope-token':token,origin:'https://external.invalid'}})).status,403);
  const job=await(await request('jobs','POST',{type:'analyze',file:source,stream:0})).json();const rejected=await request('jobs','POST',{type:'inspect',file:source});assert.equal(rejected.status,409);
  const status=await finished(job.id);assert.equal(status.status,'done',status.message);
- const report=await(await request(`jobs/${job.id}/report`)).json();assert.equal(report.schema,'MediaScope/0.2');assert.equal(report.frames.length,12);assert.equal(report.frames[0].special,'IDR');assert.equal(report.tracks.length,1);assert.ok(report.commands.every(c=>c.cwd));
+ const report=await(await request(`jobs/${job.id}/report`)).json();assert.deepEqual(parseReport(JSON.stringify(report)),report);assert.equal((await fetch(base+'/report.js')).status,200);assert.equal(report.schema,'MediaScope/0.2');assert.equal(report.frames.length,12);assert.equal(report.frames[0].special,'IDR');assert.equal(report.tracks.length,1);assert.ok(report.commands.every(c=>c.cwd));
 });
 test('API cancellation ends the job and does not leave experiment video files',async()=>{
  const job=await(await request('jobs','POST',{type:'trial',file:source,stream:0,start:0,duration:1,encoder:'libx265',crfs:[20,32],metrics:['psnr']})).json();await request('jobs/'+job.id,'DELETE');const result=await finished(job.id);assert.equal(result.status,'cancelled');const files=await readdir(path.resolve('.mediascope',job.id));assert.ok(!files.some(f=>f.endsWith('.mkv')));assert.ok(files.includes('job-input.json'));
@@ -42,7 +43,7 @@ test('API requires cross-depth opt-in and exports normalization evidence',async(
   }
   assert.equal(status.status,'done',status.message);
   const report=await(await request(`jobs/${job.id}/report`)).json();
-  assert.equal(report.metrics.psnr.pooled,'Infinity');assert.equal(report.metrics.ssim.pooled,1);
+  assert.deepEqual(parseReport(JSON.stringify(report)),report);assert.equal(report.metrics.psnr.pooled,'Infinity');assert.equal(report.metrics.ssim.pooled,1);
   assert.equal(report.normalization.mode,comparisonMode);assert.equal(report.normalization.verification.passed,true);
   assert.equal(report.normalization.psnrPeak,1023);assert.match(report.skippedMetrics.vmaf,/跨位深/);
   assert.ok(report.commands.some(c=>c.args.some(a=>a.includes('scale=w=iw:h=ih'))));
