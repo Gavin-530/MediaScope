@@ -20,6 +20,10 @@ function send(res,status,data){res.writeHead(status,{'Content-Type':'application
 async function body(req){let s='';for await(const b of req){s+=b;if(s.length>16384)throw Error('请求过大')}return JSON.parse(s||'{}')}
 function normalizeInputPaths(input){
   if(input.type==='inspect'||input.type==='analyze'||input.type==='trial')input.file=normalizeMediaPath(input.file);
+  if(input.type==='analyze'){
+    if(input.sitiWorkers==null||input.sitiWorkers==='auto')input.sitiWorkers='auto';
+    else{const value=Number(input.sitiWorkers);if(![1,2,4,6,8].includes(value))throw Error('SI/TI 并行上限无效');input.sitiWorkers=value}
+  }
   if(input.type==='compare'){input.reference=normalizeMediaPath(input.reference);input.candidate=normalizeMediaPath(input.candidate)}
   return input;
 }
@@ -38,17 +42,19 @@ async function selectMediaFile(){
 async function execute(job,input){
   const cwd=path.join(root,'.mediascope',job.id);await mkdir(cwd,{recursive:true});
   await writeFile(path.join(cwd,'job-input.json'),JSON.stringify(input,null,2));
-  const ctx={cwd,signal:job.controller.signal,commands:[],update:s=>job.message=s};
+  const started=performance.now(),stages=[];
+  const ctx={cwd,signal:job.controller.signal,commands:[],separateMetrics:process.env.MEDIASCOPE_SEPARATE_METRICS==='1',sitiWorkers:input.type==='analyze'&&input.sitiWorkers!=='auto'?input.sitiWorkers:undefined,update:s=>job.message=s};
+  const stage=async(name,work)=>{ctx.update(name);const start=performance.now();try{return await work()}finally{stages.push({name,elapsedSeconds:(performance.now()-start)/1000})}};
   try{
     let result;
     if(job.type==='inspect'){
-      ctx.update('读取容器与轨道');result=await probe(input.file,ctx);result.metadata=metadataSummary(result);
+      result=await stage('读取容器与轨道',()=>probe(input.file,ctx));result.metadata=metadataSummary(result);
     }else if(job.type==='analyze'){
-      ctx.update('读取文件');const info=await probe(input.file,ctx),stream=video(info,input.stream);
-      ctx.update('完整扫描视频帧');const frames=await scan(input.file,input.stream,ctx);
-      ctx.update('统计全部轨道的压缩包');const tracks=await allPackets(input.file,info.raw.streams,ctx),packetStats=tracks.find(t=>t.index===stream.index);
-      ctx.update('解析全流编码帧头 / NAL / OBU');const coding=await structure(input.file,stream,frames,ctx);
-      let content=null;if(input.complexity===true){ctx.update('测量 SI/TI 内容复杂度');content=await complexity(input.file,stream,ctx)}
+      const info=await stage('读取文件',()=>probe(input.file,ctx)),stream=video(info,input.stream);
+      const frames=await stage('完整扫描视频帧',()=>scan(input.file,input.stream,ctx));
+      const tracks=await stage('统计全部轨道的压缩包',()=>allPackets(input.file,info.raw.streams,ctx)),packetStats=tracks.find(t=>t.index===stream.index);
+      const coding=await stage('解析全流编码帧头 / NAL / OBU',()=>structure(input.file,stream,frames,ctx));
+      let content=null;if(input.complexity===true)content=await stage('测量 SI/TI 内容复杂度',()=>complexity(input.file,stream,ctx,frames));
       result={...info,metadata:metadataSummary(info),stream:Number(input.stream),summary:summarize(frames),frames,packets:packetStats,tracks,coding,content,overheadBytes:info.size-tracks.reduce((s,t)=>s+t.bytes,0),warnings:['码率按绝对 PTS 的 1 秒窗口统计；缺失 PTS 时回退 DTS，首尾窗口可能不足 1 秒。缩放不会改变测量窗口。','GOP 视图按显示顺序的随机访问/关键帧边界分组；不将 CRA 自动标为闭合 GOP，也不声称已验证所有跨组引用。','帧大小取解码器报告的 pkt_size；AV1 多编码帧可能共用一个包，不重复相加估计编码帧体积。','元数据去重来自轨道与开头抽样；码流头解析覆盖全流，但不等同于完整解释所有私有 SEI。',...coding.warnings]};
     }else if(job.type==='compare'){
       if(input.confirm!==true)throw Error('请确认两个视频包含同一剪辑与画面顺序');
@@ -59,7 +65,7 @@ async function execute(job,input){
       result=await trial(input,ctx);
     }else throw Error('未知任务');
     if(job.controller.signal.aborted)throw Error('任务已取消');
-    job.result={schema:'MediaScope/0.2',createdAt:new Date().toISOString(),type:job.type,tools:versions,commands:ctx.commands,...result};
+    job.result={schema:'MediaScope/0.2',createdAt:new Date().toISOString(),type:job.type,tools:versions,commands:ctx.commands,timing:{computeSeconds:(performance.now()-started)/1000,stages,scope:'计算阶段，不含报告序列化、保存、传输及浏览器渲染；子进程耗时见 commands[].elapsedSeconds'},...result};
     await writeFile(path.join(cwd,'report.json'),JSON.stringify(job.result,null,2));
     job.reportPath=path.join(cwd,'report.json');delete job.result;
     job.status='done';job.message='完成';

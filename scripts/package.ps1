@@ -11,7 +11,7 @@ if(Test-Path -LiteralPath $archive){throw "Refusing to overwrite preserved relea
 if(Test-Path -LiteralPath $stage){throw "Staging directory already exists: $stage"}
 New-Item -ItemType Directory -Force "$stage/runtime", "$stage/licenses", "$project/releases" | Out-Null
 foreach($item in @('engine.mjs','server.mjs','package.json','README.md','start.cmd','public','test','scripts')){Copy-Item -LiteralPath (Join-Path $project $item) -Destination $stage -Recurse}
-foreach($optional in @('analysis.mjs','charts.mjs','public/charts.js')){if(Test-Path -LiteralPath (Join-Path $project $optional)){if($optional -notlike 'public/*'){Copy-Item -LiteralPath (Join-Path $project $optional) -Destination $stage}}}
+foreach($optional in @('analysis.mjs','siti.mjs','charts.mjs','public/charts.js')){if(Test-Path -LiteralPath (Join-Path $project $optional)){if($optional -notlike 'public/*'){Copy-Item -LiteralPath (Join-Path $project $optional) -Destination $stage}}}
 $nodePath = (Get-Command node).Source
 $ffmpegPath = (Get-Command ffmpeg).Source
 $ffprobePath = (Get-Command ffprobe).Source

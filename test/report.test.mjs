@@ -42,6 +42,12 @@ test('invalid and unsupported reports are rejected; existing preview and exporte
   assert.throws(()=>parseReport(saved));const input=app.node('#import-report');input.files=[{name:'bad.json',size:saved.length,text:async()=>saved}];await input.onchange({target:input});assert.equal(app.preview(),before);assert.equal(vm.runInContext('JSON.stringify(report)',app.context),JSON.stringify(fixtures[0]));
  }
 });
+test('SI/TI worker control enables with measurement and sends the selected upper limit',()=>{
+ const app=frontend(),complexity=app.node('#complexity'),workers=app.node('#siti-workers');
+ assert.equal(workers.disabled,true);complexity.checked=true;complexity.onchange();assert.equal(workers.disabled,false);workers.value='8';
+ app.context.sent=null;vm.runInContext('launch=input=>{sent=input}',app.context);app.node('#analyze').click();
+ assert.equal(app.context.sent.complexity,true);assert.equal(app.context.sent.sitiWorkers,'8');
+});
 test('legacy trial summary remains available without invented per-frame measurements',()=>{
  const r=structuredClone(fixtures[3]);r.schema='MediaScope/0.1';delete r.rows[0].metrics.psnr.values;delete r.rows[0].metrics.ssim.values;
  assert.deepEqual(parseReport(JSON.stringify(r)),r);

@@ -1,6 +1,7 @@
+import {measureSiti} from './siti.mjs';
 import {mkdir,unlink,access} from 'node:fs/promises';
 import path from 'node:path';
-import {FF,FP,run,probe,video,scan,compare,bitDepthPlan,bitDepthReductionFilter,verifyBitDepthReduction,alignment} from './engine.mjs';
+import {FF,FP,run,probe,video,scan,compare,createComparisonSession,bitDepthPlan,bitDepthReductionFilter,verifyBitDepthReduction,alignment} from './engine.mjs';
 
 const HEVC={0:'TRAIL_N',1:'TRAIL_R',2:'TSA_N',3:'TSA_R',4:'STSA_N',5:'STSA_R',6:'RADL_N',7:'RADL_R',8:'RASL_N',9:'RASL_R',16:'BLA_W_LP',17:'BLA_W_RADL',18:'BLA_N_LP',19:'IDR_W_RADL',20:'IDR_N_LP',21:'CRA_NUT'};
 const AV1_TYPES=['KEY','INTER','INTRA_ONLY','SWITCH'];
@@ -117,13 +118,11 @@ export function metadataSummary(info){
   return {items:[...map.values()],scope:info.frameSampleScope,note:'相同附加数据合并并标明来源；只保留元数据证据，不重复列出每帧相同的色彩标签。'};
 }
 
-export async function complexity(file,stream,ctx){
+export async function complexity(file,stream,ctx={},frames=null){
   if(!/^yuv(420|422|444)p(10le)?$/.test(stream.pix_fmt))return {available:false,reason:'SI/TI 本版仅分析原生平面 YUV 8/10-bit；不自动转换其他像素格式。'};
-  const points=[];let point=null;
-  const finish=()=>{if(point&&Number.isFinite(point.si)&&Number.isFinite(point.ti)){points.push(point);if(points.length>500000)throw Error('复杂度帧数超过上限')}point=null};
-  await run(FF,['-hide_banner','-nostdin','-v','error','-xerror','-noauto_conversion_filters','-noautorotate','-i',file,'-map',`0:${stream.index}`,'-vf','siti,metadata=mode=print:file=-','-an','-fps_mode','passthrough','-f','null','-'],ctx,line=>{let m=line.match(/^frame:(\d+)\s+pts:.*?pts_time:([^\s]+)/);if(m){finish();point={frame:Number(m[1]),t:Number(m[2])};return}m=line.match(/^lavfi.siti.(si|ti)=(.+)/);if(m&&point)point[m[1]]=Number(m[2])});finish();
+  const {points,execution}=await measureSiti(file,stream,ctx,frames);
   if(!points.length)throw Error('SI/TI 未产生可用结果');
-  return {available:true,points,si:distribution(points.map(p=>p.si)),ti:distribution(points.slice(1).map(p=>p.ti)),notes:['SI 表示亮度空间细节；TI 表示相邻帧亮度变化（排除首帧 TI=0 的汇总）。','TI 峰值可能来自运动、剪辑、闪光或噪声，不能直接认定为场景切换。','这些是复杂度描述，不是剩余压缩空间或质量评分。只在相同分辨率、帧率、位深、范围和传递函数下对比。','HDR 结果在编码值域计算，不代表感知亮度复杂度。']};
+  return {available:true,points,execution,si:distribution(points.map(p=>p.si)),ti:distribution(points.slice(1).map(p=>p.ti)),notes:['SI 表示亮度空间细节；TI 表示相邻帧亮度变化（排除首帧 TI=0 的汇总）。','TI 峰值可能来自运动、剪辑、闪光或噪声，不能直接认定为场景切换。','这些是复杂度描述，不是剩余压缩空间或质量评分。只在相同分辨率、帧率、位深、范围和传递函数下对比。','HDR 结果在编码值域计算，不代表感知亮度复杂度。']};
 }
 
 export function trialOptions(input){
@@ -152,6 +151,7 @@ export async function trial(input,ctx){
   if(depthMode==='both')bitDepthPlan({...s,pix_fmt:'yuv420p'},{...s,pix_fmt:'yuv420p10le'},'bt709-limited-8-10');
   if(metrics.includes('vmaf')&&!(s.color_primaries==='bt709'&&s.color_transfer==='bt709'&&s.color_space==='bt709'))throw Error('此片段不满足 SDR BT.709 VMAF 条件，请取消 VMAF');
   const files=[],reference=path.join(ctx.cwd,'reference.mkv');let retained=false;
+  ctx={...ctx,comparisonSession:createComparisonSession([reference,path.join(ctx.cwd,'input-8bit.mkv'),path.join(ctx.cwd,'input-10bit.mkv')])};
   const register=async file=>{try{await access(file);throw Error('实验目标文件已存在，拒绝覆盖或清理：'+file)}catch(e){if(e.code!=='ENOENT')throw e}files.push(file)};
   try{
     ctx.update('解码实验片段，写入无损参考');await register(reference);
@@ -190,9 +190,8 @@ export async function trial(input,ctx){
       const color=[];for(const [field,flag]of [['color_primaries','-color_primaries'],['color_transfer','-color_trc'],['color_space','-colorspace'],['color_range','-color_range'],['chroma_location','-chroma_sample_location']])if(refStream[field]&&refStream[field]!=='unknown')color.push(flag,refStream[field]);
       const pix=depth===8?'yuv420p':'yuv420p10le';
       const t=performance.now();await run(FF,['-hide_banner','-nostdin','-v','error','-xerror','-noauto_conversion_filters','-i',inputs[depth],'-map','0:v:0','-an','-c:v',encoder,...opts,'-crf',String(crf),'-pix_fmt',pix,...color,'-fps_mode','passthrough',output],ctx);const elapsed=(performance.now()-t)/1000;
-      const pi=await probe(output,ctx);if(video(pi,0).pix_fmt!==pix)throw Error('编码输出位深与实验请求不一致，拒绝采纳结果');
       const metricDir=path.join(ctx.cwd,'metrics-'+id);await mkdir(metricDir,{recursive:true});
-      const comparison=await compare(qualityReference,output,0,0,metrics,{...ctx,cwd:metricDir},depthMode==='both'?'bt709-limited-8-10':'native'),p=(await allPackets(output,pi.raw.streams,ctx))[0];
+      const comparison=await compare(qualityReference,output,0,0,metrics,{...ctx,cwd:metricDir,expectedCandidatePixelFormat:pix},depthMode==='both'?'bt709-limited-8-10':'native'),p=(await allPackets(output,comparison.candidate.raw.streams,ctx))[0];
       rows.push({id,crf,encoder,preset,bitDepth:depth,pixelFormat:pix,settings:opts,encodeSeconds:elapsed,encodeFps:refFrames.length/elapsed,videoBytes:p.bytes,videoMbps:p.averageMbps,metrics:comparison.metrics,normalization:comparison.normalization,skippedMetrics:comparison.skippedMetrics});
     }
     if(input.keepFiles===true)retained=true;

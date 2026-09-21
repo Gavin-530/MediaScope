@@ -11,7 +11,8 @@ export const FF = process.env.FFMPEG_PATH || bundled('ffmpeg');
 export const FP = process.env.FFPROBE_PATH || bundled('ffprobe');
 export async function run(exe,args,ctx={},line) {
   if(ctx.signal?.aborted) throw Error('任务已取消');
-  ctx.commands?.push({exe,args,cwd:ctx.cwd??process.cwd()});
+  const command={exe,args,cwd:ctx.cwd??process.cwd()},started=performance.now();
+  ctx.commands?.push(command);
   return new Promise((resolve,reject)=>{
     const p=spawn(exe,args,{windowsHide:true,cwd:ctx.cwd,signal:ctx.signal});
     let out='',err='',failure;
@@ -19,7 +20,7 @@ export async function run(exe,args,ctx={},line) {
     else p.stdout.on('data',b=>{out+=b;if(out.length>32*1024*1024){failure=Error('探测输出超过安全上限');p.kill();}});
     p.stderr.on('data',b=>{err=(err+b).slice(-16000)});
     if(ctx.stderrLine){const rl=createInterface({input:p.stderr});rl.on('line',s=>{try{ctx.stderrLine(s)}catch(e){failure=e;p.kill()}})}
-    p.on('error',reject);p.on('close',code=>failure?reject(failure):code===0&&!(args.includes('error')&&err.trim())?resolve(out):reject(Error(err||`进程退出 ${code}`)));
+    p.on('error',reject);p.on('close',code=>{command.elapsedSeconds=(performance.now()-started)/1000;command.exitCode=code;failure?reject(failure):code===0&&!(args.includes('error')&&err.trim())?resolve(out):reject(Error(err||`进程退出 ${code}`));});
   });
 }
 export function normalizeMediaPath(file){
@@ -144,8 +145,23 @@ export async function verifyBitDepthReduction(stream,ctx){
   if(!['avg','y','u','v'].every(k=>new RegExp(`psnr_${k}:inf(?:\\s|$)`).test(raw)))throw Error('当前 FFmpeg 未通过 10→8-bit 截断量化自检');
   return {passed:true,codes:'0–1023',mapping:'floor(code10 / 4)',dither:'none',raw};
 }
+// Explicitly scoped to immutable, task-owned references. Never cache user media globally.
+const comparisonSessions=new WeakMap();
+export function createComparisonSession(files){
+  const token={};comparisonSessions.set(token,{files:new Set(files.map(normalizeMediaPath)),entries:new Map()});return token;
+}
+async function referenceEntry(file,ctx){
+  const session=comparisonSessions.get(ctx.comparisonSession),normalized=normalizeMediaPath(file);
+  if(!session?.files.has(normalized))return {info:await probe(file,ctx),scans:new Map()};
+  const s=await stat(normalized,{bigint:true}),signature=[s.dev,s.ino,s.size,s.mtimeNs,s.ctimeNs].join(':');
+  let entry=session.entries.get(normalized);
+  if(entry&&entry.signature!==signature)throw Error('实验参考文件在任务期间发生变化，拒绝复用验证结果');
+  if(!entry){entry={signature,info:await probe(file,ctx),scans:new Map()};session.entries.set(normalized,entry)}
+  return entry;
+}
 export async function compare(ref,candidate,ri,ci,metrics,ctx,mode='native'){
-  const r=await probe(ref,ctx),c=await probe(candidate,ctx),rs=video(r,ri),cs=video(c,ci);
+  const entry=await referenceEntry(ref,ctx),r=entry.info,c=await probe(candidate,ctx),rs=video(r,ri),cs=video(c,ci);
+  if(ctx.expectedCandidatePixelFormat&&cs.pix_fmt!==ctx.expectedCandidatePixelFormat)throw Error('编码输出位深与实验请求不一致，拒绝采纳结果');
   if(!Array.isArray(metrics)||!metrics.length||metrics.some(m=>!['psnr','ssim','vmaf'].includes(m)))throw Error('指标选择无效');
   const profile=comparisonProfile(rs),candidateProfile=comparisonProfile(cs),skippedMetrics={},normalization=bitDepthPlan(rs,cs,mode);
   const vmafReason=normalization.crossDepth?'跨位深模式尚未验证 VMAF 的感知适用性；仅提供 PSNR / SSIM。':profile.vmafReason??candidateProfile.vmafReason;
@@ -153,7 +169,10 @@ export async function compare(ref,candidate,ri,ci,metrics,ctx,mode='native'){
     if(metrics.every(m=>m==='vmaf'))throw Error(vmafReason);
     skippedMetrics.vmaf=vmafReason;
   }
-  ctx.update('检查参考文件逐帧时间戳与格式');const rf=await scan(ref,ri,{...ctx,comparisonStream:rs,requireProgressive:normalization.crossDepth});
+  ctx.update('检查参考文件逐帧时间戳与格式');
+  const scanKey=JSON.stringify([Number(ri),normalization.crossDepth]);
+  let rf=entry.scans.get(scanKey);
+  if(!rf){rf=await scan(ref,ri,{...ctx,comparisonStream:rs,requireProgressive:normalization.crossDepth});entry.scans.set(scanKey,rf)}
   ctx.update('检查候选文件逐帧时间戳与格式');const cf=await scan(candidate,ci,{...ctx,comparisonStream:cs,requireProgressive:normalization.crossDepth});
   const aligned=alignment(rs,cs,rf,cf,mode),results={};
   if(normalization.crossDepth){
@@ -162,16 +181,24 @@ export async function compare(ref,candidate,ri,ci,metrics,ctx,mode='native'){
     profile.domain='BT.709 有限范围统一 10-bit 编码值域；8-bit 精确乘 4；无采样、色彩或色调映射';
     profile.vmafReason=vmafReason;
   }
-  for(const metric of [...new Set(metrics)]){
-    if(skippedMetrics[metric])continue;
-    ctx.update(`计算 ${metric.toUpperCase()}`);
+  const activeMetrics=[...new Set(metrics)].filter(metric=>!skippedMetrics[metric]);
+  const filterFor=metric=>metric==='vmaf'?`libvmaf=model=version=vmaf_v0.6.1:log_fmt=json:log_path=${metric}.log:n_threads=2:shortest=1:repeatlast=0`:`${metric}=stats_file=${metric}.log:shortest=1:repeatlast=0`;
+  // Keep the single-metric path as the compatibility baseline. Split only after
+  // identical normalization and ordinal timestamps; never enable auto conversion.
+  const groups=ctx.separateMetrics?activeMetrics.map(m=>[m]):[activeMetrics];
+  for(const group of groups){
+    ctx.update(`计算 ${group.map(m=>m.toUpperCase()).join(' / ')}`);
+    const inputs=`[0:${ci}]${normalization.candidateFilter}settb=AVTB,setpts=N*1000000[d];[1:${ri}]${normalization.referenceFilter}settb=AVTB,setpts=N*1000000[r]`;
+    const graph=group.length===1?`${inputs};[d][r]${filterFor(group[0])}[out0]`:
+      `${inputs};[d]split=${group.length}${group.map((_,i)=>`[d${i}]`).join('')};[r]split=${group.length}${group.map((_,i)=>`[r${i}]`).join('')};${group.map((m,i)=>`[d${i}][r${i}]${filterFor(m)}[out${i}]`).join(';')}`;
+    const outputs=group.flatMap((_,i)=>['-map',`[out${i}]`,'-fps_mode','passthrough','-an','-sn','-f','null','-']);
+    await run(FF,['-hide_banner','-nostdin','-v','error','-xerror','-noauto_conversion_filters','-noautorotate','-i',candidate,'-noautorotate','-i',ref,'-filter_complex',graph,...outputs],ctx);
+  }
+  for(const metric of activeMetrics){
     const log=`${metric}.log`;
-    const filter=metric==='vmaf'?`libvmaf=model=version=vmaf_v0.6.1:log_fmt=json:log_path=${log}:n_threads=2:shortest=1:repeatlast=0`:`${metric}=stats_file=${log}:shortest=1:repeatlast=0`;
-    // After validating the original timeline, assign identical ordinal timestamps.
-    // This prevents sub-tolerance rounding differences from selecting a neighbouring frame.
-    await run(FF,['-hide_banner','-nostdin','-v','error','-xerror','-noauto_conversion_filters','-noautorotate','-i',candidate,'-noautorotate','-i',ref,'-filter_complex',`[0:${ci}]${normalization.candidateFilter}settb=AVTB,setpts=N*1000000[d];[1:${ri}]${normalization.referenceFilter}settb=AVTB,setpts=N*1000000[r];[d][r]${filter}[out]`,'-map','[out]','-fps_mode','passthrough','-an','-sn','-f','null','-'],ctx);
     const raw=await readFile(path.join(ctx.cwd,log),'utf8');
-    const values=metric==='vmaf'?JSON.parse(raw).frames.map(f=>f.metrics.vmaf):raw.trim().split(/\r?\n/).map(l=>{const v=l.match(metric==='psnr'?/psnr_avg:([^\s]+)/:/All:([^\s]+)/)?.[1];return v==='inf'?Infinity:Number(v)});
+    const lines=metric==='vmaf'?null:raw.trim().split(/\r?\n/);
+    const values=metric==='vmaf'?JSON.parse(raw).frames.map(f=>f.metrics.vmaf):lines.map(l=>{const v=l.match(metric==='psnr'?/psnr_avg:([^\s]+)/:/All:([^\s]+)/)?.[1];return v==='inf'?Infinity:Number(v)});
     if(values.length!==rf.length||values.some(v=>!Number.isFinite(v)&&!(metric==='psnr'&&v===Infinity)))throw Error(`${metric} 输出帧数或数据异常，结果不予采纳`);
     const sorted=[...values].sort((a,b)=>a-b),p05=sorted[Math.floor((values.length-1)*.05)];
     // PSNR is pooled in the MSE domain, never averaged directly in dB.
@@ -184,7 +211,8 @@ export async function compare(ref,candidate,ri,ci,metrics,ctx,mode='native'){
       results[metric].components={};
       for(const component of ['y','u','v']){
         const key=metric==='psnr'?`psnr_${component}`:component.toUpperCase();
-        const channel=raw.trim().split(/\r?\n/).map(l=>Number(l.match(new RegExp(`(?:^|\\s)${key}:([^\\s]+)`))?.[1]?.replace(/^inf$/,'Infinity')));
+        const pattern=new RegExp(`(?:^|\\s)${key}:([^\\s]+)`);
+        const channel=lines.map(l=>Number(l.match(pattern)?.[1]?.replace(/^inf$/,'Infinity')));
         if(channel.length!==rf.length||channel.some(v=>!Number.isFinite(v)&&!(metric==='psnr'&&v===Infinity)))throw Error(`${metric} ${component} 分量日志异常`);
         results[metric].components[component]=safe(metric==='psnr'?-10*Math.log10(channel.reduce((s,v)=>s+10**(-v/10),0)/channel.length):channel.reduce((s,v)=>s+v,0)/channel.length);
       }

@@ -12,7 +12,7 @@ $archive=Join-Path $project "releases/MediaScope-$Version.zip"
 if(Test-Path -LiteralPath $archive){throw "Refusing to overwrite preserved release: $archive"}
 if(Test-Path -LiteralPath $stage){throw "Staging directory already exists: $stage"}
 New-Item -ItemType Directory -Force $stage,(Join-Path $project 'releases') | Out-Null
-foreach($item in @('analysis.mjs','engine.mjs','server.mjs','package.json','README.md','start.cmd','public')){
+foreach($item in @('analysis.mjs','siti.mjs','engine.mjs','server.mjs','package.json','README.md','start.cmd','public')){
   Copy-Item -LiteralPath (Join-Path $project $item) -Destination $stage -Recurse
 }
 @"
