@@ -4,11 +4,13 @@ import { stat, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import {availableParallelism} from 'node:os';
 
 const home=path.dirname(fileURLToPath(import.meta.url));
 const bundled=name=>existsSync(path.join(home,'runtime',name+'.exe'))?path.join(home,'runtime',name+'.exe'):name;
 export const FF = process.env.FFMPEG_PATH || bundled('ffmpeg');
 export const FP = process.env.FFPROBE_PATH || bundled('ffprobe');
+export function decodeThreadCount(requested){const fallback=Math.max(1,Math.min(12,availableParallelism()));return Number.isInteger(requested)&&requested>=1&&requested<=32?requested:fallback}
 export async function run(exe,args,ctx={},line) {
   if(ctx.signal?.aborted) throw Error('任务已取消');
   const command={exe,args,cwd:ctx.cwd??process.cwd()},started=performance.now();
@@ -43,7 +45,7 @@ export async function probe(file,ctx={}){
 export function video(info,index){const s=info.raw.streams.find(s=>s.index===Number(index)&&s.codec_type==='video');if(!s)throw Error('请选择有效的视频轨道');return s}
 export async function scan(file,index,ctx={}){
   const frames=[];
-  await run(FP,['-v','error','-select_streams',String(index),'-show_frames','-show_entries','frame=pts,best_effort_timestamp,best_effort_timestamp_time,duration_time,pkt_duration_time,pkt_size,pict_type,key_frame,width,height,pix_fmt,color_range,color_space,color_transfer,color_primaries,chroma_location,interlaced_frame','-of','compact=p=0:nk=0',file],ctx,line=>{
+  await run(FP,['-v','error','-threads',String(decodeThreadCount(ctx.decodeThreads)),'-select_streams',String(index),'-show_frames','-show_entries','frame=pts,best_effort_timestamp,best_effort_timestamp_time,duration_time,pkt_duration_time,pkt_size,pict_type,key_frame,width,height,pix_fmt,color_range,color_space,color_transfer,color_primaries,chroma_location,interlaced_frame','-of','compact=p=0:nk=0',file],ctx,line=>{
     const o=Object.fromEntries(line.split('|').map(x=>{const p=x.indexOf('=');return [x.slice(0,p),x.slice(p+1)]}));
     if(!('key_frame' in o))return;
     if(ctx.requireProgressive&&o.interlaced_frame!=='0')throw Error(`第 ${frames.length+1} 帧不是明确的逐行帧，拒绝跨位深比较。`);

@@ -23,6 +23,7 @@ test('API protects local data and streams a reproducible completed report',async
  const job=await(await request('jobs','POST',{type:'analyze',file:source,stream:0})).json();const rejected=await request('jobs','POST',{type:'inspect',file:source});assert.equal(rejected.status,409);
  const status=await finished(job.id);assert.equal(status.status,'done',status.message);
  const report=await(await request(`jobs/${job.id}/report`)).json();assert.deepEqual(parseReport(JSON.stringify(report)),report);assert.equal((await fetch(base+'/report.js')).status,200);assert.equal(report.schema,'MediaScope/0.2');assert.equal(report.frames.length,12);assert.equal(report.frames[0].special,'IDR');assert.equal(report.tracks.length,1);assert.ok(report.commands.every(c=>c.cwd));
+ const concurrent=report.timing.stages.filter(s=>s.concurrentGroup);assert.equal(concurrent.length,2);assert.equal(new Set(concurrent.map(s=>s.concurrentGroup)).size,1);assert.ok(report.timing.decodeThreads>=1&&report.timing.decodeThreads<=12);
 });
 test('SI/TI worker setting validates input and records requested versus actual workers',async()=>{
  const invalid=await request('jobs','POST',{type:'analyze',file:source,stream:0,complexity:true,sitiWorkers:3});assert.equal(invalid.status,400);assert.match((await invalid.json()).error,/并行上限/);

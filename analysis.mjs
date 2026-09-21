@@ -79,11 +79,16 @@ export function createTraceParser(codec){
   return {line,finish(){flushPacket();return {codec,packets,events,sequences,warnings:[...warnings],scope:'FFmpeg trace_headers 全流头解析；不解析编码块、运动矢量或变换系数。'}}};
 }
 
-export async function structure(file,stream,frames,ctx){
-  if(!['h264','hevc','av1'].includes(stream.codec_name))return {supported:false,warnings:['该编码暂不支持码流头解析，保留解码器帧型与关键帧区间。'],gops:buildGops(frames)};
+export async function traceStructure(file,stream,ctx){
+  if(!['h264','hevc','av1'].includes(stream.codec_name))return {supported:false,warnings:['该编码暂不支持码流头解析，保留解码器帧型与关键帧区间。']};
   const parser=createTraceParser(stream.codec_name);
   await run(FF,['-hide_banner','-nostdin','-loglevel','info','-xerror','-copyts','-i',file,'-map',`0:${stream.index}`,'-c','copy','-bsf:v','trace_headers','-f','null','-'],{...ctx,stderrLine:parser.line});
-  const result=parser.finish(),byPts=new Map();
+  return parser.finish();
+}
+
+export function mapStructure(result,stream,frames){
+  if(result.supported===false)return {...result,gops:buildGops(frames)};
+  const byPts=new Map();
   for(const p of result.packets){const arr=byPts.get(p.pts)||[];arr.push(p);byPts.set(p.pts,arr)}
   let matched=0;
   for(const [i,f]of frames.entries()){
@@ -105,6 +110,8 @@ export async function structure(file,stream,frames,ctx){
   if(stream.codec_name==='av1')result.counts={encoded:result.events.filter(e=>!e.showExisting&&e.kind!=='REDUNDANT').length,hidden:result.events.filter(e=>e.hidden&&e.kind!=='REDUNDANT').length,showExisting:result.events.filter(e=>e.showExisting).length,shown:result.events.filter(e=>!e.hidden&&e.kind!=='REDUNDANT').length};
   return result;
 }
+
+export async function structure(file,stream,frames,ctx){return mapStructure(await traceStructure(file,stream,ctx),stream,frames)}
 
 export function buildGops(frames){
   const starts=[];frames.forEach((f,i)=>{if(i===0||f.key||/^(IDR|CRA|BLA|KEY)/.test(f.special??''))starts.push(i)});

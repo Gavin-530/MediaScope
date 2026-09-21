@@ -6,8 +6,8 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import {createReadStream} from 'node:fs';
-import { FF,FP,run,probe,video,scan,summarize,compare,normalizeMediaPath } from './engine.mjs';
-import {allPackets,structure,metadataSummary,complexity,trial} from './analysis.mjs';
+import { FF,FP,run,probe,video,scan,summarize,compare,normalizeMediaPath,decodeThreadCount } from './engine.mjs';
+import {allPackets,structure,traceStructure,mapStructure,metadataSummary,complexity,trial} from './analysis.mjs';
 const root=path.dirname(fileURLToPath(import.meta.url)),token=randomBytes(24).toString('hex'),jobs=new Map();
 const port=Number(process.env.PORT||4317),origin=`http://127.0.0.1:${port}`;
 const execFileAsync=promisify(execFile);
@@ -43,17 +43,29 @@ async function execute(job,input){
   const cwd=path.join(root,'.mediascope',job.id);await mkdir(cwd,{recursive:true});
   await writeFile(path.join(cwd,'job-input.json'),JSON.stringify(input,null,2));
   const started=performance.now(),stages=[];
-  const ctx={cwd,signal:job.controller.signal,commands:[],separateMetrics:process.env.MEDIASCOPE_SEPARATE_METRICS==='1',sitiWorkers:input.type==='analyze'&&input.sitiWorkers!=='auto'?input.sitiWorkers:undefined,update:s=>job.message=s};
-  const stage=async(name,work)=>{ctx.update(name);const start=performance.now();try{return await work()}finally{stages.push({name,elapsedSeconds:(performance.now()-start)/1000})}};
+  const ctx={cwd,signal:job.controller.signal,commands:[],separateMetrics:process.env.MEDIASCOPE_SEPARATE_METRICS==='1',decodeThreads:decodeThreadCount(Number(process.env.MEDIASCOPE_DECODE_THREADS)),sitiWorkers:input.type==='analyze'&&input.sitiWorkers!=='auto'?input.sitiWorkers:undefined,update:s=>job.message=s};
+  const stage=async(name,work,concurrentGroup=null)=>{if(!concurrentGroup)ctx.update(name);const start=performance.now();try{return await work()}finally{stages.push({name,elapsedSeconds:(performance.now()-start)/1000,...(concurrentGroup?{concurrentGroup}:{})})}};
   try{
     let result;
     if(job.type==='inspect'){
       result=await stage('读取容器与轨道',()=>probe(input.file,ctx));result.metadata=metadataSummary(result);
     }else if(job.type==='analyze'){
       const info=await stage('读取文件',()=>probe(input.file,ctx)),stream=video(info,input.stream);
-      const frames=await stage('完整扫描视频帧',()=>scan(input.file,input.stream,ctx));
-      const tracks=await stage('统计全部轨道的压缩包',()=>allPackets(input.file,info.raw.streams,ctx)),packetStats=tracks.find(t=>t.index===stream.index);
-      const coding=await stage('解析全流编码帧头 / NAL / OBU',()=>structure(input.file,stream,frames,ctx));
+      let frames,tracks,coding;
+      frames=await stage('完整扫描视频帧',()=>scan(input.file,input.stream,ctx));
+      if(process.env.MEDIASCOPE_SEQUENTIAL_ANALYSIS==='1'){
+        tracks=await stage('统计全部轨道的压缩包',()=>allPackets(input.file,info.raw.streams,ctx));
+        coding=await stage('解析全流编码帧头 / NAL / OBU',()=>structure(input.file,stream,frames,ctx));
+      }else{
+        const group='包统计与码流头并行读取';ctx.update(group);
+        const completed=await Promise.allSettled([
+          stage('统计全部轨道的压缩包',()=>allPackets(input.file,info.raw.streams,ctx),group),
+          stage('解析全流编码帧头 / NAL / OBU',()=>traceStructure(input.file,stream,ctx),group)
+        ]);
+        const failed=completed.find(x=>x.status==='rejected');if(failed)throw failed.reason;
+        tracks=completed[0].value;coding=mapStructure(completed[1].value,stream,frames);
+      }
+      const packetStats=tracks.find(t=>t.index===stream.index);
       let content=null;if(input.complexity===true)content=await stage('测量 SI/TI 内容复杂度',()=>complexity(input.file,stream,ctx,frames));
       result={...info,metadata:metadataSummary(info),stream:Number(input.stream),summary:summarize(frames),frames,packets:packetStats,tracks,coding,content,overheadBytes:info.size-tracks.reduce((s,t)=>s+t.bytes,0),warnings:['码率按绝对 PTS 的 1 秒窗口统计；缺失 PTS 时回退 DTS，首尾窗口可能不足 1 秒。缩放不会改变测量窗口。','GOP 视图按显示顺序的随机访问/关键帧边界分组；不将 CRA 自动标为闭合 GOP，也不声称已验证所有跨组引用。','帧大小取解码器报告的 pkt_size；AV1 多编码帧可能共用一个包，不重复相加估计编码帧体积。','元数据去重来自轨道与开头抽样；码流头解析覆盖全流，但不等同于完整解释所有私有 SEI。',...coding.warnings]};
     }else if(job.type==='compare'){
@@ -65,7 +77,7 @@ async function execute(job,input){
       result=await trial(input,ctx);
     }else throw Error('未知任务');
     if(job.controller.signal.aborted)throw Error('任务已取消');
-    job.result={schema:'MediaScope/0.2',createdAt:new Date().toISOString(),type:job.type,tools:versions,commands:ctx.commands,timing:{computeSeconds:(performance.now()-started)/1000,stages,scope:'计算阶段，不含报告序列化、保存、传输及浏览器渲染；子进程耗时见 commands[].elapsedSeconds'},...result};
+    job.result={schema:'MediaScope/0.2',createdAt:new Date().toISOString(),type:job.type,tools:versions,commands:ctx.commands,timing:{computeSeconds:(performance.now()-started)/1000,decodeThreads:ctx.decodeThreads,stages,scope:'计算阶段，不含报告序列化、保存、传输及浏览器渲染；同一 concurrentGroup 的阶段时间相互重叠，不能相加；子进程耗时见 commands[].elapsedSeconds'},...result};
     await writeFile(path.join(cwd,'report.json'),JSON.stringify(job.result,null,2));
     job.reportPath=path.join(cwd,'report.json');delete job.result;
     job.status='done';job.message='完成';

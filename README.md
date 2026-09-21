@@ -1,12 +1,12 @@
-# MediaScope 0.1.4-beta
+# MediaScope 0.1.5-beta
 
 Windows 本地媒体结构与质量分析工具。原生 Node.js + 浏览器 + FFmpeg/FFprobe，无 npm 依赖，媒体不上传。
 
 ## 使用与测试包
 
 - **当前源码版**：双击 `start.cmd`，或 `npm start`，打开 http://127.0.0.1:4317 。需要 Node.js 22+ 和 FFmpeg/FFprobe；也可使用 FFMPEG_PATH / FFPROBE_PATH 指定程序。
-- **当前轻量测试包**：[MediaScope-0.1.4-beta.zip](https://github.com/Gavin-530/MediaScope/releases/download/v0.1.4-beta/MediaScope-0.1.4-beta.zip)。包内保留版本号和逐文件 SHA-256 清单，不包含 Node.js、FFmpeg 或 FFprobe；换到其他设备前需安装这些依赖。
-- 历史版本及其校验值见 [GitHub Releases](https://github.com/Gavin-530/MediaScope/releases)。已发布版本保持不可变；修复和功能调整递增前三段版本号，当前为 `0.1.4-beta`，只有需要同时区分同一源码版本的多个构建时才增加 `beta.1`、`beta.2`。
+- **当前轻量测试包**：[MediaScope-0.1.5-beta.zip](https://github.com/Gavin-530/MediaScope/releases/download/v0.1.5-beta/MediaScope-0.1.5-beta.zip)。包内保留版本号和逐文件 SHA-256 清单，不包含 Node.js、FFmpeg 或 FFprobe；换到其他设备前需安装这些依赖。
+- 历史版本及其校验值见 [GitHub Releases](https://github.com/Gavin-530/MediaScope/releases)。已发布版本保持不可变；修复和功能调整递增前三段版本号，当前为 `0.1.5-beta`，只有需要同时区分同一源码版本的多个构建时才增加 `beta.1`、`beta.2`。
 - 包内没有个人媒体、分析报告或测试生成文件。只有明确指定的正式版才构建包含运行环境的 Windows x64 完整便携包。
 - 保持服务窗口运行，Ctrl+C 停止。通过 PORT 环境变量可改变端口。程序只监听本机回环地址，API 检查会话令牌与来源。
 
@@ -102,3 +102,9 @@ Windows 本地媒体结构与质量分析工具。原生 Node.js + 浏览器 + F
 保持原版 FFmpeg siti 的逐帧算法、像素格式、时间戳与汇总顺序。各进程从头解码，按显示帧序号选取连续区间；非首段包含一帧前置重叠，计算后丢弃该重叠帧。合并检查总帧数、分段帧数和重叠帧时间戳/SI；失败回退串行，取消任务不重试。报告 content.execution 记录执行方式、并发数和回退原因，命令日志保留具体参数。
 
 默认最多 4 路，按 CPU、可用内存及帧数限制，短片/未知帧数保持串行。环境变量 MEDIASCOPE_SITI_WORKERS=1 可强制串行，2–8 设置并发上限。并行会增加重复解码、内存及 I/O，实际加速取决于素材和硬件。该优化保持现有 FFmpeg 编码值域计算口径，不等于新增完整 P.910 合规认证；HDR 限制不变。
+
+### 0.1.5-beta 帧结构与 GOP 优化
+
+完整分析的显示帧扫描显式使用 FFprobe 软件解码线程，默认取本机逻辑处理器数与 12 的较小值。扫描完成后，并行执行全部轨道包统计和 NAL / OBU 码流头解析；三个阶段继续使用原有完整命令、解析规则和结果映射，不抽帧、不分段解析 GOP，也不把关键帧标记替代为 IDR / CRA 判断。所有阶段完成后才映射显示帧与码流事件，SI/TI 随后单独运行，不与这组任务叠加并发。
+
+报告 `timing.decodeThreads` 记录帧扫描线程数，`timing.stages[].concurrentGroup` 标记重叠执行的阶段，其耗时不能相加。诊断兼容性时可在启动前设置 `MEDIASCOPE_DECODE_THREADS=1` 强制单线程解码，并用 `MEDIASCOPE_SEQUENTIAL_ANALYSIS=1` 恢复包统计与码流头解析的原顺序路径；所有路径使用相同计算函数和输出结构。
