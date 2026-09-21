@@ -11,10 +11,22 @@ const fmt=(v,d=3)=>typeof v==='number'?v.toLocaleString('zh-CN',{maximumFraction
 const size=v=>v==null?'未报告':v>=1073741824?`${fmt(v/1073741824)} GiB`:v>=1048576?`${fmt(v/1048576)} MiB`:v>=1024?`${fmt(v/1024)} KiB`:`${v} B`;
 const clean=v=>v.trim().replace(/^"|"$/g,'');
 async function api(url,options={}){const r=await fetch('/api/'+url,{...options,headers:{'Content-Type':'application/json','X-MediaScope-Token':token}}),d=await r.json();if(!r.ok)throw Error(d.error||'请求失败');return d}
-function message(text,error=false){$('#task').classList.remove('hidden');$('#task').classList.toggle('error',error);$('#task-label').textContent=error?'任务未完成':'分析任务';$('#task-message').textContent=text;$('#cancel').classList.toggle('hidden',!current)}
+function progressValue(value){return Number.isFinite(value)?value.toLocaleString('zh-CN',{maximumFractionDigits:2}):null}
+function elapsed(startedAt){const seconds=Math.max(0,Math.floor((Date.now()-new Date(startedAt).getTime())/1000));if(!Number.isFinite(seconds))return '';const h=Math.floor(seconds/3600),m=Math.floor(seconds%3600/60),s=seconds%60;return `已运行 ${h?String(h).padStart(2,'0')+':':''}${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`}
+function message(text,error=false,progress=null,startedAt=null,status=null){
+ $('#task').classList.remove('hidden');$('#task').classList.toggle('error',error);$('#task-label').textContent=error?'任务未完成':status==='cancelled'?'任务已取消':status==='done'?'任务完成':'分析任务';$('#task-message').textContent=text;$('#cancel').classList.toggle('hidden',!current);
+ const details=$('#task-progress-details'),stage=$('#task-stage'),phase=$('#task-phase');details.classList.toggle('hidden',!progress);stage.classList.toggle('hidden',!progress?.stage);phase.classList.toggle('hidden',!(progress?.phaseIndex!=null&&progress?.phaseCount));
+ if(!progress)return;
+ stage.textContent=progress.stage||'';phase.textContent=progress.phaseIndex!=null&&progress.phaseCount?`阶段 ${progress.phaseIndex} / ${progress.phaseCount}`:'';
+ const determinate=Number.isFinite(progress.completed)&&Number.isFinite(progress.total)&&progress.total>=0,percent=determinate?(progress.total===0?100:Math.max(0,Math.min(100,progress.completed/progress.total*100))):null;
+ const count=progressValue(progress.completed),total=progressValue(progress.total);$('#task-count').textContent=count===null?'正在处理':total===null?`已处理 ${count}${progress.unit?' '+progress.unit:''}`:`${count} / ${total}${progress.unit?' '+progress.unit:''}`;$('#task-percent').textContent=percent===null?'总量待核验':`${percent.toFixed(percent<10&&percent%1?1:0)}%`;
+ const track=$('#task-progress-track'),bar=$('#task-progress-bar');track.classList.toggle('indeterminate',!determinate);if(!bar.style)bar.style={};bar.style.width=determinate?percent+'%':'';track.ariaValueNow=determinate?String(percent):'';track.ariaValueMax=determinate?'100':'';
+ const subtasks=Object.values(progress.subtasks||{});$('#task-subtasks').innerHTML=subtasks.map(item=>{const done=progressValue(item.completed),all=progressValue(item.total);return `<div class="task-subtask"><span>${esc(item.label||'并行任务')}</span><span>${done??'准备中'}${all!==null?' / '+all:''}${item.unit?' '+esc(item.unit):''}</span></div>`}).join('');
+ $('#task-elapsed').textContent=startedAt?elapsed(startedAt):'';
+}
 function busy(value){for(const id of ['inspect','analyze','compare','trial'])$('#'+id).disabled=value||(id==='analyze'&&(!infoPath||!hasVideo));$('#import-report').disabled=value;$('#import-button').disabled=value;document.querySelectorAll('.file-picker').forEach(b=>b.disabled=value)}
 async function launch(data){try{busy(true);current=(await api('jobs',{method:'POST',body:JSON.stringify(data)})).id;message('任务已开始');poll()}catch(e){message(e.message,true);busy(false)}}
-async function poll(){try{const j=await api('jobs/'+current);message(j.message,j.status==='error');if(j.status==='running'){setTimeout(poll,900);return}const id=current;current=null;$('#cancel').classList.add('hidden');if(j.status==='done'){const result=await api('jobs/'+id+'/report');render(result,false)}busy(false)}catch(e){current=null;busy(false);message(e.message,true)}}
+async function poll(){try{const j=await api('jobs/'+current);message(j.progress?.detail||j.message,j.status==='error',j.progress,j.startedAt,j.status);if(j.status==='running'){setTimeout(poll,900);return}const id=current;current=null;$('#cancel').classList.add('hidden');if(j.status==='done'){const result=await api('jobs/'+id+'/report');render(result,false)}busy(false)}catch(e){current=null;busy(false);message(e.message,true)}}
 $('#cancel').onclick=async()=>{try{await api('jobs/'+current,{method:'DELETE'})}catch(e){message(e.message,true)}};
 function switchMode(mode){
  activeMode=mode;report=reports[mode]??null;charts=viewCharts[mode];

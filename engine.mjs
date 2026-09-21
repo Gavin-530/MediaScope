@@ -57,9 +57,10 @@ export async function scan(file,index,ctx={}){
     if(frames.length>=500000)throw Error('首版单轨支持最多 500,000 帧；本次未完成，不生成完整分析结论');
     const num=k=>o[k]!==undefined&&o[k]!=='N/A'?Number(o[k]):null;
     frames.push({pts:o.pts??o.best_effort_timestamp??null,t:num('best_effort_timestamp_time'),duration:num('duration_time')??num('pkt_duration_time'),bytes:num('pkt_size'),type:o.pict_type||'?',key:o.key_frame==='1'});
-    if(frames.length%500===0)ctx.update?.(`已解码 ${frames.length.toLocaleString()} 帧`);
+    if(frames.length===1||frames.length%100===0)ctx.update?.({detail:`已读取 ${frames.length.toLocaleString()} 帧`,completed:frames.length,total:ctx.expectedFrames??null,unit:'帧'});
   });
   if(!frames.length)throw Error('未获取到视频帧');
+  ctx.update?.({detail:`已核验 ${frames.length.toLocaleString()} 帧`,completed:frames.length,total:frames.length,unit:'帧'});
   return frames;
 }
 export async function packets(file,index,ctx={}){
@@ -162,7 +163,9 @@ async function referenceEntry(file,ctx){
   return entry;
 }
 export async function compare(ref,candidate,ri,ci,metrics,ctx,mode='native'){
+  if(ctx.progressPlan==='compare')ctx.update({stage:'读取并校验两个文件',detail:'读取参考文件与候选文件元数据',phaseIndex:1,phaseCount:6,completed:0,total:2,unit:'个文件'});
   const entry=await referenceEntry(ref,ctx),r=entry.info,c=await probe(candidate,ctx),rs=video(r,ri),cs=video(c,ci);
+  if(ctx.progressPlan==='compare')ctx.update({stage:'读取并校验两个文件',detail:'两个文件元数据已读取',phaseIndex:1,phaseCount:6,completed:2,total:2,unit:'个文件'});
   if(ctx.expectedCandidatePixelFormat&&cs.pix_fmt!==ctx.expectedCandidatePixelFormat)throw Error('编码输出位深与实验请求不一致，拒绝采纳结果');
   if(!Array.isArray(metrics)||!metrics.length||metrics.some(m=>!['psnr','ssim','vmaf'].includes(m)))throw Error('指标选择无效');
   const profile=comparisonProfile(rs),candidateProfile=comparisonProfile(cs),skippedMetrics={},normalization=bitDepthPlan(rs,cs,mode);
@@ -171,14 +174,15 @@ export async function compare(ref,candidate,ri,ci,metrics,ctx,mode='native'){
     if(metrics.every(m=>m==='vmaf'))throw Error(vmafReason);
     skippedMetrics.vmaf=vmafReason;
   }
-  ctx.update('检查参考文件逐帧时间戳与格式');
+  ctx.update(ctx.progressPlan==='compare'?{stage:'核验参考文件帧序',detail:'逐帧读取参考文件',phaseIndex:2,phaseCount:6,completed:0,total:null,unit:'帧'}:'检查参考文件逐帧时间戳与格式');
   const scanKey=JSON.stringify([Number(ri),normalization.crossDepth]);
   let rf=entry.scans.get(scanKey);
   if(!rf){rf=await scan(ref,ri,{...ctx,comparisonStream:rs,requireProgressive:normalization.crossDepth});entry.scans.set(scanKey,rf)}
-  ctx.update('检查候选文件逐帧时间戳与格式');const cf=await scan(candidate,ci,{...ctx,comparisonStream:cs,requireProgressive:normalization.crossDepth});
+  ctx.update(ctx.progressPlan==='compare'?{stage:'核验候选文件帧序',detail:'逐帧读取候选文件',phaseIndex:3,phaseCount:6,completed:0,total:rf.length,unit:'帧'}:'检查候选文件逐帧时间戳与格式');const cf=await scan(candidate,ci,{...ctx,comparisonStream:cs,requireProgressive:normalization.crossDepth,expectedFrames:rf.length});
   const aligned=alignment(rs,cs,rf,cf,mode),results={};
+  if(ctx.progressPlan==='compare')ctx.update({stage:'验证比较域',detail:normalization.crossDepth?'验证本机精确位深映射':'原生格式无需数值映射',phaseIndex:4,phaseCount:6,completed:normalization.crossDepth?0:1,total:1,unit:'项校验'});
   if(normalization.crossDepth){
-    ctx.update('验证本机 8→10-bit 全码值映射');normalization.verification=await verifyBitDepthMapping(normalization,ctx);
+    if(ctx.progressPlan!=='compare')ctx.update('验证本机 8→10-bit 全码值映射');normalization.verification=await verifyBitDepthMapping(normalization,ctx);
     profile.pixelFormat=normalization.targetFormat;profile.bitDepth=10;
     profile.domain='BT.709 有限范围统一 10-bit 编码值域；8-bit 精确乘 4；无采样、色彩或色调映射';
     profile.vmafReason=vmafReason;
@@ -188,14 +192,19 @@ export async function compare(ref,candidate,ri,ci,metrics,ctx,mode='native'){
   // Keep the single-metric path as the compatibility baseline. Split only after
   // identical normalization and ordinal timestamps; never enable auto conversion.
   const groups=ctx.separateMetrics?activeMetrics.map(m=>[m]):[activeMetrics];
-  for(const group of groups){
-    ctx.update(`计算 ${group.map(m=>m.toUpperCase()).join(' / ')}`);
+  for(const [groupIndex,group] of groups.entries()){
+    const label=`计算 ${group.map(m=>m.toUpperCase()).join(' / ')}`;
+    ctx.update(ctx.progressPlan==='compare'?{stage:'计算逐帧质量指标',detail:label,phaseIndex:5,phaseCount:6,completed:groupIndex*rf.length,total:groups.length*rf.length,unit:'帧次'}:label);
     const inputs=`[0:${ci}]${normalization.candidateFilter}settb=AVTB,setpts=N*1000000[d];[1:${ri}]${normalization.referenceFilter}settb=AVTB,setpts=N*1000000[r]`;
     const graph=group.length===1?`${inputs};[d][r]${filterFor(group[0])}[out0]`:
       `${inputs};[d]split=${group.length}${group.map((_,i)=>`[d${i}]`).join('')};[r]split=${group.length}${group.map((_,i)=>`[r${i}]`).join('')};${group.map((m,i)=>`[d${i}][r${i}]${filterFor(m)}[out${i}]`).join(';')}`;
     const outputs=group.flatMap((_,i)=>['-map',`[out${i}]`,'-fps_mode','passthrough','-an','-sn','-f','null','-']);
-    await run(FF,['-hide_banner','-nostdin','-v','error','-xerror','-noauto_conversion_filters','-noautorotate','-i',candidate,'-noautorotate','-i',ref,'-filter_complex',graph,...outputs],ctx);
+    await run(FF,['-hide_banner','-nostdin','-v','error','-xerror','-noauto_conversion_filters','-noautorotate','-i',candidate,'-noautorotate','-i',ref,'-filter_complex',graph,...outputs,'-progress','pipe:1','-stats_period','0.25'],ctx,line=>{
+      const value=Number(line.match(/^frame=(\d+)/)?.[1]);
+      if(Number.isFinite(value))ctx.update?.({...(ctx.progressPlan==='compare'?{stage:'计算逐帧质量指标',phaseIndex:5,phaseCount:6}:{}),detail:label,completed:groupIndex*rf.length+Math.min(value,rf.length),total:groups.length*rf.length,unit:'帧次'});
+    });
   }
+  ctx.update?.({...(ctx.progressPlan==='compare'?{stage:'计算逐帧质量指标',phaseIndex:5,phaseCount:6}:{}),detail:'质量指标计算完成，正在校验日志',completed:groups.length*rf.length,total:groups.length*rf.length,unit:'帧次'});
   for(const metric of activeMetrics){
     const log=`${metric}.log`;
     const raw=await readFile(path.join(ctx.cwd,log),'utf8');

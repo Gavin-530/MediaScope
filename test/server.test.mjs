@@ -22,6 +22,7 @@ test('API protects local data and streams a reproducible completed report',async
  assert.equal((await fetch(base+'/api/status',{headers:{'x-mediascope-token':token,origin:'https://external.invalid'}})).status,403);
  const job=await(await request('jobs','POST',{type:'analyze',file:source,stream:0})).json();const rejected=await request('jobs','POST',{type:'inspect',file:source});assert.equal(rejected.status,409);
  const status=await finished(job.id);assert.equal(status.status,'done',status.message);
+ assert.equal(status.progress.stage,'完成');assert.equal(status.progress.completed,1);assert.equal(status.progress.total,1);assert.ok(status.progress.phaseIndex>=1);assert.ok(status.progress.phaseCount>=status.progress.phaseIndex);
  const report=await(await request(`jobs/${job.id}/report`)).json();assert.deepEqual(parseReport(JSON.stringify(report)),report);assert.equal((await fetch(base+'/report.js')).status,200);assert.equal(report.schema,'MediaScope/0.2');assert.equal(report.frames.length,12);assert.equal(report.frames[0].special,'IDR');assert.equal(report.tracks.length,1);assert.ok(report.commands.every(c=>c.cwd));
  const concurrent=report.timing.stages.filter(s=>s.concurrentGroup);assert.equal(concurrent.length,2);assert.equal(new Set(concurrent.map(s=>s.concurrentGroup)).size,1);assert.ok(report.timing.decodeThreads>=1&&report.timing.decodeThreads<=12);
 });

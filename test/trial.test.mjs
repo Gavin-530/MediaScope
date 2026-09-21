@@ -57,7 +57,7 @@ test('native experiment accepts more than four CRFs and decimal x265 CRF',async(
 test('dual-depth rejects HDR before creating references and cleans up cancellation',async()=>{
  const hdr=path.join(root,'hdr.mkv');await run(FF,['-v','error','-y','-i',sources[10],'-vf','setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc','-c:v','ffv1','-level','3',hdr]);
  const ctx=await context('reject');await assert.rejects(()=>trial({...input,file:hdr},ctx),/BT.709/);assert.deepEqual(await readdir(ctx.cwd),[]);
- const cancelled=await context('cancel'),controller=new AbortController();cancelled.signal=controller.signal;cancelled.update=s=>{if(s.startsWith('试编码 '))controller.abort()};
+ const cancelled=await context('cancel'),controller=new AbortController();cancelled.signal=controller.signal;cancelled.update=progress=>{if(progress?.stage?.startsWith('编码点 '))controller.abort()};
  await assert.rejects(()=>trial({...input,file:sources[8]},cancelled),/取消/);assert.ok(!(await readdir(cancelled.cwd)).some(f=>f.endsWith('.mkv')));
 });
 test('chart data separates bit depths and presets, and preserves unavailable metrics as gaps',()=>{

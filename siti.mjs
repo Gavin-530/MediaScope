@@ -14,7 +14,7 @@ async function measure(file,stream,ctx,from=0,end=null){
   const finish=()=>{
     if(point){
       if(!Number.isFinite(point.si)||!Number.isFinite(point.ti)||point.frame!==points.length)throw Error('SI/TI 帧结果不完整');
-      points.push(point);if(points.length>500000)throw Error('复杂度帧数超过上限');
+      points.push(point);ctx.onSitiPoint?.(points.length);if(points.length>500000)throw Error('复杂度帧数超过上限');
     }
     point=null;
   };
@@ -34,13 +34,14 @@ export async function measureSiti(file,stream,ctx={},frames=null){
   const workers=sitiWorkerCount(stream,frames?.length,requestedWorkers);
   let points,execution={mode:'serial',workers:1,requestedWorkers,setting,implementation:'FFmpeg siti'};
   if(workers>1){
-    ctx.update?.(`测量 SI/TI 内容复杂度（${workers} 路帧级并行）`);
+    ctx.update?.({detail:`测量 SI/TI 内容复杂度（${workers} 路帧级并行）`,completed:0,total:frames.length,unit:'帧'});
     const size=Math.ceil(frames.length/workers);
+    const counts=Array(workers).fill(0),report=(i,count)=>{counts[i]=Math.max(count-(i?1:0),0);const completed=Math.min(frames.length,counts.reduce((sum,value)=>sum+value,0));if(completed===1||completed%30===0||completed===frames.length)ctx.update?.({detail:`已测量 ${completed.toLocaleString()} / ${frames.length.toLocaleString()} 帧 SI/TI`,completed,total:frames.length,unit:'帧'})};
     // No seeking: decode in display order. Include the preceding frame for TI.
     // The final range is unbounded to detect a stale/incorrect scanned count.
     const results=await Promise.allSettled(Array.from({length:workers},(_,i)=>{
       const start=i*size,from=Math.max(0,start-1),end=i===workers-1?null:start+size-1;
-      return measure(file,stream,ctx,from,end).then(points=>({start,points}));
+      return measure(file,stream,{...ctx,onSitiPoint:count=>report(i,count)},from,end).then(points=>({start,points}));
     }));
     if(ctx.signal?.aborted)throw Error('任务已取消');
     try{
@@ -62,9 +63,10 @@ export async function measureSiti(file,stream,ctx={},frames=null){
       execution={mode:'frame-parallel',workers,requestedWorkers,setting,implementation:'FFmpeg siti',overlapFrames:1};
     }catch(e){
       execution.fallbackReason=e.message;
-      ctx.update?.('SI/TI 并行校验未通过，回退串行计算');
-      points=await measure(file,stream,ctx);
+      ctx.update?.({detail:'SI/TI 并行校验未通过，回退串行计算',completed:0,total:frames.length,unit:'帧'});
+      points=await measure(file,stream,{...ctx,onSitiPoint:count=>{if(count===1||count%30===0||count===frames.length)ctx.update?.({detail:`已测量 ${count.toLocaleString()} / ${frames.length.toLocaleString()} 帧 SI/TI`,completed:count,total:frames.length,unit:'帧'})}});
     }
-  }else points=await measure(file,stream,ctx);
+  }else points=await measure(file,stream,{...ctx,onSitiPoint:count=>{const total=frames?.length??null;if(count===1||count%30===0||count===total)ctx.update?.({detail:total?`已测量 ${count.toLocaleString()} / ${total.toLocaleString()} 帧 SI/TI`:`已测量 ${count.toLocaleString()} 帧 SI/TI`,completed:count,total,unit:'帧'})}});
+  ctx.update?.({detail:`SI/TI 已完成 ${points.length.toLocaleString()} 帧`,completed:points.length,total:points.length,unit:'帧'});
   return {points,execution};
 }

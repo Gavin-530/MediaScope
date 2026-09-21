@@ -103,3 +103,11 @@ test('large trial sample tables start collapsed while small tables stay expanded
  const small=frontend();small.context.small=fixtures[3];vm.runInContext('render(small)',small.context);
  assert.match(small.node('#trial-details').innerHTML,/<details id="trial-samples" open>/);
 });
+
+test('structured task progress shows exact counts and refuses to invent a percentage',()=>{
+ const app=frontend();app.context.progress={stage:'完整扫描视频帧',detail:'已读取 1,200 帧',phaseIndex:2,phaseCount:4,completed:1200,total:null,unit:'帧',subtasks:{}};
+ vm.runInContext("message(progress.detail,false,progress,'2026-01-01T00:00:00.000Z','running')",app.context);
+ assert.equal(app.node('#task-stage').textContent,'完整扫描视频帧');assert.equal(app.node('#task-phase').textContent,'阶段 2 / 4');assert.match(app.node('#task-count').textContent,/1,200.*帧/);assert.equal(app.node('#task-percent').textContent,'总量待核验');assert.equal(app.node('#task-progress-track').classList.contains('indeterminate'),true);
+ app.context.progress={...app.context.progress,completed:1200,total:2400};vm.runInContext("message(progress.detail,false,progress,'2026-01-01T00:00:00.000Z','running')",app.context);
+ assert.equal(app.node('#task-percent').textContent,'50%');assert.equal(app.node('#task-progress-bar').style.width,'50%');assert.equal(app.node('#task-progress-track').classList.contains('indeterminate'),false);
+});

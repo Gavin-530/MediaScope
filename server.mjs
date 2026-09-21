@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import {createReadStream} from 'node:fs';
 import { FF,FP,run,probe,video,scan,summarize,compare,normalizeMediaPath,decodeThreadCount } from './engine.mjs';
-import {allPackets,structure,traceStructure,mapStructure,metadataSummary,complexity,trial} from './analysis.mjs';
+import {allPackets,structure,traceStructure,mapStructure,metadataSummary,complexity,trial,trialOptions} from './analysis.mjs';
 const root=path.dirname(fileURLToPath(import.meta.url)),token=randomBytes(24).toString('hex'),jobs=new Map();
 const port=Number(process.env.PORT||4317),origin=`http://127.0.0.1:${port}`;
 const execFileAsync=promisify(execFile);
@@ -43,45 +43,77 @@ async function execute(job,input){
   const cwd=path.join(root,'.mediascope',job.id);await mkdir(cwd,{recursive:true});
   await writeFile(path.join(cwd,'job-input.json'),JSON.stringify(input,null,2));
   const started=performance.now(),stages=[];
-  const ctx={cwd,signal:job.controller.signal,commands:[],separateMetrics:process.env.MEDIASCOPE_SEPARATE_METRICS==='1',decodeThreads:decodeThreadCount(Number(process.env.MEDIASCOPE_DECODE_THREADS)),sitiWorkers:input.type==='analyze'&&input.sitiWorkers!=='auto'?input.sitiWorkers:undefined,update:s=>job.message=s};
-  const stage=async(name,work,concurrentGroup=null)=>{if(!concurrentGroup)ctx.update(name);const start=performance.now();try{return await work()}finally{stages.push({name,elapsedSeconds:(performance.now()-start)/1000,...(concurrentGroup?{concurrentGroup}:{})})}};
+  const publish=value=>{
+    const next=typeof value==='string'?{detail:value}:value;
+    if(!next||typeof next!=='object')return;
+    const clean={};
+    for(const key of ['stage','detail','unit'])if(typeof next[key]==='string')clean[key]=next[key];
+    for(const key of ['phaseIndex','phaseCount','completed','total']){
+      if(next[key]===null)clean[key]=null;
+      else if(Number.isFinite(next[key])&&next[key]>=0)clean[key]=Number(next[key]);
+    }
+    const previous=job.progress||{},phaseChanged=clean.phaseIndex!=null&&clean.phaseIndex!==previous.phaseIndex;
+    job.progress={...previous,...(phaseChanged?{subtasks:{},completed:null,total:null,unit:''}:{}),...clean,updatedAt:new Date().toISOString()};
+    if(clean.detail||clean.stage)job.message=clean.detail||clean.stage;
+    if(next.subtask&&typeof next.subtask.id==='string'){
+      const previous=job.progress.subtasks||{},item={};
+      for(const key of ['label','unit'])if(typeof next.subtask[key]==='string')item[key]=next.subtask[key];
+      for(const key of ['completed','total'])if(Number.isFinite(next.subtask[key])&&next.subtask[key]>=0)item[key]=Number(next.subtask[key]);
+      job.progress.subtasks={...previous,[next.subtask.id]:{...(previous[next.subtask.id]||{}),...item}};
+    }
+  };
+  const ctx={cwd,signal:job.controller.signal,commands:[],separateMetrics:process.env.MEDIASCOPE_SEPARATE_METRICS==='1',decodeThreads:decodeThreadCount(Number(process.env.MEDIASCOPE_DECODE_THREADS)),sitiWorkers:input.type==='analyze'&&input.sitiWorkers!=='auto'?input.sitiWorkers:undefined,update:publish};
+  const stage=async(name,work,{phaseIndex,phaseCount,concurrentGroup=null,subtask=null}={})=>{
+    const base={stage:concurrentGroup||name,phaseIndex,phaseCount};
+    const scoped={...ctx,update:value=>{
+      const detail=typeof value==='string'?{detail:value}:value||{};
+      publish(subtask?{...base,detail:detail.detail||name,subtask:{id:subtask,label:name,...detail}}:{...base,...detail});
+    }};
+    scoped.update({detail:name,completed:0,total:null});
+    const start=performance.now();
+    try{return await work(scoped)}finally{stages.push({name,elapsedSeconds:(performance.now()-start)/1000,...(concurrentGroup?{concurrentGroup}:{})})}
+  };
   try{
     let result;
     if(job.type==='inspect'){
-      result=await stage('读取容器与轨道',()=>probe(input.file,ctx));result.metadata=metadataSummary(result);
+      result=await stage('读取容器与轨道',c=>probe(input.file,c),{phaseIndex:1,phaseCount:1});result.metadata=metadataSummary(result);
     }else if(job.type==='analyze'){
-      const info=await stage('读取文件',()=>probe(input.file,ctx)),stream=video(info,input.stream);
+      const phaseCount=input.complexity===true?4:3;
+      const info=await stage('读取文件',c=>probe(input.file,c),{phaseIndex:1,phaseCount}),stream=video(info,input.stream);
       let frames,tracks,coding;
-      frames=await stage('完整扫描视频帧',()=>scan(input.file,input.stream,ctx));
+      frames=await stage('完整扫描视频帧',c=>scan(input.file,input.stream,c),{phaseIndex:2,phaseCount});
       if(process.env.MEDIASCOPE_SEQUENTIAL_ANALYSIS==='1'){
-        tracks=await stage('统计全部轨道的压缩包',()=>allPackets(input.file,info.raw.streams,ctx));
-        coding=await stage('解析全流编码帧头 / NAL / OBU',()=>structure(input.file,stream,frames,ctx));
+        tracks=await stage('统计全部轨道的压缩包',c=>allPackets(input.file,info.raw.streams,c),{phaseIndex:3,phaseCount,subtask:'packets'});
+        coding=await stage('解析全流编码帧头 / NAL / OBU',c=>structure(input.file,stream,frames,c),{phaseIndex:3,phaseCount,subtask:'headers'});
       }else{
-        const group='包统计与码流头并行读取';ctx.update(group);
+        const group='包统计与码流头并行读取';publish({stage:group,detail:'两项并行执行',phaseIndex:3,phaseCount});
         const completed=await Promise.allSettled([
-          stage('统计全部轨道的压缩包',()=>allPackets(input.file,info.raw.streams,ctx),group),
-          stage('解析全流编码帧头 / NAL / OBU',()=>traceStructure(input.file,stream,ctx),group)
+          stage('统计全部轨道的压缩包',c=>allPackets(input.file,info.raw.streams,c),{phaseIndex:3,phaseCount,concurrentGroup:group,subtask:'packets'}),
+          stage('解析全流编码帧头 / NAL / OBU',c=>traceStructure(input.file,stream,c),{phaseIndex:3,phaseCount,concurrentGroup:group,subtask:'headers'})
         ]);
         const failed=completed.find(x=>x.status==='rejected');if(failed)throw failed.reason;
         tracks=completed[0].value;coding=mapStructure(completed[1].value,stream,frames);
       }
       const packetStats=tracks.find(t=>t.index===stream.index);
-      let content=null;if(input.complexity===true)content=await stage('测量 SI/TI 内容复杂度',()=>complexity(input.file,stream,ctx,frames));
+      let content=null;if(input.complexity===true)content=await stage('测量 SI/TI 内容复杂度',c=>complexity(input.file,stream,c,frames),{phaseIndex:4,phaseCount});
       result={...info,metadata:metadataSummary(info),stream:Number(input.stream),summary:summarize(frames),frames,packets:packetStats,tracks,coding,content,overheadBytes:info.size-tracks.reduce((s,t)=>s+t.bytes,0),warnings:['码率按绝对 PTS 的 1 秒窗口统计；缺失 PTS 时回退 DTS，首尾窗口可能不足 1 秒。缩放不会改变测量窗口。','GOP 视图按显示顺序的随机访问/关键帧边界分组；不将 CRA 自动标为闭合 GOP，也不声称已验证所有跨组引用。','帧大小取解码器报告的 pkt_size；AV1 多编码帧可能共用一个包，不重复相加估计编码帧体积。','元数据去重来自轨道与开头抽样；码流头解析覆盖全流，但不等同于完整解释所有私有 SEI。',...coding.warnings]};
     }else if(job.type==='compare'){
       if(input.confirm!==true)throw Error('请确认两个视频包含同一剪辑与画面顺序');
-      result=await compare(input.reference,input.candidate,input.refStream,input.candidateStream,input.metrics,ctx,input.comparisonMode??'native');
-      const rTracks=await allPackets(input.reference,result.reference.raw.streams,ctx),cTracks=await allPackets(input.candidate,result.candidate.raw.streams,ctx);
+      result=await compare(input.reference,input.candidate,input.refStream,input.candidateStream,input.metrics,{...ctx,progressPlan:'compare'},input.comparisonMode??'native');
+      publish({stage:'统计两路视频包体积',detail:'统计参考文件压缩包',phaseIndex:6,phaseCount:6,completed:0,total:2,unit:'个文件'});
+      const rTracks=await allPackets(input.reference,result.reference.raw.streams,{...ctx,update:v=>publish({stage:'统计两路视频包体积',detail:typeof v==='string'?v:v?.detail,phaseIndex:6,phaseCount:6,completed:0,total:2,unit:'个文件'})});
+      publish({stage:'统计两路视频包体积',detail:'统计候选文件压缩包',phaseIndex:6,phaseCount:6,completed:1,total:2,unit:'个文件'});
+      const cTracks=await allPackets(input.candidate,result.candidate.raw.streams,{...ctx,update:v=>publish({stage:'统计两路视频包体积',detail:typeof v==='string'?v:v?.detail,phaseIndex:6,phaseCount:6,completed:1,total:2,unit:'个文件'})});
       result.videoSize={reference:rTracks.find(s=>s.index===Number(input.refStream))?.bytes,candidate:cTracks.find(s=>s.index===Number(input.candidateStream))?.bytes};
     }else if(job.type==='trial'){
-      result=await trial(input,ctx);
+      const options=trialOptions(input);result=await trial(input,{...ctx,progressPlan:'trial',trialPhaseCount:options.points+2});
     }else throw Error('未知任务');
     if(job.controller.signal.aborted)throw Error('任务已取消');
     job.result={schema:'MediaScope/0.2',createdAt:new Date().toISOString(),type:job.type,tools:versions,commands:ctx.commands,timing:{computeSeconds:(performance.now()-started)/1000,decodeThreads:ctx.decodeThreads,stages,scope:'计算阶段，不含报告序列化、保存、传输及浏览器渲染；同一 concurrentGroup 的阶段时间相互重叠，不能相加；子进程耗时见 commands[].elapsedSeconds'},...result};
     await writeFile(path.join(cwd,'report.json'),JSON.stringify(job.result,null,2));
     job.reportPath=path.join(cwd,'report.json');delete job.result;
-    job.status='done';job.message='完成';
-  }catch(e){job.status=job.controller.signal.aborted?'cancelled':'error';job.message=e.message;await writeFile(path.join(cwd,'failure.json'),JSON.stringify({status:job.status,error:e.message,commands:ctx.commands},null,2)).catch(()=>{});}
+    job.status='done';job.message='完成';job.progress={...(job.progress||{}),stage:'完成',detail:'报告已保存',completed:1,total:1,unit:'份报告',updatedAt:new Date().toISOString()};
+  }catch(e){job.status=job.controller.signal.aborted?'cancelled':'error';job.message=e.message;job.progress={...(job.progress||{}),stage:job.status==='cancelled'?'已取消':'任务未完成',detail:e.message,updatedAt:new Date().toISOString()};await writeFile(path.join(cwd,'failure.json'),JSON.stringify({status:job.status,error:e.message,commands:ctx.commands},null,2)).catch(()=>{});}
   finally{active=null;job.finishedAt=new Date().toISOString();}
 }
 const server=http.createServer(async(req,res)=>{
@@ -102,7 +134,7 @@ const server=http.createServer(async(req,res)=>{
         const input=await body(req);if(active){send(res,409,{error:'已有任务正在运行，请等待完成或取消'});return}if(!['inspect','analyze','compare','trial'].includes(input.type))throw Error('无效任务类型');normalizeInputPaths(input);
         // Keep at most five in-memory reports. Completed reports remain on disk.
         while(jobs.size>=5){const key=jobs.keys().next().value;jobs.delete(key)}
-        const j={id:randomUUID(),type:input.type,status:'running',message:'准备分析',startedAt:new Date().toISOString(),controller:new AbortController()};jobs.set(j.id,j);active=j.id;
+        const startedAt=new Date().toISOString(),j={id:randomUUID(),type:input.type,status:'running',message:'准备分析',startedAt,progress:{stage:'准备任务',detail:'正在建立只读分析任务',phaseIndex:0,phaseCount:null,completed:null,total:null,updatedAt:startedAt},controller:new AbortController()};jobs.set(j.id,j);active=j.id;
         execute(j,input).catch(e=>{active=null;j.status='error';j.message=e.message});send(res,202,{id:j.id});return;
       }
       send(res,404,{error:'接口不存在'});return;

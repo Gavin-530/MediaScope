@@ -10,13 +10,15 @@ export function distribution(values){const a=values.filter(Number.isFinite).sort
 
 // All selected streams share the same absolute PTS-based bins, including explicit empty seconds.
 export async function allPackets(file,streams,ctx){
-  const tracks=new Map(streams.map(s=>[s.index,{index:s.index,codec:s.codec_name,type:s.codec_type,bytes:0,count:0,missing:0,fallbackDts:0,map:new Map(),start:null,end:null}]));
+  const tracks=new Map(streams.map(s=>[s.index,{index:s.index,codec:s.codec_name,type:s.codec_type,bytes:0,count:0,missing:0,fallbackDts:0,map:new Map(),start:null,end:null}]));let processed=0;
   await run(FP,['-v','error','-show_packets','-show_entries','packet=stream_index,pts_time,dts_time,duration_time,size','-of','compact=p=0:nk=0',file],ctx,line=>{
     const o=Object.fromEntries(line.split('|').map(x=>x.split('='))),r=tracks.get(Number(o.stream_index));if(!r||!o.size)return;
-    const bytes=Number(o.size);r.bytes+=bytes;r.count++;
+    const bytes=Number(o.size);r.bytes+=bytes;r.count++;processed++;
+    if(processed===1||processed%500===0)ctx.update?.({detail:`已统计 ${processed.toLocaleString()} 个压缩包`,completed:processed,total:null,unit:'个压缩包'});
     let t=num(o.pts_time);if(t===null){t=num(o.dts_time);r.fallbackDts++}if(!Number.isFinite(t)){r.missing++;return}
     const second=Math.floor(t);r.map.set(second,(r.map.get(second)||0)+bytes);r.start=r.start===null?t:Math.min(t,r.start);r.end=Math.max(r.end??t,t+(num(o.duration_time)||0));
   });
+  ctx.update?.({detail:`已统计 ${processed.toLocaleString()} 个压缩包`,completed:processed,total:processed,unit:'个压缩包'});
   return [...tracks.values()].map(({map,...r})=>{const keys=[...map.keys()].sort((a,b)=>a-b);if(keys.length&&keys.at(-1)-keys[0]>1000000)throw Error('时间戳跨度异常，无法生成码率图');const bins=[];if(keys.length)for(let s=keys[0];s<=keys.at(-1);s++)bins.push({second:s,mbps:(map.get(s)||0)*8/1e6});return {...r,bins,averageMbps:r.end>r.start?r.bytes*8/(r.end-r.start)/1e6:null,windowStats:distribution(bins.map(b=>b.mbps))}});
 }
 
@@ -81,9 +83,9 @@ export function createTraceParser(codec){
 
 export async function traceStructure(file,stream,ctx){
   if(!['h264','hevc','av1'].includes(stream.codec_name))return {supported:false,warnings:['该编码暂不支持码流头解析，保留解码器帧型与关键帧区间。']};
-  const parser=createTraceParser(stream.codec_name);
-  await run(FF,['-hide_banner','-nostdin','-loglevel','info','-xerror','-copyts','-i',file,'-map',`0:${stream.index}`,'-c','copy','-bsf:v','trace_headers','-f','null','-'],{...ctx,stderrLine:parser.line});
-  return parser.finish();
+  const parser=createTraceParser(stream.codec_name);let packets=0;
+  await run(FF,['-hide_banner','-nostdin','-loglevel','info','-xerror','-copyts','-i',file,'-map',`0:${stream.index}`,'-c','copy','-bsf:v','trace_headers','-f','null','-'],{...ctx,stderrLine:line=>{parser.line(line);if(line.includes('trace_headers')&&line.replace(/^.*?\]\s*/, '').startsWith('Packet:')){packets++;if(packets===1||packets%250===0)ctx.update?.({detail:`已解析 ${packets.toLocaleString()} 个视频包头`,completed:packets,total:null,unit:'个视频包头'})}}});
+  const result=parser.finish();ctx.update?.({detail:`已解析 ${packets.toLocaleString()} 个视频包头`,completed:packets,total:packets,unit:'个视频包头'});return result;
 }
 
 export function mapStructure(result,stream,frames){
@@ -150,6 +152,8 @@ export function trialOptions(input){
 }
 export async function trial(input,ctx){
   const options=trialOptions(input),{crfs,presets,cpuUsed,depthMode,metrics}=options;
+  const phaseCount=ctx.trialPhaseCount??options.points+2;
+  ctx.update?.({stage:'准备实验参考片段',detail:'读取源文件参数',phaseIndex:1,phaseCount,completed:0,total:null,unit:'帧'});
   const info=await probe(input.file,ctx),s=video(info,input.stream),start=Number(input.start),duration=Number(input.duration),encoder=input.encoder;
   if(!Number.isFinite(start)||start<0||!Number.isFinite(duration)||duration<1||duration>20)throw Error('实验片段需为 1–20 秒，起点不能为负');
   if(!['libx264','libx265','libaom-av1'].includes(encoder))throw Error('不支持的试编码器');
@@ -161,24 +165,25 @@ export async function trial(input,ctx){
   ctx={...ctx,comparisonSession:createComparisonSession([reference,path.join(ctx.cwd,'input-8bit.mkv'),path.join(ctx.cwd,'input-10bit.mkv')])};
   const register=async file=>{try{await access(file);throw Error('实验目标文件已存在，拒绝覆盖或清理：'+file)}catch(e){if(e.code!=='ENOENT')throw e}files.push(file)};
   try{
-    ctx.update('解码实验片段，写入无损参考');await register(reference);
+    ctx.update({stage:'准备实验参考片段',detail:'解码实验片段，写入无损参考',phaseIndex:1,phaseCount,completed:0,total:null,unit:'帧'});await register(reference);
     // FFV1 preserves decoded sample values. Limit temporary data by requested duration and available frame count.
     const fpsParts=(s.avg_frame_rate||'0/1').split('/').map(Number),fps=fpsParts[0]/fpsParts[1];
     const estimate=s.width*s.height*(depthMode==='both'?4.5:s.pix_fmt==='yuv420p10le'?3:1.5)*(fps||60)*duration;
     if(estimate>8*1024**3)throw Error('所选片段原始像素预算超过 8 GiB，请缩短片段');
     const sourceColor=[];for(const [field,flag]of [['color_primaries','-color_primaries'],['color_transfer','-color_trc'],['color_space','-colorspace'],['color_range','-color_range'],['chroma_location','-chroma_sample_location']])if(s[field]&&s[field]!=='unknown')sourceColor.push(flag,s[field]);
-    await run(FF,['-hide_banner','-nostdin','-v','error','-xerror','-noauto_conversion_filters','-noautorotate','-ss',String(start),'-accurate_seek','-i',input.file,'-t',String(duration),'-map',`0:${s.index}`,'-an','-sn','-vf','setpts=PTS-STARTPTS','-c:v','ffv1','-level','3',...sourceColor,'-fps_mode','passthrough',reference],ctx);
+    await run(FF,['-hide_banner','-nostdin','-v','error','-xerror','-noauto_conversion_filters','-noautorotate','-ss',String(start),'-accurate_seek','-i',input.file,'-t',String(duration),'-map',`0:${s.index}`,'-an','-sn','-vf','setpts=PTS-STARTPTS','-c:v','ffv1','-level','3',...sourceColor,'-fps_mode','passthrough','-progress','pipe:1','-stats_period','0.25',reference],ctx,line=>{const count=Number(line.match(/^frame=(\d+)/)?.[1]);if(Number.isFinite(count))ctx.update?.({detail:`已写入 ${count.toLocaleString()} 帧无损参考`,completed:count,total:null,unit:'帧'})});
     const refInfo=await probe(reference,ctx),refStream=video(refInfo,0),refFrames=await scan(reference,0,{...ctx,comparisonStream:refStream,requireProgressive:depthMode==='both'});if(refFrames.length<2)throw Error('实验片段没有足够的视频帧');
     alignment(s,refStream,refFrames,refFrames);
     const nativeDepth=refStream.pix_fmt==='yuv420p10le'?10:8;
     const inputs={[nativeDepth]:reference},depths=depthMode==='both'?[8,10]:[nativeDepth],preparation={sourceDepth:nativeDepth};
+    ctx.update({stage:'准备并验证比较域',detail:depthMode==='both'?'准备另一位深的无损输入':'保持源文件原生位深',phaseIndex:2,phaseCount,completed:depthMode==='both'?0:1,total:1,unit:'项准备'});
     if(depthMode==='both'){
       const otherDepth=nativeDepth===8?10:8,otherStream={...refStream,pix_fmt:otherDepth===8?'yuv420p':'yuv420p10le'};
       const other=path.join(ctx.cwd,`input-${otherDepth}bit.mkv`);await register(other);
       let filter;
       if(nativeDepth===8)filter=bitDepthPlan(refStream,otherStream,'bt709-limited-8-10').referenceFilter+'null';
       else{preparation.reductionCheck=await verifyBitDepthReduction(refStream,ctx);filter=bitDepthReductionFilter(refStream);}
-      ctx.update(`准备 ${otherDepth}-bit 无损编码输入`);
+      ctx.update({stage:'准备并验证比较域',detail:`准备 ${otherDepth}-bit 无损编码输入`,phaseIndex:2,phaseCount,completed:0,total:1,unit:'项准备'});
       await run(FF,['-hide_banner','-nostdin','-v','error','-xerror','-noauto_conversion_filters','-i',reference,'-map','0:v:0','-vf',filter,'-c:v','ffv1','-level','3','-pix_fmt',otherStream.pix_fmt,...sourceColor,'-fps_mode','passthrough',other],ctx);
       inputs[otherDepth]=other;
       const preDir=path.join(ctx.cwd,'metrics-preparation');await mkdir(preDir,{recursive:true});
@@ -187,19 +192,23 @@ export async function trial(input,ctx){
       preparation.mapping=nativeDepth===8?'code10 = code8 × 4（不增加源精度）':'code8 = floor(code10 / 4)（固定截断，无抖动；实验选择，不是唯一标准量化方法）';
       preparation.baseline=baseline.metrics;preparation.normalization=baseline.normalization;
     }
+    ctx.update({stage:'准备并验证比较域',detail:'实验输入与比较域已验证',phaseIndex:2,phaseCount,completed:1,total:1,unit:'项准备'});
     const qualityReference=depthMode==='both'?inputs[10]:reference;
     const rows=[];
     for(const preset of presets)for(const crf of crfs)for(const depth of depths){
       const id=`${depth}bit-${preset.replace('=','-')}-crf-${crf}`;
-      ctx.update(`试编码 ${rows.length+1}/${options.points}：${encoder} / ${depth}-bit / ${preset} / CRF ${crf}`);const output=path.join(ctx.cwd,id+'.mkv');await register(output);
+      const point=rows.length+1,stage=`编码点 ${point} / ${options.points}`;
+      ctx.update({stage,detail:`编码 ${encoder} / ${depth}-bit / ${preset} / CRF ${crf}`,phaseIndex:point+2,phaseCount,completed:0,total:refFrames.length,unit:'帧'});const output=path.join(ctx.cwd,id+'.mkv');await register(output);
       const opts=encoder==='libaom-av1'?['-cpu-used',String(cpuUsed),'-b:v','0']:['-preset',preset];
       if(encoder==='libx265')opts.push('-x265-params','log-level=error');
       const color=[];for(const [field,flag]of [['color_primaries','-color_primaries'],['color_transfer','-color_trc'],['color_space','-colorspace'],['color_range','-color_range'],['chroma_location','-chroma_sample_location']])if(refStream[field]&&refStream[field]!=='unknown')color.push(flag,refStream[field]);
       const pix=depth===8?'yuv420p':'yuv420p10le';
-      const t=performance.now();await run(FF,['-hide_banner','-nostdin','-v','error','-xerror','-noauto_conversion_filters','-i',inputs[depth],'-map','0:v:0','-an','-c:v',encoder,...opts,'-crf',String(crf),'-pix_fmt',pix,...color,'-fps_mode','passthrough',output],ctx);const elapsed=(performance.now()-t)/1000;
+      const t=performance.now();await run(FF,['-hide_banner','-nostdin','-v','error','-xerror','-noauto_conversion_filters','-i',inputs[depth],'-map','0:v:0','-an','-c:v',encoder,...opts,'-crf',String(crf),'-pix_fmt',pix,...color,'-fps_mode','passthrough','-progress','pipe:1','-stats_period','0.25',output],ctx,line=>{const count=Number(line.match(/^frame=(\d+)/)?.[1]);if(Number.isFinite(count))ctx.update?.({stage,detail:`编码 ${encoder} / ${depth}-bit / ${preset} / CRF ${crf}`,phaseIndex:point+2,phaseCount,completed:Math.min(count,refFrames.length),total:refFrames.length,unit:'帧'})});const elapsed=(performance.now()-t)/1000;
       const metricDir=path.join(ctx.cwd,'metrics-'+id);await mkdir(metricDir,{recursive:true});
+      ctx.update({stage,detail:`核验并测量编码点 ${point} / ${options.points}`,phaseIndex:point+2,phaseCount,completed:0,total:refFrames.length,unit:'帧'});
       const comparison=await compare(qualityReference,output,0,0,metrics,{...ctx,cwd:metricDir,expectedCandidatePixelFormat:pix},depthMode==='both'?'bt709-limited-8-10':'native'),p=(await allPackets(output,comparison.candidate.raw.streams,ctx))[0];
       rows.push({id,crf,encoder,preset,bitDepth:depth,pixelFormat:pix,settings:opts,encodeSeconds:elapsed,encodeFps:refFrames.length/elapsed,videoBytes:p.bytes,videoMbps:p.averageMbps,metrics:comparison.metrics,normalization:comparison.normalization,skippedMetrics:comparison.skippedMetrics});
+      ctx.update({stage,detail:`编码点 ${point} / ${options.points} 已完成`,phaseIndex:point+2,phaseCount,completed:1,total:1,unit:'个编码点'});
     }
     if(input.keepFiles===true)retained=true;
     return {source:info,stream:s.index,experiment:{start,duration,actualFrames:refFrames.length,frameTimes:refFrames.map(f=>f.t-refFrames[0].t),encoder,preset:presets.join(', '),presets,crfs,depthMode,depths,points:options.points,preparation,comparisonDomain:depthMode==='both'?'全部结果相对于同一 10-bit 无损参考；PSNR 峰值 1023，8-bit 输出精确乘 4 后测量总差异。':'原生位深参考',retainedFiles:retained?files:[],metrics},skippedMetrics:options.skippedMetrics,rows,warnings:['仅代表这一片段及此编码器/预设/CRF，不外推全片大小；相同 CRF 不保证不同位深/预设具有相同质量或码率。','无损参考来自源文件的解码像素，并非相机原始信号。',...(depthMode==='both'?['8/10-bit 对照保持采样、色彩标签、分辨率、帧序和所选 preset 相同；编码器内部算法可能随位深改变。','总差异包含位深量化与编码的共同影响；基准分数不能与成片分数直接相减。','8-bit 源升至 10-bit 不会恢复原有精度。SSIM 日志舍入可能掩盖微小误差，需结合 PSNR。']:[]),'试编码只评价像素质量与视频包体积；不承诺保留 Dolby Vision、HDR10+、字幕或音频。','HDR 只比较编码值域 PSNR/SSIM；未评价动态元数据的观看效果。','编码耗时不含参考准备和质量测量，包含进程启动与文件 I/O。各点顺序运行且只测一次，会受负载、缓存和温度影响，不能据此推断稳定速度优势。']};
