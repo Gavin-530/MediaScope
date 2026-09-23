@@ -48,6 +48,17 @@ test('SI/TI worker control enables with measurement and sends the selected upper
  app.context.sent=null;vm.runInContext('launch=input=>{sent=input}',app.context);app.node('#analyze').click();
  assert.equal(app.context.sent.complexity,true);assert.equal(app.context.sent.sitiWorkers,'8');
 });
+test('chroma confirmation requires an explicit checkbox and sends only selected assumptions',()=>{
+ const app=frontend();app.context.sent=null;vm.runInContext('launch=input=>{sent=input}',app.context);
+ app.node('#chroma-confirm-mode').checked=true;
+ app.node('#reference-chroma').value='left';
+ app.node('#compare').click();assert.equal(app.context.sent,null);
+ app.node('#chroma-confirm').checked=true;
+ app.node('#compare').click();
+ assert.equal(app.context.sent.chromaConfirmed,true);
+ assert.equal(app.context.sent.chromaAssumptions.reference,'left');
+ assert.equal(app.context.sent.chromaAssumptions.candidate,undefined);
+});
 test('legacy trial summary remains available without invented per-frame measurements',()=>{
  const r=structuredClone(fixtures[3]);r.schema='MediaScope/0.1';delete r.rows[0].metrics.psnr.values;delete r.rows[0].metrics.ssim.values;
  assert.deepEqual(parseReport(JSON.stringify(r)),r);

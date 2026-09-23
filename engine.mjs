@@ -52,7 +52,7 @@ export async function scan(file,index,ctx={}){
     if(ctx.comparisonStream)for(const k of ['width','height','pix_fmt','color_range','color_space','color_transfer','color_primaries','chroma_location']){
       const expected=ctx.comparisonStream[k];
       const normalize=v=>v==null||['unknown','unspecified','N/A'].includes(v)?'unknown':String(v);
-      if(o[k]!==undefined&&normalize(expected)!==normalize(o[k]))throw Error(`第 ${frames.length+1} 帧 ${k} 与轨道声明不一致；禁止中途改变格式或色彩解释。`);
+      if(o[k]!==undefined&&!(k==='chroma_location'&&ctx.assumedChromaLocation&&normalize(o[k])==='unknown')&&normalize(expected)!==normalize(o[k]))throw Error(`第 ${frames.length+1} 帧 ${k} 与轨道声明不一致；禁止中途改变格式或色彩解释。`);
     }
     if(frames.length>=500000)throw Error('首版单轨支持最多 500,000 帧；本次未完成，不生成完整分析结论');
     const num=k=>o[k]!==undefined&&o[k]!=='N/A'?Number(o[k]):null;
@@ -78,18 +78,100 @@ export function summarize(frames){
   frames.forEach((f,i)=>{types[f.type]=(types[f.type]||0)+1;if(f.t===null)missingTimes++;if(i&&f.t!==null&&frames[i-1].t!==null&&f.t<=frames[i-1].t)nonIncreasing++;if(f.key){if(lastKey!==null)gops.push(i-lastKey);lastKey=i;}});
   return {count:frames.length,types,missingTimes,nonIncreasing,keyIntervals:gops,first:frames[0].t,last:frames.at(-1).t};
 }
-export function alignment(a,b,fa,fb,mode='native'){
+export function validateComparableStreams(a,b,mode='native'){
   const plan=bitDepthPlan(a,b,mode);
   for(const k of ['width','height','pix_fmt','color_range','color_space','color_transfer','color_primaries','chroma_location'])if(!(k==='pix_fmt'&&plan.crossDepth)&&a[k]!==b[k])throw Error(`无法直接比较：${k} 不一致（${a[k]??'未知'} / ${b[k]??'未知'}）。不自动转换。`);
+  return plan;
+}
+const chromaLocations=new Set(['left','center','topleft','top','bottomleft','bottom']);
+export function resolveChromaAssumptions(reference,candidate,requested){
+  if(requested===undefined)return {reference,candidate,assumptions:[]};
+  if(!requested||typeof requested!=='object'||Array.isArray(requested)||Object.keys(requested).some(k=>!['reference','candidate'].includes(k)))throw Error('色度位置确认参数无效');
+  const assumptions=[];
+  const resolve=(stream,side)=>{
+    const value=requested[side];
+    if(value===undefined)return stream;
+    if(!chromaLocations.has(value))throw Error(`${side==='reference'?'参考':'候选'}视频的确认色度位置无效`);
+    if(stream.chroma_location!=null&&!['unknown','unspecified','N/A'].includes(stream.chroma_location))throw Error(`${side==='reference'?'参考':'候选'}视频已声明色度位置，不能用用户确认覆盖`);
+    assumptions.push({side,declared:stream.chroma_location??null,assumed:value,source:'用户确认；未由文件或软件验证'});
+    return {...stream,chroma_location:value};
+  };
+  const resolvedReference=resolve(reference,'reference'),resolvedCandidate=resolve(candidate,'candidate');
+  if(!assumptions.length)throw Error('请选择至少一路未声明的色度位置');
+  return {reference:resolvedReference,candidate:resolvedCandidate,assumptions};
+}
+export function alignment(a,b,fa,fb,mode='native',timingMode='strict'){
+  validateComparableStreams(a,b,mode);
+  if(!['strict','ordinal-confirmed'].includes(timingMode))throw Error('时间对齐模式无效');
   if(fa.length!==fb.length)throw Error(`帧数不同：${fa.length} / ${fb.length}，请提供已对齐的文件`);
-  if(fa.some(f=>f.t===null)||fb.some(f=>f.t===null))throw Error('缺少时间戳，无法验证对齐');
+  if(fa.some(f=>!Number.isFinite(f.t))||fb.some(f=>!Number.isFinite(f.t)))throw Error('缺少有效时间戳，无法验证各路帧序');
+  let maxRelativeDifferenceSeconds=0,firstTimestampMismatchFrame=null;
   for(let i=0;i<fa.length;i++){
     if(i&&(fa[i].t<=fa[i-1].t||fb[i].t<=fb[i-1].t))throw Error('存在非递增时间戳');
-    if(Math.abs((fa[i].t-fa[0].t)-(fb[i].t-fb[0].t))>0.0001)throw Error(`第 ${i+1} 帧相对时间戳不同；禁止自动补帧或丢帧比较`);
+    const difference=Math.abs((fa[i].t-fa[0].t)-(fb[i].t-fb[0].t));
+    maxRelativeDifferenceSeconds=Math.max(maxRelativeDifferenceSeconds,difference);
+    if(difference>0.0001){
+      firstTimestampMismatchFrame??=i+1;
+      if(timingMode==='strict')throw Error(`第 ${i+1} 帧相对时间戳不同；禁止自动补帧或丢帧比较`);
+    }
   }
   const da=fa.at(-1).duration,db=fb.at(-1).duration;
-  if(da!=null&&db!=null&&Math.abs(da-db)>0.0001)throw Error('末帧持续时间不一致');
-  return {frames:fa.length,startOffset:fb[0].t-fa[0].t,toleranceSeconds:0.0001,note:'已校验相对时间戳和帧数；不代表画面内容相同。必须由用户确认相同剪辑、裁切与画面顺序。'};
+  const lastDurationDifferenceSeconds=Number.isFinite(da)&&Number.isFinite(db)?Math.abs(da-db):null;
+  if(timingMode==='strict'&&lastDurationDifferenceSeconds!=null&&lastDurationDifferenceSeconds>0.0001)throw Error('末帧持续时间不一致');
+  return {frames:fa.length,startOffset:fb[0].t-fa[0].t,toleranceSeconds:0.0001,pairing:timingMode,maxRelativeDifferenceSeconds,firstTimestampMismatchFrame,lastDurationDifferenceSeconds,note:timingMode==='strict'?'已校验相对时间戳和帧数；不代表画面内容相同。必须由用户确认相同剪辑、裁切与画面顺序。':'按解码显示帧序号逐一配对；已核验帧数和各路时间戳递增，未要求两路时间轴一致。用户确认无丢帧、重复帧或重排；软件不能仅凭帧数证明内容逐帧对应。'};
+}
+function rationalValue(value){
+  const match=/^(\d+)\/(\d+)$/.exec(value??'');
+  if(!match||Number(match[2])===0)return null;
+  const rate=Number(match[1])/Number(match[2]);
+  return Number.isFinite(rate)&&rate>0?{text:value,value:rate}:null;
+}
+function rateValue(value){
+  const rate=rationalValue(value);
+  if(!rate)return null;
+  return rate.value>=1&&rate.value<=120?rate:null;
+}
+export function playbackAlignment(reference,candidate,refFrames,candidateFrames){
+  if(refFrames.length<2||candidateFrames.length<2)throw Error('播放采样模式要求两路至少各有 2 帧');
+  for(const [label,frames] of [['参考',refFrames],['候选',candidateFrames]])for(let i=0;i<frames.length;i++){
+    if(!Number.isFinite(frames[i].t))throw Error(`${label}视频第 ${i+1} 帧缺少有效时间戳`);
+    if(i&&frames[i].t<=frames[i-1].t)throw Error(`${label}视频存在非递增时间戳`);
+  }
+  const gridFor=(stream,frames)=>{
+    const timebase=rationalValue(stream.time_base);
+    if(!timebase)return null;
+    const ranked=[stream.avg_frame_rate,stream.r_frame_rate].map(rateValue).filter(Boolean).map(rate=>{
+      const period=1/rate.value;
+      let maximum=0;
+      for(let i=0;i<frames.length;i++)maximum=Math.max(maximum,Math.abs(frames[i].t-frames[0].t-i*period));
+      return {rate,period,maximum,tolerance:Math.max(0.000002,Math.min(period*0.1,timebase.value*1.5))};
+    }).sort((a,b)=>a.maximum-b.maximum);
+    return ranked.find(x=>x.maximum<=x.tolerance)??null;
+  };
+  // Retain the candidate grid when both files qualify, matching earlier reports.
+  const candidateGrid=gridFor(candidate,candidateFrames),referenceGrid=gridFor(reference,refFrames);
+  const gridSide=candidateGrid?'candidate':referenceGrid?'reference':null;
+  if(!gridSide)throw Error('两路视频均未核验为稳定 CFR，无法建立固定播放采样网格');
+  const chosen=candidateGrid??referenceGrid;
+  const sampledSide=gridSide==='candidate'?'reference':'candidate';
+  const gridFrames=gridSide==='candidate'?candidateFrames:refFrames;
+  const sampledFrames=gridSide==='candidate'?refFrames:candidateFrames;
+  const sampledStream=gridSide==='candidate'?reference:candidate;
+  const last=sampledFrames.at(-1),lastDuration=Number.isFinite(last.duration)&&last.duration>0?last.duration:null;
+  const streamDuration=Number(sampledStream.duration);
+  const coveredUntil=last.t-sampledFrames[0].t+(lastDuration??(Number.isFinite(streamDuration)&&streamDuration>0?Math.max(0,streamDuration-(last.t-sampledFrames[0].t)):0));
+  const finalSample=(gridFrames.length-1)*chosen.period;
+  if(finalSample>coveredUntil+chosen.tolerance)throw Error(`${sampledSide==='reference'?'参考':'候选'}视频的可核实播放时段不足以覆盖 CFR 末个采样时刻`);
+  let sourceIndex=0,previousIndex=-1,repeatedSamples=0;
+  const used=new Set(),estimatedSampledFrameIndices=[];
+  for(let i=0;i<gridFrames.length;i++){
+    const at=i*chosen.period;
+    while(sourceIndex+1<sampledFrames.length&&sampledFrames[sourceIndex+1].t-sampledFrames[0].t<=at+0.0000005)sourceIndex++;
+    if(sourceIndex===previousIndex)repeatedSamples++;
+    estimatedSampledFrameIndices.push(sourceIndex);
+    used.add(sourceIndex);previousIndex=sourceIndex;
+  }
+  return {frames:gridFrames.length,pairing:'playback-sample',gridSide,gridRate:chosen.rate.text,gridRateHz:chosen.rate.value,sampledSide,sampledFrames:sampledFrames.length,maxGridErrorSeconds:chosen.maximum,cfrToleranceSeconds:chosen.tolerance,sampledEndSeconds:coveredUntil,estimatedSampledFrameIndices,estimatedRepeatedSamples:repeatedSamples,estimatedUnrepresentedSampledFrames:sampledFrames.length-used.size,sampling:`各路首帧设为 0；以${gridSide==='candidate'?'候选':'参考'} CFR 网格采样${sampledSide==='reference'?'参考':'候选'}，FFmpeg fps round=up，保持上一已出现画面，不插帧；超出 CFR 帧数的输出截断。帧索引映射、重复与未采样计数由时间戳估计。`,note:'自定义播放时间轴画面差异；不是 ITU 标准化观看质量评分，也不证明真实播放器的呈现行为。'};
 }
 export function comparisonProfile(s){
   const match=/^yuv(420|422|444)p(?:(10|12)le)?$/.exec(s.pix_fmt??'');
@@ -163,23 +245,28 @@ async function referenceEntry(file,ctx){
   return entry;
 }
 export async function compare(ref,candidate,ri,ci,metrics,ctx,mode='native'){
+  if(!['strict','ordinal-confirmed','playback-sample'].includes(ctx.timingMode??'strict'))throw Error('时间对齐模式无效');
   if(ctx.progressPlan==='compare')ctx.update({stage:'读取并校验两个文件',detail:'读取参考文件与候选文件元数据',phaseIndex:1,phaseCount:6,completed:0,total:2,unit:'个文件'});
-  const entry=await referenceEntry(ref,ctx),r=entry.info,c=await probe(candidate,ctx),rs=video(r,ri),cs=video(c,ci);
+  const entry=await referenceEntry(ref,ctx),r=entry.info,c=await probe(candidate,ctx);
+  const {reference:rs,candidate:cs,assumptions:chromaAssumptions}=resolveChromaAssumptions(video(r,ri),video(c,ci),ctx.chromaAssumptions);
   if(ctx.progressPlan==='compare')ctx.update({stage:'读取并校验两个文件',detail:'两个文件元数据已读取',phaseIndex:1,phaseCount:6,completed:2,total:2,unit:'个文件'});
   if(ctx.expectedCandidatePixelFormat&&cs.pix_fmt!==ctx.expectedCandidatePixelFormat)throw Error('编码输出位深与实验请求不一致，拒绝采纳结果');
   if(!Array.isArray(metrics)||!metrics.length||metrics.some(m=>!['psnr','ssim','vmaf'].includes(m)))throw Error('指标选择无效');
-  const profile=comparisonProfile(rs),candidateProfile=comparisonProfile(cs),skippedMetrics={},normalization=bitDepthPlan(rs,cs,mode);
+  const normalization=validateComparableStreams(rs,cs,mode);
+  const profile=comparisonProfile(rs),candidateProfile=comparisonProfile(cs),skippedMetrics={};
   const vmafReason=normalization.crossDepth?'跨位深模式尚未验证 VMAF 的感知适用性；仅提供 PSNR / SSIM。':profile.vmafReason??candidateProfile.vmafReason;
   if(metrics.includes('vmaf')&&vmafReason){
     if(metrics.every(m=>m==='vmaf'))throw Error(vmafReason);
     skippedMetrics.vmaf=vmafReason;
   }
   ctx.update(ctx.progressPlan==='compare'?{stage:'核验参考文件帧序',detail:'逐帧读取参考文件',phaseIndex:2,phaseCount:6,completed:0,total:null,unit:'帧'}:'检查参考文件逐帧时间戳与格式');
-  const scanKey=JSON.stringify([Number(ri),normalization.crossDepth]);
+  const scanKey=JSON.stringify([Number(ri),normalization.crossDepth,rs.chroma_location]);
   let rf=entry.scans.get(scanKey);
-  if(!rf){rf=await scan(ref,ri,{...ctx,comparisonStream:rs,requireProgressive:normalization.crossDepth});entry.scans.set(scanKey,rf)}
-  ctx.update(ctx.progressPlan==='compare'?{stage:'核验候选文件帧序',detail:'逐帧读取候选文件',phaseIndex:3,phaseCount:6,completed:0,total:rf.length,unit:'帧'}:'检查候选文件逐帧时间戳与格式');const cf=await scan(candidate,ci,{...ctx,comparisonStream:cs,requireProgressive:normalization.crossDepth,expectedFrames:rf.length});
-  const aligned=alignment(rs,cs,rf,cf,mode),results={};
+  if(!rf){rf=await scan(ref,ri,{...ctx,comparisonStream:rs,assumedChromaLocation:chromaAssumptions.some(x=>x.side==='reference'),requireProgressive:normalization.crossDepth});entry.scans.set(scanKey,rf)}
+  const playback=ctx.timingMode==='playback-sample';
+  ctx.update(ctx.progressPlan==='compare'?{stage:'核验候选文件帧序',detail:'逐帧读取候选文件',phaseIndex:3,phaseCount:6,completed:0,total:playback?null:rf.length,unit:'帧'}:'检查候选文件逐帧时间戳与格式');const cf=await scan(candidate,ci,{...ctx,comparisonStream:cs,assumedChromaLocation:chromaAssumptions.some(x=>x.side==='candidate'),requireProgressive:normalization.crossDepth,expectedFrames:playback?null:rf.length});
+  const aligned=playback?playbackAlignment(rs,cs,rf,cf):alignment(rs,cs,rf,cf,mode,ctx.timingMode??'strict'),results={};
+  const measuredFrames=aligned.frames,measurementTimes=playback&&aligned.gridSide==='candidate'?cf:rf;
   if(ctx.progressPlan==='compare')ctx.update({stage:'验证比较域',detail:normalization.crossDepth?'验证本机精确位深映射':'原生格式无需数值映射',phaseIndex:4,phaseCount:6,completed:normalization.crossDepth?0:1,total:1,unit:'项校验'});
   if(normalization.crossDepth){
     if(ctx.progressPlan!=='compare')ctx.update('验证本机 8→10-bit 全码值映射');normalization.verification=await verifyBitDepthMapping(normalization,ctx);
@@ -194,28 +281,31 @@ export async function compare(ref,candidate,ri,ci,metrics,ctx,mode='native'){
   const groups=ctx.separateMetrics?activeMetrics.map(m=>[m]):[activeMetrics];
   for(const [groupIndex,group] of groups.entries()){
     const label=`计算 ${group.map(m=>m.toUpperCase()).join(' / ')}`;
-    ctx.update(ctx.progressPlan==='compare'?{stage:'计算逐帧质量指标',detail:label,phaseIndex:5,phaseCount:6,completed:groupIndex*rf.length,total:groups.length*rf.length,unit:'帧次'}:label);
-    const inputs=`[0:${ci}]${normalization.candidateFilter}settb=AVTB,setpts=N*1000000[d];[1:${ri}]${normalization.referenceFilter}settb=AVTB,setpts=N*1000000[r]`;
+    ctx.update(ctx.progressPlan==='compare'?{stage:'计算逐帧质量指标',detail:label,phaseIndex:5,phaseCount:6,completed:groupIndex*measuredFrames,total:groups.length*measuredFrames,unit:'帧次'}:label);
+    const sampleFilter=`setpts=PTS-STARTPTS,fps=fps=${aligned.gridRate}:start_time=0:round=up:eof_action=pass,trim=end_frame=${measuredFrames},`;
+    const candidateInput=`[0:${ci}]${playback&&aligned.sampledSide==='candidate'?sampleFilter:''}${normalization.candidateFilter}settb=AVTB,setpts=N*1000000[d]`;
+    const referenceInput=`[1:${ri}]${playback&&aligned.sampledSide==='reference'?sampleFilter:''}${normalization.referenceFilter}settb=AVTB,setpts=N*1000000[r]`;
+    const inputs=`${candidateInput};${referenceInput}`;
     const graph=group.length===1?`${inputs};[d][r]${filterFor(group[0])}[out0]`:
       `${inputs};[d]split=${group.length}${group.map((_,i)=>`[d${i}]`).join('')};[r]split=${group.length}${group.map((_,i)=>`[r${i}]`).join('')};${group.map((m,i)=>`[d${i}][r${i}]${filterFor(m)}[out${i}]`).join(';')}`;
     const outputs=group.flatMap((_,i)=>['-map',`[out${i}]`,'-fps_mode','passthrough','-an','-sn','-f','null','-']);
     await run(FF,['-hide_banner','-nostdin','-v','error','-xerror','-noauto_conversion_filters','-noautorotate','-i',candidate,'-noautorotate','-i',ref,'-filter_complex',graph,...outputs,'-progress','pipe:1','-stats_period','0.25'],ctx,line=>{
       const value=Number(line.match(/^frame=(\d+)/)?.[1]);
-      if(Number.isFinite(value))ctx.update?.({...(ctx.progressPlan==='compare'?{stage:'计算逐帧质量指标',phaseIndex:5,phaseCount:6}:{}),detail:label,completed:groupIndex*rf.length+Math.min(value,rf.length),total:groups.length*rf.length,unit:'帧次'});
+      if(Number.isFinite(value))ctx.update?.({...(ctx.progressPlan==='compare'?{stage:'计算逐帧质量指标',phaseIndex:5,phaseCount:6}:{}),detail:label,completed:groupIndex*measuredFrames+Math.min(value,measuredFrames),total:groups.length*measuredFrames,unit:'帧次'});
     });
   }
-  ctx.update?.({...(ctx.progressPlan==='compare'?{stage:'计算逐帧质量指标',phaseIndex:5,phaseCount:6}:{}),detail:'质量指标计算完成，正在校验日志',completed:groups.length*rf.length,total:groups.length*rf.length,unit:'帧次'});
+  ctx.update?.({...(ctx.progressPlan==='compare'?{stage:'计算逐帧质量指标',phaseIndex:5,phaseCount:6}:{}),detail:'质量指标计算完成，正在校验日志',completed:groups.length*measuredFrames,total:groups.length*measuredFrames,unit:'帧次'});
   for(const metric of activeMetrics){
     const log=`${metric}.log`;
     const raw=await readFile(path.join(ctx.cwd,log),'utf8');
     const lines=metric==='vmaf'?null:raw.trim().split(/\r?\n/);
     const values=metric==='vmaf'?JSON.parse(raw).frames.map(f=>f.metrics.vmaf):lines.map(l=>{const v=l.match(metric==='psnr'?/psnr_avg:([^\s]+)/:/All:([^\s]+)/)?.[1];return v==='inf'?Infinity:Number(v)});
-    if(values.length!==rf.length||values.some(v=>!Number.isFinite(v)&&!(metric==='psnr'&&v===Infinity)))throw Error(`${metric} 输出帧数或数据异常，结果不予采纳`);
+    if(values.length!==measuredFrames||values.some(v=>!Number.isFinite(v)&&!(metric==='psnr'&&v===Infinity)))throw Error(`${metric} 输出帧数或数据异常，结果不予采纳`);
     const sorted=[...values].sort((a,b)=>a-b),p05=sorted[Math.floor((values.length-1)*.05)];
     // PSNR is pooled in the MSE domain, never averaged directly in dB.
     const pooled=metric==='psnr'?-10*Math.log10(values.reduce((s,v)=>s+10**(-v/10),0)/values.length):values.reduce((s,v)=>s+v,0)/values.length;
     const safe=v=>Number.isFinite(v)?v:'Infinity';
-    const windows=new Map();values.forEach((v,i)=>{const t=Math.floor(rf[i].t-rf[0].t),w=windows.get(t)||{start:t,first:i,last:i,count:0,sum:0,min:Infinity};w.last=i;w.count++;w.sum+=metric==='psnr'?10**(-v/10):v;w.min=Math.min(w.min,v);windows.set(t,w)});
+    const windows=new Map();values.forEach((v,i)=>{const t=Math.floor(measurementTimes[i].t-measurementTimes[0].t),w=windows.get(t)||{start:t,first:i,last:i,count:0,sum:0,min:Infinity};w.last=i;w.count++;w.sum+=metric==='psnr'?10**(-v/10):v;w.min=Math.min(w.min,v);windows.set(t,w)});
     const worst=[...windows.values()].map(w=>({start:w.start,first:w.first,last:w.last,count:w.count,min:safe(w.min),value:metric==='psnr'?-10*Math.log10(w.sum/w.count):w.sum/w.count})).sort((a,b)=>a.value-b.value).slice(0,5).map(w=>({...w,value:safe(w.value)}));
     results[metric]={pooled:safe(pooled),p05:safe(p05),min:safe(sorted[0]),values:values.map(safe),worst,raw,model:metric==='vmaf'?'vmaf_v0.6.1':undefined};
     if(metric!=='vmaf'){
@@ -224,10 +314,10 @@ export async function compare(ref,candidate,ri,ci,metrics,ctx,mode='native'){
         const key=metric==='psnr'?`psnr_${component}`:component.toUpperCase();
         const pattern=new RegExp(`(?:^|\\s)${key}:([^\\s]+)`);
         const channel=lines.map(l=>Number(l.match(pattern)?.[1]?.replace(/^inf$/,'Infinity')));
-        if(channel.length!==rf.length||channel.some(v=>!Number.isFinite(v)&&!(metric==='psnr'&&v===Infinity)))throw Error(`${metric} ${component} 分量日志异常`);
+        if(channel.length!==measuredFrames||channel.some(v=>!Number.isFinite(v)&&!(metric==='psnr'&&v===Infinity)))throw Error(`${metric} ${component} 分量日志异常`);
         results[metric].components[component]=safe(metric==='psnr'?-10*Math.log10(channel.reduce((s,v)=>s+10**(-v/10),0)/channel.length):channel.reduce((s,v)=>s+v,0)/channel.length);
       }
     }
   }
-  return {reference:r,candidate:c,alignment:aligned,profile,normalization,skippedMetrics,metrics:results,sizeRatio:c.size/r.size,warnings:[...(normalization.crossDepth?[normalization.interpretation]:[]),'指标为逐帧等权统计，非时长加权。','未知色彩标签不证明色彩解释正确。','PSNR / SSIM 评价解码后的编码值，不等同于 HDR 感知质量；不评价 Dolby Vision / HDR10+ 动态元数据的显示效果。','不同位深、采样或色彩空间的分数不能直接横向比较。','VMAF v0.6.1 不衡量色度损失，不能代替 YUV PSNR / SSIM。','参考文件若本身有损，结果仅表示相对该参考的差异。']};
+  return {reference:r,candidate:c,alignment:aligned,profile,normalization,chromaAssumptions,skippedMetrics,metrics:results,sizeRatio:c.size/r.size,warnings:[...chromaAssumptions.map(x=>`${x.side==='reference'?'参考':'候选'}视频未明确报告色度位置；按用户确认的 ${x.assumed} 计算。该位置未经文件或软件验证，结果依赖此假设。`),...(playback?['播放采样模式使用各路首帧为同一时刻的假设；PSNR / SSIM / VMAF 只评价已核验 CFR 网格上的画面，不覆盖网格之间短暂出现的画面。','重复与未采样帧数量根据时间戳和采样规则估计，不代表已核实编码器的真实取帧映射；VMAF 不是帧率转换的标准化观看质量评分。']:[]),...(normalization.crossDepth?[normalization.interpretation]:[]),'指标为逐帧等权统计，非时长加权。','未知色彩标签不证明色彩解释正确。','PSNR / SSIM 评价解码后的编码值，不等同于 HDR 感知质量；不评价 Dolby Vision / HDR10+ 动态元数据的显示效果。','不同位深、采样或色彩空间的分数不能直接横向比较。','VMAF v0.6.1 不衡量色度损失，不能代替 YUV PSNR / SSIM。','参考文件若本身有损，结果仅表示相对该参考的差异。']};
 }

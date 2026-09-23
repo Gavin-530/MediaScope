@@ -39,7 +39,26 @@ $('#file').oninput=()=>{infoPath=null;$('#analyze').disabled=true};
 const syncSitiWorkers=()=>{$('#siti-workers').disabled=!$('#complexity').checked};$('#complexity').onchange=syncSitiWorkers;syncSitiWorkers();
 $('#inspect').onclick=()=>launch({type:'inspect',file:clean($('#file').value)});
 $('#analyze').onclick=()=>launch({type:'analyze',file:infoPath,stream:Number($('#stream').value),complexity:$('#complexity').checked,sitiWorkers:$('#siti-workers').value});
-$('#compare').onclick=()=>launch({type:'compare',reference:clean($('#reference').value),candidate:clean($('#candidate').value),refStream:Number($('#refStream').value),candidateStream:Number($('#candidateStream').value),comparisonMode:$('#comparison-mode').value,metrics:[...document.querySelectorAll('[name=metric]:checked')].map(x=>x.value),confirm:$('#confirm').checked});
+$('#compare').onclick=()=>{
+ const input={type:'compare',reference:clean($('#reference').value),candidate:clean($('#candidate').value),refStream:Number($('#refStream').value),candidateStream:Number($('#candidateStream').value),comparisonMode:$('#comparison-mode').value,timingMode:$('#timing-mode').value,metrics:[...document.querySelectorAll('[name=metric]:checked')].map(x=>x.value),confirm:$('#confirm').checked};
+ if(input.timingMode==='ordinal-confirmed'){
+  if(!$('#timing-confirm').checked){message('请确认两路视频的每个显示帧按顺序一一对应，且没有丢帧、重复帧或重排。',true);return}
+  input.timingConfirmed=true;
+ }
+ if(input.timingMode==='playback-sample'){
+  if(!$('#playback-confirm').checked){message('请确认两路首帧对应同一播放时刻，并接受 CFR 一侧作为采样网格的实验性解释。',true);return}
+  input.playbackConfirmed=true;
+ }
+ if($('#chroma-confirm-mode').checked){
+  if(!$('#chroma-confirm').checked){message('请先确认色度位置来自可信来源，并了解结果依赖此假设。',true);return}
+  input.chromaConfirmed=true;
+  input.chromaAssumptions={};
+  for(const [side,id] of [['reference','#reference-chroma'],['candidate','#candidate-chroma']])if($(id).value)input.chromaAssumptions[side]=$(id).value;
+ }
+ launch(input);
+};
+$('#chroma-confirm-mode').onchange=()=>$('#chroma-assumption-controls').classList.toggle('hidden',!$('#chroma-confirm-mode').checked);
+$('#timing-mode').onchange=()=>{$('#timing-confirm-row').classList.toggle('hidden',$('#timing-mode').value!=='ordinal-confirmed');$('#playback-confirm-row').classList.toggle('hidden',$('#timing-mode').value!=='playback-sample')};
 function trialInput(){return {type:'trial',file:clean($('#trial-file').value),stream:Number($('#trial-stream').value),start:Number($('#trial-start').value),duration:Number($('#trial-duration').value),encoder:$('#trial-encoder').value,depthMode:$('#trial-depth').value,presets:[...document.querySelectorAll('[name=trial-preset]:checked')].map(x=>x.value),cpuUsed:Number($('#trial-cpu').value),crfs:parseCrfs($('#trial-crfs').value),metrics:$('#trial-vmaf').checked?['psnr','ssim','vmaf']:['psnr','ssim'],keepFiles:$('#trial-keep').checked};}
 function trialControls(){
  const av1=$('#trial-encoder').value==='libaom-av1',both=$('#trial-depth').value==='both';
@@ -123,15 +142,22 @@ function initFrames(r){
   }
 }
 function renderComparison(r){
-  cards([['参考文件',size(r.reference.size)],['候选文件',size(r.candidate.size)],['总文件体积比',`${fmt(r.sizeRatio*100)}%`],['匹配显示帧',r.alignment.frames]]);
+  cards([['参考文件',size(r.reference.size)],['候选文件',size(r.candidate.size)],['总文件体积比',`${fmt(r.sizeRatio*100)}%`],[r.alignment.pairing==='playback-sample'?'采样时刻':'匹配显示帧',r.alignment.frames]]);
   let html=`<p class="path">参考：${esc(r.reference.file)}<br>候选：${esc(r.candidate.file)}</p>`+notices([r.alignment.note]);
+  if(r.alignment.pairing==='ordinal-confirmed')html+=section('帧序配对与时间轴差异',table(['配对方式','首次超过 0.1 ms 的帧','最大相对时间差','末帧持续时间差'],[['解码显示帧序号',r.alignment.firstTimestampMismatchFrame??'未超过',`${fmt(r.alignment.maxRelativeDifferenceSeconds*1000,3)} ms`,r.alignment.lastDurationDifferenceSeconds==null?'未报告':`${fmt(r.alignment.lastDurationDifferenceSeconds*1000,3)} ms`]])+notices(['时间轴差异已记录；指标按对应帧计算，不代表两路播放时间完全一致。']));
+  if(r.alignment.pairing==='playback-sample'){
+    const a=r.alignment,modern=!!a.gridSide;
+    html+=section('VFR ↔ CFR 播放采样 · 实验性',table(['CFR 网格所在视频 / 帧率','采样视频帧 / 网格帧','CFR 最大偏差 / 容差','采样重复 / 未采样帧（估计）'],[[`${modern?(a.gridSide==='reference'?'参考':'候选'):'候选'} / ${modern?a.gridRate:a.candidateRate} (${fmt(modern?a.gridRateHz:a.candidateRateHz,3)} fps)`,`${fmt(modern?a.sampledFrames:a.sourceFrames)} / ${fmt(a.frames)}`,`${fmt((modern?a.maxGridErrorSeconds:a.maxCandidateGridErrorSeconds)*1000,4)} / ${fmt(a.cfrToleranceSeconds*1000,4)} ms`,`${fmt(a.estimatedRepeatedSamples)} / ${fmt(modern?a.estimatedUnrepresentedSampledFrames:a.estimatedUnrepresentedSourceFrames)}`]])+notices([a.sampling,a.note,'两路首帧对应同一播放时刻由用户确认。指标只覆盖 CFR 网格的采样时刻；完整的估计帧索引映射保存在导出的 JSON 中。']));
+  }
+  if(r.chromaAssumptions?.length)html+=section('用户确认的色度位置',table(['视频','文件报告值','本次采用值','证据性质'],r.chromaAssumptions.map(x=>[x.side==='reference'?'参考':'候选',x.declared??'未报告',x.assumed,x.source]))+notices(['该位置由用户指定，软件未验证其真实性；指标依赖此假设。']));
   if(r.profile)html+=section('比较域与格式',table(['像素格式','位深 / 采样','信号','原色 / 传递 / 矩阵 / 范围'],[[r.profile.pixelFormat,`${r.profile.bitDepth}-bit / ${r.profile.subsampling}`,r.profile.signal,`${r.profile.primaries} / ${r.profile.transfer} / ${r.profile.matrix} / ${r.profile.range}`]])+notices([r.profile.domain]));
   if(r.normalization?.crossDepth)html+=section('跨位深码值映射',table(['参考原格式','候选原格式','比较格式','映射 / PSNR 峰值'],[[r.normalization.sourceFormats.reference,r.normalization.sourceFormats.candidate,r.normalization.targetFormat,`${r.normalization.mapping} / ${r.normalization.psnrPeak}`]])+notices([r.normalization.basis,r.normalization.verification?.passed?'本机全码值映射校验通过（Y / Cb / Cr，0–255）':'未报告映射验证'])+raw(r.normalization));
   if(r.skippedMetrics)html+=notices(Object.entries(r.skippedMetrics).map(([k,v])=>`${k.toUpperCase()} 未计算：${v}`));
   for(const [key,m]of Object.entries(r.metrics))if(m.components)html+=section(`${key.toUpperCase()} 分量`,table(['Y 亮度','U 色度','V 色度'],[[fmt(m.components.y,5),fmt(m.components.u,5),fmt(m.components.v,5)]]));
   if(r.videoSize)html+=section('仅视频数据量',table(['参考视频包','候选视频包','候选 / 参考'],[[size(r.videoSize.reference),size(r.videoSize.candidate),`${fmt(r.videoSize.candidate/r.videoSize.reference*100)}%`]])+'<p class="hint">此比例排除了音轨与容器体积，便于评价视频编码的实际节省。</p>');
   for(const [key,m]of Object.entries(r.metrics))html+=section(key.toUpperCase(),table(['整体值','P05','最低帧','统计方式'],[[fmt(m.pooled,5),fmt(m.p05,5),fmt(m.min,5),key==='psnr'?'MSE 域汇总 / dB':key==='vmaf'?m.model:'逐帧均值']])+`<div id="metric-${key}"></div>`+(m.worst?'<h4>最低质量的 1 秒区间（相对参考起点）</h4>'+table(['起点 / 秒','帧范围','区间整体值','最低帧值'],m.worst.map(w=>[w.start,`${w.first}–${w.last}`,fmt(w.value,5),fmt(w.min,5)])):'')+'<p class="hint">最低区间用于定位复查，不自动判定画面不可接受。末尾区间可能不足 1 秒。</p>');
-  html+=notices(r.warnings)+section('复现记录',raw({tools:r.tools,commands:r.commands,alignment:r.alignment}));$('#details').innerHTML=html;for(const [k,m]of Object.entries(r.metrics))draw('metric-'+k,m.values.map((v,i)=>[i,v==='Infinity'?null:v]),{unit:metricLabels[k],axis:'显示帧序号（从 0 开始）'});
+  const alignmentEvidence={...r.alignment};delete alignmentEvidence.estimatedSourceFrameIndices;delete alignmentEvidence.estimatedSampledFrameIndices;
+  html+=notices(r.warnings)+section('复现记录',raw({tools:r.tools,commands:r.commands,alignment:alignmentEvidence}));$('#details').innerHTML=html;for(const [k,m]of Object.entries(r.metrics))draw('metric-'+k,m.values.map((v,i)=>[i,v==='Infinity'?null:v]),{unit:metricLabels[k],axis:'显示帧序号（从 0 开始）'});
 }
 function renderTrial(r){
   cards([['片段起点',`${r.experiment.start} s`],['请求片段长度',`${r.experiment.duration} s`],['实际显示帧',r.experiment.actualFrames],['编码器',r.experiment.encoder]]);

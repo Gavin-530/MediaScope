@@ -29,7 +29,20 @@ export function validateReport(r){
  }else if(r.type==='compare'){
   file(r.reference,'reference');file(r.candidate,'candidate');obj(r.alignment,'alignment');metrics(r.metrics,'metrics',true);
   index(r.alignment.frames,'alignment.frames');for(const m of Object.values(r.metrics))if(m.values.length!==r.alignment.frames)fail('metrics.values.length');
+  if(r.alignment.pairing==='playback-sample'){
+   const a=r.alignment;
+   if(a.gridSide!==undefined){
+    index(a.sampledFrames,'alignment.sampledFrames');index(a.estimatedRepeatedSamples,'alignment.estimatedRepeatedSamples');index(a.estimatedUnrepresentedSampledFrames,'alignment.estimatedUnrepresentedSampledFrames');
+    arr(a.estimatedSampledFrameIndices,'alignment.estimatedSampledFrameIndices');if(a.estimatedSampledFrameIndices.length!==a.frames||a.estimatedSampledFrameIndices.some(x=>!Number.isSafeInteger(x)||x<0||x>=a.sampledFrames))fail('alignment.estimatedSampledFrameIndices');
+    if(!['reference','candidate'].includes(a.gridSide)||a.sampledSide!==(a.gridSide==='reference'?'candidate':'reference')||a.sampledFrames<2||a.frames<2||a.estimatedRepeatedSamples>=a.frames||a.estimatedUnrepresentedSampledFrames>=a.sampledFrames||typeof a.gridRate!=='string'||!Number.isFinite(a.gridRateHz)||a.gridRateHz<=0||!Number.isFinite(a.maxGridErrorSeconds)||a.maxGridErrorSeconds<0||!Number.isFinite(a.cfrToleranceSeconds)||a.cfrToleranceSeconds<=0||!Number.isFinite(a.sampledEndSeconds)||a.sampledEndSeconds<0||typeof a.sampling!=='string')fail('alignment');
+   }else{
+    index(a.sourceFrames,'alignment.sourceFrames');index(a.estimatedRepeatedSamples,'alignment.estimatedRepeatedSamples');index(a.estimatedUnrepresentedSourceFrames,'alignment.estimatedUnrepresentedSourceFrames');
+    arr(a.estimatedSourceFrameIndices,'alignment.estimatedSourceFrameIndices');if(a.estimatedSourceFrameIndices.length!==a.frames||a.estimatedSourceFrameIndices.some(x=>!Number.isSafeInteger(x)||x<0||x>=a.sourceFrames))fail('alignment.estimatedSourceFrameIndices');
+    if(a.sourceFrames<2||a.frames<2||a.estimatedRepeatedSamples>=a.frames||a.estimatedUnrepresentedSourceFrames>=a.sourceFrames||typeof a.candidateRate!=='string'||!Number.isFinite(a.candidateRateHz)||a.candidateRateHz<=0||!Number.isFinite(a.maxCandidateGridErrorSeconds)||a.maxCandidateGridErrorSeconds<0||!Number.isFinite(a.cfrToleranceSeconds)||a.cfrToleranceSeconds<=0||!Number.isFinite(a.sourceEndSeconds)||a.sourceEndSeconds<0||typeof a.sampling!=='string')fail('alignment');
+   }
+  }else if(r.alignment.pairing!==undefined){if(!['strict','ordinal-confirmed'].includes(r.alignment.pairing)||!Number.isFinite(r.alignment.maxRelativeDifferenceSeconds)||r.alignment.maxRelativeDifferenceSeconds<0||!(r.alignment.firstTimestampMismatchFrame===null||Number.isSafeInteger(r.alignment.firstTimestampMismatchFrame)&&r.alignment.firstTimestampMismatchFrame>=2&&r.alignment.firstTimestampMismatchFrame<=r.alignment.frames)||!(r.alignment.lastDurationDifferenceSeconds===null||Number.isFinite(r.alignment.lastDurationDifferenceSeconds)&&r.alignment.lastDurationDifferenceSeconds>=0))fail('alignment')}
   if(r.normalization?.crossDepth)obj(r.normalization.sourceFormats,'normalization.sourceFormats');
+  if(r.chromaAssumptions!==undefined){objects(r.chromaAssumptions,'chromaAssumptions');for(const x of r.chromaAssumptions)if(!['reference','candidate'].includes(x.side)||!(x.declared===null||typeof x.declared==='string')||!['left','center','topleft','top','bottomleft','bottom'].includes(x.assumed)||x.source!=='用户确认；未由文件或软件验证')fail('chromaAssumptions')}
  }else{
   file(r.source,'source');obj(r.experiment,'experiment');arr(r.experiment.retainedFiles,'experiment.retainedFiles');objects(r.rows,'rows');if(!r.rows.length)fail('rows');r.rows.forEach(x=>metrics(x.metrics,'rows.metrics',false));
   if(r.experiment.actualFrames!==undefined){index(r.experiment.actualFrames,'experiment.actualFrames');for(const row of r.rows)for(const m of Object.values(row.metrics))if(m.values&&m.values.length!==r.experiment.actualFrames)fail('rows.metrics.values.length')}
