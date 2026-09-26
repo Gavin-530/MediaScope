@@ -11,7 +11,16 @@ import {allPackets,structure,traceStructure,mapStructure,metadataSummary,complex
 const root=path.dirname(fileURLToPath(import.meta.url)),token=randomBytes(24).toString('hex'),jobs=new Map();
 const port=Number(process.env.PORT||4317),origin=`http://127.0.0.1:${port}`;
 const execFileAsync=promisify(execFile);
-let active=null,pickerActive=false;
+let active=null,pickerActive=false,queueRunning=false;
+const inputs=new Map();
+function pump(){
+ if(active||!queueRunning)return;
+ const job=[...jobs.values()].find(j=>j.status==='queued');
+ if(!job){queueRunning=false;return}
+ active=job.id;job.status='running';job.startedAt=new Date().toISOString();job.message='准备分析';
+ const input=inputs.get(job.id);
+ execute(job,input).catch(e=>{job.status=job.controller.signal.aborted?'cancelled':'error';job.message=e.message;job.finishedAt=new Date().toISOString()}).finally(()=>{active=null;pump()});
+}
 const versions={};
 for(const [key,exe] of [['ffmpeg',FF],['ffprobe',FP]]){try{versions[key]=(await run(exe,['-version'])).split('\n')[0]}catch(e){versions[key]=`不可用：${e.message}`}}
 let filters='';try{filters=await run(FF,['-hide_banner','-filters'])}catch{}
@@ -38,6 +47,16 @@ async function selectMediaFile(){
   catch(e){throw Error(`文件选择器未能完成：${e.stderr?.trim()||e.message}`)}
   finally{pickerActive=false}
   return stdout?normalizeMediaPath(stdout):null;
+}
+function createJob(input){
+  const queuedAt=new Date().toISOString();
+  const description=input.type==='analyze'?`视频轨道 ${input.stream==null?'自动':`#${input.stream}`}${input.complexity?' · SI/TI':''}`
+    :input.type==='compare'?`轨道 #${input.refStream} → #${input.candidateStream} · ${(input.metrics||[]).join(' / ').toUpperCase()}`
+    :input.type==='trial'?`${input.start??0}–${Number(input.start??0)+Number(input.duration??0)} 秒 · ${input.encoder} · CRF ${(input.crfs||[]).join(', ')}`
+    :'容器与轨道信息';
+  const job={id:randomUUID(),type:input.type,status:'queued',message:'等待运行',queuedAt,file:input.file,reference:input.reference,candidate:input.candidate,description,controller:new AbortController()};
+  jobs.set(job.id,job);inputs.set(job.id,structuredClone(input));
+  pump();return job;
 }
 async function execute(job,input){
   const cwd=path.join(root,'.mediascope',job.id);await mkdir(cwd,{recursive:true});
@@ -79,7 +98,9 @@ async function execute(job,input){
       result=await stage('读取容器与轨道',c=>probe(input.file,c),{phaseIndex:1,phaseCount:1});result.metadata=metadataSummary(result);
     }else if(job.type==='analyze'){
       const phaseCount=input.complexity===true?4:3;
-      const info=await stage('读取文件',c=>probe(input.file,c),{phaseIndex:1,phaseCount}),stream=video(info,input.stream);
+      const info=await stage('读取文件',c=>probe(input.file,c),{phaseIndex:1,phaseCount});
+      if(input.stream==null)input.stream=info.raw.streams.find(s=>s.codec_type==='video')?.index;
+      const stream=video(info,input.stream);
       let frames,tracks,coding;
       frames=await stage('完整扫描视频帧',c=>scan(input.file,input.stream,c),{phaseIndex:2,phaseCount});
       if(process.env.MEDIASCOPE_SEQUENTIAL_ANALYSIS==='1'){
@@ -117,7 +138,7 @@ async function execute(job,input){
     job.reportPath=path.join(cwd,'report.json');delete job.result;
     job.status='done';job.message='完成';job.progress={...(job.progress||{}),stage:'完成',detail:'报告已保存',completed:1,total:1,unit:'份报告',updatedAt:new Date().toISOString()};
   }catch(e){job.status=job.controller.signal.aborted?'cancelled':'error';job.message=e.message;job.progress={...(job.progress||{}),stage:job.status==='cancelled'?'已取消':'任务未完成',detail:e.message,updatedAt:new Date().toISOString()};await writeFile(path.join(cwd,'failure.json'),JSON.stringify({status:job.status,error:e.message,commands:ctx.commands},null,2)).catch(()=>{});}
-  finally{active=null;job.finishedAt=new Date().toISOString();}
+  finally{job.finishedAt=new Date().toISOString();}
 }
 const server=http.createServer(async(req,res)=>{
   try{
@@ -125,20 +146,35 @@ const server=http.createServer(async(req,res)=>{
     const url=new URL(req.url,origin);
     if(url.pathname.startsWith('/api/')){
       if(req.headers['x-mediascope-token']!==token||(req.headers.origin&&req.headers.origin!==origin)){send(res,403,{error:'访问校验失败，请刷新本机页面'});return}
-      if(req.method==='GET'&&url.pathname==='/api/status'){send(res,200,{...capabilities,jobs:[...jobs.values()].map(({controller,result,...j})=>j)});return}
+      if(req.method==='GET'&&url.pathname==='/api/status'){send(res,200,{...capabilities,queueRunning,jobs:[...jobs.values()].map(({controller,result,...j})=>j)});return}
+      if(req.method==='POST'&&url.pathname==='/api/queue'){
+        const {action}=await body(req);if(!['start','pause'].includes(action))throw Error('无效队列操作');
+        queueRunning=action==='start';pump();send(res,200,{queueRunning});return;
+      }
       if(req.method==='POST'&&url.pathname==='/api/select-file'){send(res,200,{file:await selectMediaFile()});return}
+      if(req.method==='POST'&&url.pathname==='/api/probe'){
+        const input=await body(req),file=normalizeMediaPath(input.file);
+        const commands=[],result=await probe(file,{signal:AbortSignal.timeout(30000),commands,update:()=>{}});
+        send(res,200,{schema:'MediaScope/0.2',createdAt:new Date().toISOString(),type:'inspect',tools:versions,commands,...result,metadata:metadataSummary(result)});return;
+      }
+      const retry=url.pathname.match(/^\/api\/jobs\/([a-f0-9-]+)\/retry$/);
+      if(req.method==='POST'&&retry){
+        const original=jobs.get(retry[1]);
+        if(!original){send(res,404,{error:'任务不存在'});return}
+        if(!['cancelled','error'].includes(original.status)){send(res,409,{error:'只能重新排队已取消或失败的任务'});return}
+        const input=inputs.get(original.id);
+        if(!input){send(res,409,{error:'原任务参数已丢失'});return}
+        const job=createJob(input);send(res,202,{id:job.id});return;
+      }
       const match=url.pathname.match(/^\/api\/jobs\/([a-f0-9-]+)(\/report)?$/);
       if(match){const j=jobs.get(match[1]);if(!j){send(res,404,{error:'任务不存在'});return}
-        if(req.method==='DELETE'){j.controller.abort();send(res,200,{ok:true});return}
+        if(req.method==='DELETE'){if(j.status==='queued'){j.status='cancelled';j.message='已从队列取消';j.finishedAt=new Date().toISOString()}else if(j.status==='running')j.controller.abort();send(res,200,{ok:true});return}
         if(req.method==='GET'){if(match[2]){if(!j.reportPath){send(res,409,{error:'报告尚未完成'});return}res.writeHead(200,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});const stream=createReadStream(j.reportPath);stream.on('error',()=>res.destroy());stream.pipe(res)}else{const {controller,result,...meta}=j;send(res,200,meta)}return}
       }
       if(req.method==='POST'&&url.pathname==='/api/jobs'){
-        if(active){send(res,409,{error:'已有任务正在运行，请等待完成或取消'});return}
-        const input=await body(req);if(active){send(res,409,{error:'已有任务正在运行，请等待完成或取消'});return}if(!['inspect','analyze','compare','trial'].includes(input.type))throw Error('无效任务类型');normalizeInputPaths(input);
-        // Keep at most five in-memory reports. Completed reports remain on disk.
-        while(jobs.size>=5){const key=jobs.keys().next().value;jobs.delete(key)}
-        const startedAt=new Date().toISOString(),j={id:randomUUID(),type:input.type,status:'running',message:'准备分析',startedAt,progress:{stage:'准备任务',detail:'正在建立只读分析任务',phaseIndex:0,phaseCount:null,completed:null,total:null,updatedAt:startedAt},controller:new AbortController()};jobs.set(j.id,j);active=j.id;
-        execute(j,input).catch(e=>{active=null;j.status='error';j.message=e.message});send(res,202,{id:j.id});return;
+        const input=await body(req);if(!['inspect','analyze','compare','trial'].includes(input.type))throw Error('无效任务类型');normalizeInputPaths(input);
+        if(input.enqueue!==true)queueRunning=true;
+        const job=createJob(input);send(res,202,{id:job.id});return;
       }
       send(res,404,{error:'接口不存在'});return;
     }
@@ -150,4 +186,4 @@ const server=http.createServer(async(req,res)=>{
 });
 server.listen(port,'127.0.0.1',()=>console.log(`MediaScope 已启动：${origin}\n保持窗口运行，浏览器打开以上地址。Ctrl+C 停止。\n${versions.ffmpeg}`));
 server.on('error',e=>{console.error(e.message);process.exitCode=1});
-process.on('SIGINT',()=>{for(const j of jobs.values())j.controller.abort();server.close(()=>process.exit())});
+process.on('SIGINT',()=>{queueRunning=false;for(const j of jobs.values())j.controller.abort();server.close(()=>process.exit())});

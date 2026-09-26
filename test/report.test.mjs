@@ -13,15 +13,15 @@ const fixtures=[
  {schema:base.schema,type:'compare',reference:base,candidate:base,alignment:{frames:3},metrics:{psnr:metric,ssim:{pooled:1,values:[1,0.99,1]}}},
  {schema:base.schema,type:'trial',source:base,experiment:{start:0,duration:1,actualFrames:3,retainedFiles:[]},rows:[{crf:20,videoBytes:321,encodeSeconds:1.123456789,metrics:{psnr:metric,ssim:{pooled:1,values:[1,1,1]}}}]}
 ];
-const source=(await readFile(new URL('../public/app.js',import.meta.url),'utf8')).replace(/^import .*;\r?\n/gm,'').replace(/api\('status'\)[\s\S]*$/,'');
+const source=(await readFile(new URL('../public/app.js',import.meta.url),'utf8')).replace(/^import .*;\r?\n/gm,'').replace(/^api\('status'\)[\s\S]*$/m,'');
 function frontend(){
  const nodes=new Map(),plots=[];
  const classList=()=>{const values=new Set();return {add:v=>values.add(v),remove:v=>values.delete(v),contains:v=>values.has(v),toggle(v,on){if(on??!values.has(v))values.add(v);else values.delete(v)}}};
- const node=id=>{if(!nodes.has(id))nodes.set(id,{id,value:({'#rd-axis':'videoKiB','#rd-metric':'psnr','#trial-row':'0','#trial-frame-metric':'psnr','#trial-crfs':'20'})[id]??'',content:'token',innerHTML:'',textContent:'',classList:classList(),addEventListener(){},click(){this.onclick?.()}});return nodes.get(id)};
+ const node=id=>{if(!nodes.has(id))nodes.set(id,{id,value:({'#rd-axis':'videoKiB','#rd-metric':'psnr','#trial-row':'0','#trial-frame-metric':'psnr','#trial-crfs':'20'})[id]??'',content:'token',innerHTML:'',textContent:'',classList:classList(),addEventListener(){},querySelectorAll(){return []},click(){this.onclick?.()}});return nodes.get(id)};
  const tabs=['inspect','compare','trial'].map(mode=>Object.assign(node('.tab-'+mode),{dataset:{mode}}));
  const document={querySelector:node,querySelectorAll:s=>s==='.tab'?tabs:[]};
  const chart=(host,data,options)=>{plots.push({id:host.id,data,options});return {dispose(){},setRange(){},select(){}}};
- const context=vm.createContext({document,...trial,parseReport,plot:chart,gopOverview:chart,console,setTimeout,fetch(){throw Error('导入不应访问网络')}});
+ const context=vm.createContext({document,...trial,parseReport,plot:chart,gopOverview:chart,console,setTimeout,setInterval(){},fetch(){throw Error('导入不应访问网络')}});
  vm.runInContext(source,context);
  const lookup=id=>node(/^#(result|result-title|summary|details|export)$/.test(id)?'#'+vm.runInContext('activeMode',context)+'-'+id.slice(1):id);
  return {context,node:lookup,preview:()=>JSON.stringify({summary:lookup('#summary').innerHTML,details:lookup('#details').innerHTML,frames:node('#frames').innerHTML,detail:node('#frame-detail').innerHTML,plots},(k,v)=>typeof v==='function'?undefined:v),clear:()=>{plots.length=0}};
@@ -97,10 +97,10 @@ test('tabs retain their own report DOM and controls without redrawing or replaci
 });
 test('completion in another tab preserves the selected report and keeps it browsable during computation',async()=>{
  const app=frontend();app.context.media=fixtures[1];
- vm.runInContext("render(media);current='background-job';busy(true);switchMode('trial');switchMode('inspect')",app.context);
+ vm.runInContext("render(media);current='background-job';autoOpen='background-job';busy(true);switchMode('trial');switchMode('inspect')",app.context);
  const before=app.node('#inspect-details').innerHTML;
- assert.equal(app.node('#analyze').disabled,true);assert.equal(app.node('#inspect-result').classList.contains('hidden'),false);
- const requests=[];app.context.fetch=async url=>{requests.push(url);return {ok:true,json:async()=>url.endsWith('/report')?fixtures[3]:{status:'done',message:'完成'}}};
+ assert.equal(app.node('#analyze').disabled,false);assert.equal(app.node('#inspect-result').classList.contains('hidden'),false);
+ const requests=[];app.context.fetch=async url=>{requests.push(url);return {ok:true,json:async()=>url.endsWith('/report')?fixtures[3]:{queueRunning:false,jobs:[{id:'background-job',type:'trial',status:'done',message:'完成'}]}}};
  await vm.runInContext('poll()',app.context);
  assert.equal(vm.runInContext('activeMode',app.context),'inspect');assert.equal(vm.runInContext('report.type',app.context),'analyze');assert.equal(app.node('#inspect-details').innerHTML,before);
  assert.equal(app.node('#trial-result').classList.contains('hidden'),true);assert.ok(app.node('#trial-details').innerHTML.includes('逐帧质量叠加'));
@@ -121,4 +121,30 @@ test('structured task progress shows exact counts and refuses to invent a percen
  assert.equal(app.node('#task-stage').textContent,'完整扫描视频帧');assert.equal(app.node('#task-phase').textContent,'阶段 2 / 4');assert.match(app.node('#task-count').textContent,/1,200.*帧/);assert.equal(app.node('#task-percent').textContent,'总量待核验');assert.equal(app.node('#task-progress-track').classList.contains('indeterminate'),true);
  app.context.progress={...app.context.progress,completed:1200,total:2400};vm.runInContext("message(progress.detail,false,progress,'2026-01-01T00:00:00.000Z','running')",app.context);
  assert.equal(app.node('#task-percent').textContent,'50%');assert.equal(app.node('#task-progress-bar').style.width,'50%');assert.equal(app.node('#task-progress-track').classList.contains('indeterminate'),false);
+});
+
+test('queue controls capture analysis and trial settings without requiring a preliminary probe',()=>{
+ const app=frontend();vm.runInContext('launch=input=>{sent=input}',app.context);
+ app.node('#file').value='D:\\next.mp4';app.node('#complexity').checked=true;app.node('#siti-workers').value='4';
+ app.node('#enqueue-analyze').click();assert.equal(app.context.sent.type,'analyze');assert.equal(app.context.sent.enqueue,true);assert.equal(app.context.sent.stream,null);assert.equal(app.context.sent.complexity,true);assert.equal(app.context.sent.sitiWorkers,'4');
+ app.node('#file').value='D:\\later.mp4';assert.equal(app.context.sent.file,'D:\\next.mp4');
+ app.node('#trial-file').value='D:\\trial.mp4';app.node('#enqueue-trial').click();assert.equal(app.context.sent.type,'trial');assert.equal(app.context.sent.enqueue,true);assert.equal(app.context.sent.file,'D:\\trial.mp4');
+});
+test('background media report does not overwrite the next queued task form',()=>{
+ const app=frontend();app.context.input=fixtures[1];app.node('#file').value='D:\\new-choice.mp4';
+ vm.runInContext('render(input,false)',app.context);assert.equal(app.node('#file').value,'D:\\new-choice.mp4');assert.equal(app.node('#analyze').disabled,true);
+});
+test('paused queue stays actionable and cancelled work has a visible retry',async()=>{
+ const app=frontend(),jobs=[
+  {id:'one',type:'analyze',file:'D:\\Videos\\first.mov',description:'视频轨道 自动',status:'cancelled',message:'已取消'},
+  {id:'two',type:'trial',file:'D:\\Videos\\next.mov',description:'0–5 秒',status:'queued',message:'等待运行'}
+ ];
+ app.context.fetch=async()=>({ok:true,json:async()=>({queueRunning:false,jobs})});
+ await vm.runInContext('poll()',app.context);
+ assert.equal(app.node('#queue-start').disabled,false);
+ assert.equal(app.node('#queue-pause').disabled,true);
+ assert.match(app.node('#queue-list').innerHTML,/next\.mov/);
+ assert.doesNotMatch(app.node('#queue-list').innerHTML,/first\.mov/);
+ assert.match(app.node('#queue-history-list').innerHTML,/first\.mov.*重新排队/);
+ assert.match(app.node('#queue-history-list').innerHTML,/data-action="retry"/);
 });

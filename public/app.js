@@ -24,9 +24,48 @@ function message(text,error=false,progress=null,startedAt=null,status=null){
  const subtasks=Object.values(progress.subtasks||{});$('#task-subtasks').innerHTML=subtasks.map(item=>{const done=progressValue(item.completed),all=progressValue(item.total);return `<div class="task-subtask"><span>${esc(item.label||'并行任务')}</span><span>${done??'准备中'}${all!==null?' / '+all:''}${item.unit?' '+esc(item.unit):''}</span></div>`}).join('');
  $('#task-elapsed').textContent=startedAt?elapsed(startedAt):'';
 }
-function busy(value){for(const id of ['inspect','analyze','compare','trial'])$('#'+id).disabled=value||(id==='analyze'&&(!infoPath||!hasVideo));$('#import-report').disabled=value;$('#import-button').disabled=value;document.querySelectorAll('.file-picker').forEach(b=>b.disabled=value)}
-async function launch(data){try{busy(true);current=(await api('jobs',{method:'POST',body:JSON.stringify(data)})).id;message('任务已开始');poll()}catch(e){message(e.message,true);busy(false)}}
-async function poll(){try{const j=await api('jobs/'+current);message(j.progress?.detail||j.message,j.status==='error',j.progress,j.startedAt,j.status);if(j.status==='running'){setTimeout(poll,900);return}const id=current;current=null;$('#cancel').classList.add('hidden');if(j.status==='done'){const result=await api('jobs/'+id+'/report');render(result,false)}busy(false)}catch(e){current=null;busy(false);message(e.message,true)}}
+function busy(value){$('#analyze').disabled=!infoPath||!hasVideo;$('#import-report').disabled=value;$('#import-button').disabled=value}
+let submitting=false,refreshing=false,autoOpen=null,queueView='',historyView='';
+async function launch(data){if(submitting)return;submitting=true;try{const j=await api('jobs',{method:'POST',body:JSON.stringify(data)});if(!data.enqueue)autoOpen=j.id;message(data.enqueue?'已加入队列，参数已保存':'任务已提交');await poll()}catch(e){message(e.message,true)}finally{submitting=false}}
+const fileName=file=>String(file||'未指定文件').split(/[\\/]/).pop();
+function queueRow(j,position){
+ const names={inspect:'读取信息',analyze:'完整分析',compare:'质量比较',trial:'片段实验'},states={queued:'等待',running:'运行中',done:'完成',error:'失败',cancelled:'已取消'};
+ const primary=fileName(j.file||j.reference),secondary=j.candidate?' → '+fileName(j.candidate):'';
+ const pathText=(j.file||j.reference||'')+(j.candidate?' → '+j.candidate:'');
+ const action=j.status==='done'?'report':['error','cancelled'].includes(j.status)?'retry':'cancel';
+ const label={report:'查看报告',retry:'重新排队',cancel:'取消'}[action];
+ const stage=j.status==='running'?(j.progress?.stage||j.message):j.message;
+ return `<div class="queue-item"><div class="queue-item-main"><strong>${position?position+'. ':''}${esc(primary+secondary)}</strong><span class="queue-state">${esc(names[j.type])} · ${states[j.status]}</span><p class="queue-path" title="${esc(pathText)}">${esc(pathText)}</p><p class="queue-description">${esc(j.description||'')}${stage?' · '+esc(stage):''}</p></div><button class="secondary" data-job="${j.id}" data-action="${action}">${label}</button></div>`;
+}
+async function queueAction(event){
+ const button=event.target.closest('[data-job]');if(!button)return;
+ button.disabled=true;
+ try{
+  if(button.dataset.action==='report')render(await api('jobs/'+button.dataset.job+'/report'));
+  else if(button.dataset.action==='retry')await api('jobs/'+button.dataset.job+'/retry',{method:'POST',body:'{}'});
+  else {await api('jobs/'+button.dataset.job,{method:'DELETE'});$('#queue-history').open=true}
+  await poll();
+ }catch(e){message(e.message,true);button.disabled=false}
+}
+$('#queue-list').onclick=queueAction;$('#queue-history-list').onclick=queueAction;
+async function poll(){if(refreshing)return;refreshing=true;try{
+ const previous=current,s=await api('status'),running=s.jobs.find(j=>j.status==='running');current=running?.id??null;
+ const pending=s.jobs.filter(j=>['queued','running'].includes(j.status)),history=s.jobs.filter(j=>!['queued','running'].includes(j.status));
+ $('#queue-count').textContent=(s.queueRunning?'运行中':'已暂停 / 待开始')+' · '+pending.filter(j=>j.status==='queued').length+' 项等待';
+ $('#queue-start').disabled=!s.jobs.some(j=>j.status==='queued');$('#queue-pause').disabled=!s.queueRunning;
+ $('#queue-history-count').textContent=`已结束任务（${history.length}）`;
+ const nextQueue=JSON.stringify(pending.map(j=>[j.id,j.status,j.progress?.stage]));
+ const nextHistory=JSON.stringify(history.map(j=>[j.id,j.status]));
+ if(nextQueue!==queueView){$('#queue-list').innerHTML=pending.map((j,i)=>queueRow(j,i+1)).join('')||'<p class="hint">暂无待运行任务。设置文件后点击“加入队列”。</p>';queueView=nextQueue}
+ if(nextHistory!==historyView){$('#queue-history-list').innerHTML=history.map(j=>queueRow(j)).join('');historyView=nextHistory}
+ const completed=s.jobs.find(j=>j.id===autoOpen&&!['queued','running'].includes(j.status));
+ if(completed){autoOpen=null;if(completed.status==='done')render(await api('jobs/'+completed.id+'/report'),false);if(!running)message(completed.message,completed.status==='error',completed.progress,completed.startedAt,completed.status)}
+ const ended=s.jobs.find(j=>j.id===previous&&!['queued','running'].includes(j.status));if(ended&&['error','cancelled'].includes(ended.status))$('#queue-history').open=true;if(!running&&ended)message(ended.message,ended.status==='error',ended.progress,ended.startedAt,ended.status);
+ if(running)message(running.progress?.detail||running.message,false,running.progress,running.startedAt,running.status);
+ $('#cancel').classList.toggle('hidden',!current);busy(!!current||importing);
+ }catch(e){message(e.message,true)}finally{refreshing=false}}
+for(const action of ['start','pause'])$('#queue-'+action).onclick=async()=>{try{await api('queue',{method:'POST',body:JSON.stringify({action})});await poll()}catch(e){message(e.message,true)}};
+setInterval(poll,1000);
 $('#cancel').onclick=async()=>{try{await api('jobs/'+current,{method:'DELETE'})}catch(e){message(e.message,true)}};
 function switchMode(mode){
  activeMode=mode;report=reports[mode]??null;charts=viewCharts[mode];
@@ -37,9 +76,9 @@ document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>switchMode(b.dataset.
 document.querySelectorAll('.file-picker').forEach(button=>button.onclick=async()=>{button.disabled=true;const label=button.textContent;button.textContent='正在打开…';message('正在打开 Windows 文件选择器；如果没有出现在前台，请查看任务栏。');try{const result=await api('select-file',{method:'POST',body:'{}'});if(result.file){const input=$('#'+button.dataset.target);input.value=result.file;input.dispatchEvent(new Event('input'));message('已选择文件：'+result.file)}else message('已取消选择文件')}catch(e){message(e.message==='Failed to fetch'?'本机分析服务未运行，请重新启动 MediaScope':e.message,true)}finally{button.textContent=label;button.disabled=false}});
 $('#file').oninput=()=>{infoPath=null;$('#analyze').disabled=true};
 const syncSitiWorkers=()=>{$('#siti-workers').disabled=!$('#complexity').checked};$('#complexity').onchange=syncSitiWorkers;syncSitiWorkers();
-$('#inspect').onclick=()=>launch({type:'inspect',file:clean($('#file').value)});
+$('#inspect').onclick=async()=>{const requested=clean($('#file').value);try{message('正在读取文件信息…');const result=await api('probe',{method:'POST',body:JSON.stringify({file:requested})});if(clean($('#file').value)===requested)$('#file').value=result.file;render(result)}catch(e){message(e.message,true)}};
 $('#analyze').onclick=()=>launch({type:'analyze',file:infoPath,stream:Number($('#stream').value),complexity:$('#complexity').checked,sitiWorkers:$('#siti-workers').value});
-$('#compare').onclick=()=>{
+$('#compare').onclick=(event)=>{
  const input={type:'compare',reference:clean($('#reference').value),candidate:clean($('#candidate').value),refStream:Number($('#refStream').value),candidateStream:Number($('#candidateStream').value),comparisonMode:$('#comparison-mode').value,timingMode:$('#timing-mode').value,metrics:[...document.querySelectorAll('[name=metric]:checked')].map(x=>x.value),confirm:$('#confirm').checked};
  if(input.timingMode==='ordinal-confirmed'){
   if(!$('#timing-confirm').checked){message('请确认两路视频的每个显示帧按顺序一一对应，且没有丢帧、重复帧或重排。',true);return}
@@ -55,8 +94,11 @@ $('#compare').onclick=()=>{
   input.chromaAssumptions={};
   for(const [side,id] of [['reference','#reference-chroma'],['candidate','#candidate-chroma']])if($(id).value)input.chromaAssumptions[side]=$(id).value;
  }
- launch(input);
+ launch({...input,enqueue:event?.currentTarget?.id==='enqueue-compare'});
 };
+$('#enqueue-compare').onclick=$('#compare').onclick;
+$('#enqueue-analyze').onclick=()=>launch({type:'analyze',enqueue:true,file:clean($('#file').value),stream:infoPath===clean($('#file').value)?Number($('#stream').value):null,complexity:$('#complexity').checked,sitiWorkers:$('#siti-workers').value});
+$('#enqueue-trial').onclick=()=>{try{launch({...trialInput(),enqueue:true})}catch(e){message(e.message,true)}};
 $('#chroma-confirm-mode').onchange=()=>$('#chroma-assumption-controls').classList.toggle('hidden',!$('#chroma-confirm-mode').checked);
 $('#timing-mode').onchange=()=>{$('#timing-confirm-row').classList.toggle('hidden',$('#timing-mode').value!=='ordinal-confirmed');$('#playback-confirm-row').classList.toggle('hidden',$('#timing-mode').value!=='playback-sample')};
 function trialInput(){return {type:'trial',file:clean($('#trial-file').value),stream:Number($('#trial-stream').value),start:Number($('#trial-start').value),duration:Number($('#trial-duration').value),encoder:$('#trial-encoder').value,depthMode:$('#trial-depth').value,presets:[...document.querySelectorAll('[name=trial-preset]:checked')].map(x=>x.value),cpuUsed:Number($('#trial-cpu').value),crfs:parseCrfs($('#trial-crfs').value),metrics:$('#trial-vmaf').checked?['psnr','ssim','vmaf']:['psnr','ssim'],keepFiles:$('#trial-keep').checked};}
@@ -103,8 +145,9 @@ function metadataHTML(r){
   return `<p class="hint">${esc(data.note)} ${esc(data.scope)}</p>`+(data.items.length?data.items.map(item=>`<div class="evidence"><strong>${esc(item.name)}</strong><span>${esc(item.sources.join('、'))} · ${item.occurrences} 次相同记录</span>${raw(item.value,'查看此项数据')}</div>`).join(''):'<p class="hint">本次探测范围未报告附加数据；不能据此认定全片不存在。</p>');
 }
 function renderMedia(r){
-  const streams=r.raw.streams,videos=streams.filter(s=>s.codec_type==='video');infoPath=r.file;hasVideo=!!videos.length;$('#file').value=r.file;
-  $('#stream').innerHTML=videos.map(s=>`<option value="${s.index}">${s.index} · ${esc(s.codec_name)} · ${s.width} × ${s.height}</option>`).join('');if(r.stream!==undefined)$('#stream').value=r.stream;$('#analyze').disabled=!hasVideo;
+  const streams=r.raw.streams,videos=streams.filter(s=>s.codec_type==='video');
+  if(!clean($('#file').value)||clean($('#file').value)===r.file){infoPath=r.file;hasVideo=!!videos.length;$('#file').value=r.file;
+  $('#stream').innerHTML=videos.map(s=>`<option value="${s.index}">${s.index} · ${esc(s.codec_name)} · ${s.width} × ${s.height}</option>`).join('');if(r.stream!==undefined)$('#stream').value=r.stream;$('#analyze').disabled=!hasVideo;}
   if(!$('#trial-file').value){$('#trial-file').value=r.file;$('#trial-stream').value=r.stream??videos[0]?.index??0}
   cards([['文件大小',size(r.size)],['容器时长',r.raw.format.duration?`${fmt(Number(r.raw.format.duration))} s`:'未报告'],['轨道数',streams.length],['容器',r.raw.format.format_name]]);
   let html=`<p class="path">${esc(r.file)}</p>`;
@@ -189,4 +232,4 @@ function renderTrial(r){
   };
   $('#sample-sort-key').onchange=drawSamples;$('#sample-sort-direction').onchange=drawSamples;$('#rd-axis').onchange=update;$('#rd-metric').onchange=update;$('#trial-group').onchange=updateGroup;$('#trial-frame-metric').onchange=updateFrames;drawSamples();update();updateGroup();
 }
-api('status').then(s=>{$('#environment').textContent=s.versions.ffmpeg;for(const box of document.querySelectorAll('[name=metric]'))if(!s.metrics.includes(box.value)){box.checked=false;box.disabled=true}const active=s.jobs.find(j=>j.status==='running');if(active){current=active.id;busy(true);poll()}}).catch(e=>message(e.message,true));
+api('status').then(s=>{$('#environment').textContent=s.versions.ffmpeg;for(const box of document.querySelectorAll('[name=metric]'))if(!s.metrics.includes(box.value)){box.checked=false;box.disabled=true}poll()}).catch(e=>message(e.message,true));
