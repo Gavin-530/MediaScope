@@ -1,4 +1,5 @@
 import {parseReport} from './report.js';
+import {parsePortable,makePortable,maxPortableBytes} from './portable.js';
 import {plot,gopOverview} from './charts.js';
 import {parseCrfs,rowLabel,trialValue,trialPlotData,trialFramePlotData,metricLabels,trialSortFields,sortTrialRows} from './trial-model.js';
 const modes=['inspect','compare','trial'],reports={},viewCharts={inspect:[],compare:[],trial:[]};
@@ -25,7 +26,8 @@ function message(text,error=false,progress=null,startedAt=null,status=null){
  $('#task-elapsed').textContent=startedAt?elapsed(startedAt):'';
 }
 function busy(value){$('#analyze').disabled=!infoPath||!hasVideo;$('#import-report').disabled=value;$('#import-button').disabled=value}
-let submitting=false,refreshing=false,autoOpen=null,queueView='',historyView='';
+let submitting=false,refreshing=false,autoOpen=null,queueView='',historyView='',resultView='',latestJobs=[],importSequence=0;
+let importedResults=[],selectedResults=new Set(),selectedPlans=new Set(),downloadNames=new Map();
 async function launch(data){if(submitting)return;submitting=true;try{const j=await api('jobs',{method:'POST',body:JSON.stringify(data)});if(!data.enqueue)autoOpen=j.id;message(data.enqueue?'已加入队列，参数已保存':'任务已提交');await poll()}catch(e){message(e.message,true)}finally{submitting=false}}
 const fileName=file=>String(file||'未指定文件').split(/[\\/]/).pop();
 function queueRow(j,position){
@@ -35,8 +37,21 @@ function queueRow(j,position){
  const action=j.status==='done'?'report':['error','cancelled'].includes(j.status)?'retry':'cancel';
  const label={report:'查看报告',retry:'重新排队',cancel:'取消'}[action];
  const stage=j.status==='running'?(j.progress?.stage||j.message):j.message;
- return `<div class="queue-item"><div class="queue-item-main"><strong>${position?position+'. ':''}${esc(primary+secondary)}</strong><span class="queue-state">${esc(names[j.type])} · ${states[j.status]}</span><p class="queue-path" title="${esc(pathText)}">${esc(pathText)}</p><p class="queue-description">${esc(j.description||'')}${stage?' · '+esc(stage):''}</p></div><button class="secondary" data-job="${j.id}" data-action="${action}">${label}</button></div>`;
+ return `<div class="queue-item">${j.status==='queued'?`<input class="portable-check" type="checkbox" data-plan-select="${j.id}" aria-label="选择任务计划 ${esc(primary)}" ${selectedPlans.has(j.id)?'checked':''}>`:''}<div class="queue-item-main"><strong>${position?position+'. ':''}${esc(primary+secondary)}</strong><span class="queue-state">${esc(names[j.type])} · ${states[j.status]}</span><p class="queue-path" title="${esc(pathText)}">${esc(pathText)}</p><p class="queue-description">${esc(j.description||'')}${stage?' · '+esc(stage):''}</p></div><button class="secondary" data-job="${j.id}" data-action="${action}">${label}</button></div>`;
 }
+function resultItems(){return [...latestJobs.filter(j=>j.status==='done').map(j=>({id:j.id,job:j})),...importedResults]}
+function renderResultList(){
+ const items=resultItems(),available=new Set(items.map(x=>x.id));for(const id of selectedResults)if(!available.has(id))selectedResults.delete(id);
+ const signature=JSON.stringify(items.map(x=>[x.id,x.job?.status]));if(signature===resultView)return;resultView=signature;
+ $('#result-list').innerHTML=items.map(x=>{
+  const r=x.report,j=x.job,type=r?.type||j?.type||'?',file=r?.file||r?.source?.file||r?.reference?.file||j?.file||j?.reference||'未指定文件',other=r?.candidate?.file||j?.candidate;
+  const label=fileName(file)+(other?' → '+fileName(other):'');
+  return `<div class="queue-item"><input class="portable-check" type="checkbox" data-result-select="${esc(x.id)}" aria-label="选择结果 ${esc(label)}" ${selectedResults.has(x.id)?'checked':''}><div class="queue-item-main"><strong>${esc(label)}</strong><span class="queue-state">${esc(type)} · ${r?'已导入':'已完成'}</span><p class="queue-path">${esc(file)}${other?' → '+esc(other):''}</p></div><button class="secondary" data-result-open="${esc(x.id)}">查看报告</button></div>`;
+ }).join('')||'<p class="hint">暂无已完成结果。</p>';
+}
+$('#queue-list').onchange=e=>{const id=e.target.dataset?.planSelect;if(id){if(e.target.checked)selectedPlans.add(id);else selectedPlans.delete(id)}};
+$('#result-list').onchange=e=>{const id=e.target.dataset?.resultSelect;if(id){if(e.target.checked)selectedResults.add(id);else selectedResults.delete(id)}};
+$('#result-list').onclick=async e=>{const id=e.target.closest?.('[data-result-open]')?.dataset.resultOpen;if(!id)return;try{const item=resultItems().find(x=>x.id===id);if(!item)throw Error('结果已不可用');render(item.report||await api('jobs/'+id+'/report'));}catch(err){message(err.message,true)}};
 async function queueAction(event){
  const button=event.target.closest('[data-job]');if(!button)return;
  button.disabled=true;
@@ -49,15 +64,17 @@ async function queueAction(event){
 }
 $('#queue-list').onclick=queueAction;$('#queue-history-list').onclick=queueAction;
 async function poll(){if(refreshing)return;refreshing=true;try{
- const previous=current,s=await api('status'),running=s.jobs.find(j=>j.status==='running');current=running?.id??null;
- const pending=s.jobs.filter(j=>['queued','running'].includes(j.status)),history=s.jobs.filter(j=>!['queued','running'].includes(j.status));
+  const previous=current,s=await api('status'),running=s.jobs.find(j=>j.status==='running');current=running?.id??null;latestJobs=s.jobs;
+  const pending=s.jobs.filter(j=>['queued','running'].includes(j.status)),history=s.jobs.filter(j=>!['queued','running'].includes(j.status));
+  const waitingIds=new Set(pending.filter(j=>j.status==='queued').map(j=>j.id));for(const id of selectedPlans)if(!waitingIds.has(id))selectedPlans.delete(id);
  $('#queue-count').textContent=(s.queueRunning?'运行中':'已暂停 / 待开始')+' · '+pending.filter(j=>j.status==='queued').length+' 项等待';
  $('#queue-start').disabled=!s.jobs.some(j=>j.status==='queued');$('#queue-pause').disabled=!s.queueRunning;
  $('#queue-history-count').textContent=`已结束任务（${history.length}）`;
  const nextQueue=JSON.stringify(pending.map(j=>[j.id,j.status,j.progress?.stage]));
  const nextHistory=JSON.stringify(history.map(j=>[j.id,j.status]));
  if(nextQueue!==queueView){$('#queue-list').innerHTML=pending.map((j,i)=>queueRow(j,i+1)).join('')||'<p class="hint">暂无待运行任务。设置文件后点击“加入队列”。</p>';queueView=nextQueue}
- if(nextHistory!==historyView){$('#queue-history-list').innerHTML=history.map(j=>queueRow(j)).join('');historyView=nextHistory}
+  if(nextHistory!==historyView){$('#queue-history-list').innerHTML=history.map(j=>queueRow(j)).join('');historyView=nextHistory}
+  renderResultList();
  const completed=s.jobs.find(j=>j.id===autoOpen&&!['queued','running'].includes(j.status));
  if(completed){autoOpen=null;if(completed.status==='done')render(await api('jobs/'+completed.id+'/report'),false);if(!running)message(completed.message,completed.status==='error',completed.progress,completed.startedAt,completed.status)}
  const ended=s.jobs.find(j=>j.id===previous&&!['queued','running'].includes(j.status));if(ended&&['error','cancelled'].includes(ended.status))$('#queue-history').open=true;if(!running&&ended)message(ended.message,ended.status==='error',ended.progress,ended.startedAt,ended.status);
@@ -110,22 +127,68 @@ function trialControls(){
 for(const id of ['trial-encoder','trial-depth','trial-crfs','trial-cpu'])$('#'+id).addEventListener('input',trialControls);
 document.querySelectorAll('[name=trial-preset]').forEach(x=>x.addEventListener('change',trialControls));trialControls();
 $('#trial').onclick=()=>{try{launch(trialInput())}catch(e){message(e.message,true)}};
-for(const mode of modes)document.querySelector('#'+mode+'-export').onclick=()=>{const saved=reports[mode];if(saved)download(JSON.stringify(saved,null,2),'MediaScope-'+saved.type+'.json','application/json')};
+function timestamp(){const d=new Date(),pad=n=>String(n).padStart(2,'0');return `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`}
+function safeName(value){return String(value||'media').replace(/\.[^.\\/]+$/,'').replace(/[<>:"/\\|?*\x00-\x1f]/g,'_').replace(/[. ]+$/,'').slice(0,64)||'media'}
+function reportName(r){const first=r.file||r.source?.file||r.reference?.file,second=r.candidate?.file,media=safeName(fileName(first))+(second?'_vs_'+safeName(fileName(second)):'');return `MediaScope-${r.type}-${media.slice(0,100)}-${timestamp()}.json`}
+for(const mode of modes)document.querySelector('#'+mode+'-export').onclick=()=>{const saved=reports[mode];if(saved)download(JSON.stringify(saved,null,2),reportName(saved),'application/json')};
+function syncPortableControls(){
+ const importingKind=$('#import-kind').value||'report',hasResults=['results','bundle'].includes(importingKind),hasPlans=['plan','bundle'].includes(importingKind);
+ for(const id of ['#import-results-mode','#import-results-mode-label'])$(id).classList.toggle('hidden',!hasResults);
+ for(const id of ['#import-plan-mode','#import-plan-mode-label','#import-start-label'])$(id).classList.toggle('hidden',!hasPlans);
+ const exportingKind=$('#export-kind').value||'report';for(const id of ['#export-scope','#export-scope-label'])$(id).classList.toggle('hidden',exportingKind==='report');
+}
+$('#import-kind').onchange=syncPortableControls;$('#export-kind').onchange=syncPortableControls;syncPortableControls();
+async function portableExport(){
+ const kind=$('#export-kind').value||'report';
+ if(kind==='report'){if(!report)throw Error('请先打开一份报告');download(JSON.stringify(report,null,2),reportName(report),'application/json');return}
+ const scope=$('#export-scope').value||'all',results=[],plans=[];
+ if(['results','bundle'].includes(kind)){
+  const chosen=resultItems().filter(item=>scope==='all'||selectedResults.has(item.id));
+  if(scope==='selected'&&chosen.length!==selectedResults.size)throw Error('勾选的结果已变化，请重新确认导出范围');
+  for(const item of chosen)results.push({entryId:item.id,report:item.report||await api('jobs/'+item.id+'/report')});
+ }
+ if(['plan','bundle'].includes(kind)){
+  const saved=await api('plans'),chosen=saved.plans.filter(item=>scope==='all'||selectedPlans.has(item.entryId));
+  if(scope==='selected'&&chosen.length!==selectedPlans.size)throw Error('勾选的待运行任务已变化，请重新确认导出范围');
+  plans.push(...chosen);
+ }
+ if(!results.length&&!plans.length)throw Error(scope==='selected'?'请先勾选要导出的结果或计划':'当前没有可导出的结果或计划');
+ const value=makePortable(kind,{results,plans}),json=JSON.stringify(value,null,2);
+ if(new Blob([json]).size>maxPortableBytes)throw Error('导出文件超过 256 MiB；请勾选较少的结果，确保文件能够重新导入');
+ download(json,`MediaScope-${kind==='results'?'queue':kind==='plan'?'plan':'bundle'}-${timestamp()}.json`,'application/json');
+}
+$('#export-portable').onclick=async()=>{const button=$('#export-portable');button.disabled=true;try{await portableExport()}catch(e){message(e.message,true)}finally{button.disabled=false}};
 $('#import-button').onclick=()=>$('#import-report').click();
 $('#import-report').onchange=async e=>{
  const input=e.target,f=input.files[0];if(!f)return;
  if(current||importing){input.value='';return}
- importing=true;busy(true);message('正在读取并校验报告…');
+ importing=true;busy(true);message('正在读取并校验 JSON…');
  try{
-  if(f.size>256*1024*1024)throw Error('报告超过 256 MiB 导入上限');
-  const data=parseReport(await f.text()),previous=reports[modeOf(data)];
-  if(current)throw Error('分析任务正在运行，请在任务完成后导入报告');
-  try{render(data)}catch(err){if(previous)render(previous);else document.querySelector('#'+modeOf(data)+'-result').classList.add('hidden');throw Error('报告无法完整显示：'+err.message)}
-  switchMode(modeOf(data));
-  message('已导入 '+f.name+'；使用保存的原始测量数据，无需原媒体文件或重新计算。');
+  if(f.size>maxPortableBytes)throw Error('JSON 文件超过 256 MiB 导入上限');
+  const kind=$('#import-kind').value||'report',saved=await f.text();
+  if(current)throw Error('分析任务正在运行，请在任务完成后导入');
+  if(kind==='report'){
+   const data=parseReport(saved),previous=reports[modeOf(data)];
+   try{render(data)}catch(err){if(previous)render(previous);else document.querySelector('#'+modeOf(data)+'-result').classList.add('hidden');throw Error('报告无法完整显示：'+err.message)}
+   importedResults.push({id:`imported-${Date.now()}-${++importSequence}`,report:data});renderResultList();switchMode(modeOf(data));
+   message('已导入 '+f.name+'；使用保存的原始测量数据，无需原媒体文件或重新计算。');
+  }else{
+   const data=parsePortable(saved);if(data.kind!==kind)throw Error('所选导入类型与文件内容不一致');
+   if(['plan','bundle'].includes(kind))await api('plans/import',{method:'POST',body:JSON.stringify({plans:data.plans,mode:$('#import-plan-mode').value||'append',start:!!$('#import-start').checked})});
+   if(['results','bundle'].includes(kind)){
+    const incoming=data.results.map(item=>({id:`imported-${Date.now()}-${++importSequence}`,report:item.report}));
+    if(($('#import-results-mode').value||'append')==='replace'){for(const item of importedResults)selectedResults.delete(item.id);importedResults=[]}
+    importedResults.push(...incoming);resultView='';renderResultList();
+   }
+   await poll();message(`已导入 ${f.name}：${data.results?.length??0} 份结果、${data.plans?.length??0} 项计划。结果不重新计算；计划按所选方式进入待运行队列。`);
+  }
  }catch(err){message(err.message,true)}finally{importing=false;busy(!!current);input.value=''}
 };
-function download(text,name,type){const url=URL.createObjectURL(new Blob([text],{type})),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}
+function download(text,name,type){
+ const count=downloadNames.get(name)||0;downloadNames.set(name,count+1);
+ const unique=count?name.replace(/(\.[^.]+)$/,(extension)=>`-${count+1}${extension}`):name;
+ const url=URL.createObjectURL(new Blob([text],{type})),a=document.createElement('a');a.href=url;a.download=unique;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);
+}
 function cards(items){$('#summary').innerHTML=items.map(([k,v])=>`<div class="card"><span>${esc(k)}</span><strong>${esc(v)}</strong></div>`).join('')}
 function section(title,html){return `<section class="section"><h3>${esc(title)}</h3>${html}</section>`}
 function table(headers,rows){return `<div class="table-wrap"><table><thead><tr>${headers.map(v=>`<th>${esc(v)}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr>${r.map(v=>`<td>${esc(v)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`}

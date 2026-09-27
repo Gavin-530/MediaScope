@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import {createReadStream} from 'node:fs';
 import { FF,FP,run,probe,video,scan,summarize,compare,normalizeMediaPath,decodeThreadCount } from './engine.mjs';
 import {allPackets,structure,traceStructure,mapStructure,metadataSummary,complexity,trial,trialOptions} from './analysis.mjs';
+import {makePortable,maxPortableBytes} from './public/portable.js';
 const root=path.dirname(fileURLToPath(import.meta.url)),token=randomBytes(24).toString('hex'),jobs=new Map();
 const port=Number(process.env.PORT||4317),origin=`http://127.0.0.1:${port}`;
 const execFileAsync=promisify(execFile);
@@ -26,7 +27,7 @@ for(const [key,exe] of [['ffmpeg',FF],['ffprobe',FP]]){try{versions[key]=(await 
 let filters='';try{filters=await run(FF,['-hide_banner','-filters'])}catch{}
 const capabilities={versions,metrics:['psnr','ssim','vmaf'].filter(m=>filters.includes(m==='vmaf'?'libvmaf':m))};
 function send(res,status,data){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data))}
-async function body(req){let s='';for await(const b of req){s+=b;if(s.length>16384)throw Error('请求过大')}return JSON.parse(s||'{}')}
+async function body(req,limit=16384){const chunks=[];let size=0;for await(const b of req){size+=b.length;if(size>limit)throw Error('请求过大');chunks.push(b)}return JSON.parse(Buffer.concat(chunks).toString('utf8')||'{}')}
 function normalizeInputPaths(input){
   if(input.type==='inspect'||input.type==='analyze'||input.type==='trial')input.file=normalizeMediaPath(input.file);
   if(input.type==='analyze'){
@@ -35,6 +36,30 @@ function normalizeInputPaths(input){
   }
   if(input.type==='compare'){input.reference=normalizeMediaPath(input.reference);input.candidate=normalizeMediaPath(input.candidate)}
   return input;
+}
+function portableInput(input){const copy=structuredClone(input);delete copy.enqueue;return copy}
+function validatePlanInput(value){
+ if(!value||typeof value!=='object'||Array.isArray(value)||!['inspect','analyze','compare','trial'].includes(value.type))throw Error('计划任务类型无效');
+ const keys={inspect:['type','file'],analyze:['type','file','stream','complexity','sitiWorkers'],compare:['type','reference','candidate','refStream','candidateStream','comparisonMode','timingMode','metrics','confirm','timingConfirmed','playbackConfirmed','chromaConfirmed','chromaAssumptions'],trial:['type','file','stream','start','duration','encoder','depthMode','presets','cpuUsed','crfs','metrics','keepFiles']}[value.type];
+ if(Object.keys(value).some(key=>!keys.includes(key)))throw Error('计划任务包含未知参数');
+ const input=structuredClone(value);normalizeInputPaths(input);
+ const index=v=>Number.isSafeInteger(v)&&v>=0;
+ if(input.type==='analyze'){
+  if(input.stream!==undefined&&input.stream!==null&&!index(input.stream))throw Error('视频轨道索引无效');
+  if(input.complexity!==undefined&&typeof input.complexity!=='boolean')throw Error('SI/TI 选项无效');
+ }else if(input.type==='compare'){
+  if(!index(input.refStream)||!index(input.candidateStream))throw Error('比较轨道索引无效');
+  if(!Array.isArray(input.metrics)||!input.metrics.length||new Set(input.metrics).size!==input.metrics.length||input.metrics.some(v=>!['psnr','ssim','vmaf'].includes(v)))throw Error('比较指标无效');
+  if(!['native','bt709-limited-8-10',undefined].includes(input.comparisonMode)||!['strict','ordinal-confirmed','playback-sample',undefined].includes(input.timingMode))throw Error('比较模式无效');
+  if(input.confirm!==true||input.timingMode==='ordinal-confirmed'&&input.timingConfirmed!==true||input.timingMode==='playback-sample'&&input.playbackConfirmed!==true)throw Error('比较任务缺少原有确认');
+  if(input.chromaAssumptions!==undefined){
+   if(input.chromaConfirmed!==true||!input.chromaAssumptions||typeof input.chromaAssumptions!=='object'||Array.isArray(input.chromaAssumptions)||Object.keys(input.chromaAssumptions).some(k=>!['reference','candidate'].includes(k)||!['left','center','topleft','top','bottomleft','bottom'].includes(input.chromaAssumptions[k])))throw Error('色度位置确认无效');
+  }
+ }else if(input.type==='trial'){
+  if(!index(input.stream)||!Number.isFinite(input.start)||input.start<0||!Number.isFinite(input.duration)||input.duration<1||input.duration>20||input.keepFiles!==undefined&&typeof input.keepFiles!=='boolean')throw Error('片段实验范围或轨道无效');
+  trialOptions(input);
+ }
+ return input;
 }
 async function selectMediaFile(){
   if(process.platform!=='win32')throw Error('当前文件选择器仅支持 Windows，请输入绝对路径');
@@ -147,6 +172,20 @@ const server=http.createServer(async(req,res)=>{
     if(url.pathname.startsWith('/api/')){
       if(req.headers['x-mediascope-token']!==token||(req.headers.origin&&req.headers.origin!==origin)){send(res,403,{error:'访问校验失败，请刷新本机页面'});return}
       if(req.method==='GET'&&url.pathname==='/api/status'){send(res,200,{...capabilities,queueRunning,jobs:[...jobs.values()].map(({controller,result,...j})=>j)});return}
+      if(req.method==='GET'&&url.pathname==='/api/plans'){
+        const plans=[...jobs.values()].filter(j=>j.status==='queued').map(j=>{try{return {entryId:j.id,input:validatePlanInput(portableInput(inputs.get(j.id)))}}catch(e){throw Error(`待运行任务 ${j.id} 无法安全导出：${e.message}`)}});
+        send(res,200,makePortable('plan',{plans}));return;
+      }
+      if(req.method==='POST'&&url.pathname==='/api/plans/import'){
+        const request=await body(req,maxPortableBytes);
+        if(!['append','replace'].includes(request.mode)||typeof request.start!=='boolean'||!Array.isArray(request.plans)||request.plans.length>10000)throw Error('计划导入选项无效');
+        makePortable('plan',{plans:request.plans});
+        const imported=request.plans.map((entry,i)=>{if(!entry||typeof entry!=='object'||typeof entry.entryId!=='string')throw Error(`计划第 ${i+1} 项格式错误`);try{return validatePlanInput(entry.input)}catch(e){throw Error(`计划第 ${i+1} 项：${e.message}`)}});
+        queueRunning=false;
+        if(request.mode==='replace')for(const [id,j]of jobs)if(j.status==='queued'){jobs.delete(id);inputs.delete(id)}
+        const ids=imported.map(input=>createJob(input).id);
+        queueRunning=request.start;pump();send(res,200,{imported:ids.length,ids,queueRunning});return;
+      }
       if(req.method==='POST'&&url.pathname==='/api/queue'){
         const {action}=await body(req);if(!['start','pause'].includes(action))throw Error('无效队列操作');
         queueRunning=action==='start';pump();send(res,200,{queueRunning});return;
@@ -178,7 +217,7 @@ const server=http.createServer(async(req,res)=>{
       }
       send(res,404,{error:'接口不存在'});return;
     }
-    const files={'/':'index.html','/app.js':'app.js','/report.js':'report.js','/charts.js':'charts.js','/trial-model.js':'trial-model.js','/style.css':'style.css'};
+    const files={'/':'index.html','/app.js':'app.js','/report.js':'report.js','/portable.js':'portable.js','/charts.js':'charts.js','/trial-model.js':'trial-model.js','/style.css':'style.css'};
     if(req.method!=='GET'||!files[url.pathname]){res.writeHead(404);res.end();return}
     const name=files[url.pathname];let data=await readFile(path.join(root,'public',name));if(name==='index.html')data=Buffer.from(data.toString().replace('__TOKEN__',token));
     res.writeHead(200,{'Content-Type':name.endsWith('.html')?'text/html; charset=utf-8':name.endsWith('.js')?'text/javascript; charset=utf-8':'text/css; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' blob:; object-src 'none'; frame-ancestors 'none'"});res.end(data);
