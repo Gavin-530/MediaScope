@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
 import {parseReport} from '../public/report.js';
+import * as portable from '../public/portable.js';
 import * as trial from '../public/trial-model.js';
 
 const base={schema:'MediaScope/0.2',file:'D:\\已移动\\源.mp4',size:12345,raw:{format:{duration:'1.25'},streams:[{index:0,codec_type:'video',codec_name:'h264',width:16,height:16}]},commands:[{args:['原始参数']}],unknownEvidence:{precise:0.12345678901234568}};
@@ -21,7 +22,7 @@ function frontend(){
  const tabs=['inspect','compare','trial'].map(mode=>Object.assign(node('.tab-'+mode),{dataset:{mode}}));
  const document={querySelector:node,querySelectorAll:s=>s==='.tab'?tabs:[]};
  const chart=(host,data,options)=>{plots.push({id:host.id,data,options});return {dispose(){},setRange(){},select(){}}};
- const context=vm.createContext({document,...trial,parseReport,plot:chart,gopOverview:chart,console,setTimeout,setInterval(){},fetch(){throw Error('导入不应访问网络')}});
+ const context=vm.createContext({document,...trial,...portable,parseReport,plot:chart,gopOverview:chart,Blob,console,setTimeout,setInterval(){},fetch(){throw Error('导入不应访问网络')}});
  vm.runInContext(source,context);
  const lookup=id=>node(/^#(result|result-title|summary|details|export)$/.test(id)?'#'+vm.runInContext('activeMode',context)+'-'+id.slice(1):id);
  return {context,node:lookup,preview:()=>JSON.stringify({summary:lookup('#summary').innerHTML,details:lookup('#details').innerHTML,frames:node('#frames').innerHTML,detail:node('#frame-detail').innerHTML,plots},(k,v)=>typeof v==='function'?undefined:v),clear:()=>{plots.length=0}};
@@ -147,4 +148,46 @@ test('paused queue stays actionable and cancelled work has a visible retry',asyn
  assert.doesNotMatch(app.node('#queue-list').innerHTML,/first\.mov/);
  assert.match(app.node('#queue-history-list').innerHTML,/first\.mov.*重新排队/);
  assert.match(app.node('#queue-history-list').innerHTML,/data-action="retry"/);
+});
+
+test('a result table imports multiple reports of the same mode without changing their measurements',async()=>{
+ const app=frontend(),a=structuredClone(fixtures[1]),b=structuredClone(fixtures[1]);b.file='D:\\second.mp4';b.frames[0].bytes=999;
+ const saved=portable.makePortable('results',{results:[{entryId:'a',report:a},{entryId:'b',report:b}]});
+ app.node('#import-kind').value='results';app.context.fetch=async()=>({ok:true,json:async()=>({queueRunning:false,jobs:[]})});
+ const input=app.node('#import-report');input.files=[{name:'MediaScope-queue.json',size:100,text:async()=>JSON.stringify(saved)}];await input.onchange({target:input});
+ assert.match(app.node('#task-message').textContent,/2 份结果/);
+ const list=app.node('#result-list').innerHTML,ids=[...list.matchAll(/data-result-open="([^"]+)"/g)].map(x=>x[1]);assert.equal(ids.length,2);
+ for(const [id,expected]of [[ids[0],a],[ids[1],b]]){
+  await app.node('#result-list').onclick({target:{closest(){return {dataset:{resultOpen:id}}}}});
+  assert.equal(vm.runInContext('JSON.stringify(report)',app.context),JSON.stringify(expected));
+ }
+});
+
+test('a mismatched portable file is rejected without replacing the visible report',async()=>{
+ const app=frontend();app.context.currentReport=fixtures[1];vm.runInContext('render(currentReport)',app.context);const before=app.preview();
+ app.node('#import-kind').value='plan';
+ const saved=portable.makePortable('results',{results:[{entryId:'a',report:fixtures[1]}]});
+ const input=app.node('#import-report');input.files=[{name:'wrong.json',size:100,text:async()=>JSON.stringify(saved)}];await input.onchange({target:input});
+ assert.match(app.node('#task-message').textContent,/类型与文件内容不一致/);assert.equal(app.preview(),before);
+});
+
+test('result export keeps every original report and the bundle keeps results separate from plans',async()=>{
+ const app=frontend();app.context.fetch=async url=>({ok:true,json:async()=>url.endsWith('/plans')?portable.makePortable('plan',{plans:[{entryId:'waiting',input:{type:'inspect',file:'D:\\wait.mp4'}}]}):{queueRunning:false,jobs:[]}});
+ const saved=portable.makePortable('results',{results:[{entryId:'a',report:fixtures[1]},{entryId:'b',report:fixtures[2]}]});
+ app.node('#import-kind').value='results';const input=app.node('#import-report');input.files=[{name:'results.json',size:100,text:async()=>JSON.stringify(saved)}];await input.onchange({target:input});
+ app.context.exported=null;vm.runInContext('download=(text,name)=>{exported={value:JSON.parse(text),name}}',app.context);
+ app.node('#export-kind').value='bundle';await app.node('#export-portable').onclick();
+ const exported=app.context.exported;assert.match(exported.name,/^MediaScope-bundle-\d{8}-\d{6}\.json$/);
+ assert.equal(exported.value.kind,'bundle');assert.equal(JSON.stringify(exported.value.results.map(x=>x.report)),JSON.stringify([fixtures[1],fixtures[2]]));
+ assert.equal(JSON.stringify(exported.value.plans),JSON.stringify([{entryId:'waiting',input:{type:'inspect',file:'D:\\wait.mp4'}}]));
+});
+
+test('bundle import sends only plans to the queue and keeps reports in the result list',async()=>{
+ const app=frontend(),calls=[];app.context.fetch=async(url,options)=>{calls.push({url,body:options?.body});return {ok:true,json:async()=>url.endsWith('/plans/import')?{imported:1,ids:['new-job'],queueRunning:false}:{queueRunning:false,jobs:[]}}};
+ const value=portable.makePortable('bundle',{results:[{entryId:'finished',report:fixtures[3]}],plans:[{entryId:'waiting',input:{type:'inspect',file:'D:\\wait.mp4'}}]});
+ app.node('#import-kind').value='bundle';const input=app.node('#import-report');input.files=[{name:'bundle.json',size:100,text:async()=>JSON.stringify(value)}];await input.onchange({target:input});
+ const submission=calls.find(x=>x.url.endsWith('/plans/import'));assert.ok(submission);
+ const body=JSON.parse(submission.body);assert.equal(body.plans.length,1);assert.equal(body.plans[0].input.file,'D:\\wait.mp4');assert.equal(body.results,undefined);
+ assert.equal((app.node('#result-list').innerHTML.match(/data-result-open=/g)||[]).length,1);
+ assert.equal(vm.runInContext('report',app.context),null);
 });

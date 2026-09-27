@@ -111,3 +111,26 @@ test('cancelled and failed tasks can be requeued while paused and resume with la
  assert.equal((await finished(later.id)).status,'done');
  assert.equal((await request('jobs/'+first.id+'/retry','POST',{})).status,409);
 });
+
+test('plan export is ordered and plan import validates every item before replacing or starting work',async()=>{
+ await request('queue','POST',{action:'pause'});
+ const first=(await(await request('jobs','POST',{type:'analyze',file:source,stream:null,complexity:false,enqueue:true})).json()).id;
+ const second=(await(await request('jobs','POST',{type:'inspect',file:source,enqueue:true})).json()).id;
+ const saved=await(await request('plans')).json();
+ assert.equal(saved.schema,'MediaScopePlan/1');
+ assert.deepEqual(saved.plans.map(p=>p.entryId),[first,second]);
+ assert.deepEqual(saved.plans.map(p=>p.input.type),['analyze','inspect']);
+ assert.equal(saved.plans[0].input.enqueue,undefined);
+ const before=(await(await request('status')).json()).jobs.filter(j=>j.status==='queued').map(j=>j.id);
+ const malformed=await request('plans/import','POST',{mode:'replace',start:true,plans:[saved.plans[0],{entryId:'bad',input:{type:'compare',reference:source,candidate:source,metrics:['psnr']}}]});
+ assert.equal(malformed.status,400);
+ assert.deepEqual((await(await request('status')).json()).jobs.filter(j=>j.status==='queued').map(j=>j.id),before);
+ const appended=await request('plans/import','POST',{mode:'append',start:false,plans:[saved.plans[1]]});
+ assert.equal(appended.status,200);
+ assert.equal((await(await request('plans')).json()).plans.length,3);
+ const replaced=await request('plans/import','POST',{mode:'replace',start:true,plans:[saved.plans[1]]});
+ assert.equal(replaced.status,200);
+ const id=(await replaced.json()).ids[0];assert.equal((await finished(id)).status,'done');
+ const remaining=(await(await request('plans')).json()).plans;
+ assert.equal(remaining.length,0);
+});
