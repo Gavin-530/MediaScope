@@ -1,6 +1,9 @@
 # Compatible with Windows PowerShell 5.1; no preinstalled Node.js is needed.
 $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
+# PowerShell 7 can pass its module path through cmd.exe to Windows PowerShell 5.1.
+# Prefer the current host's built-in modules so commands such as Get-FileHash resolve.
+$env:PSModulePath="$PSHOME\Modules;$env:PSModulePath"
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 function Read-Json($Path) { Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json }
 function Write-Json($Path,$Value) {

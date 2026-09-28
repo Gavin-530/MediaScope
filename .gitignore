@@ -1,4 +1,6 @@
+# Ignored does not mean disposable; see local-data-policy.json.
 .mediascope/
 test-work/
 .build/
-releases/*.zip
+/local-test-archive/
+releases/**/*.zip

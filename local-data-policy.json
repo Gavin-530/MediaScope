@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "rules": [
+    { "path": "local-test-archive", "class": "protected", "reason": "Original test evidence; keep permanently" },
+    { "path": ".mediascope", "class": "protected", "reason": "Source-run user reports and failure records" },
+    { "path": "releases", "class": "protected", "reason": "Release archives; Git ignore is not a deletion policy" },
+    { "path": "test-work/acceptance-20260921", "class": "protected", "reason": "Historical acceptance report and comparison data" },
+    { "path": "test-work", "class": "mixed", "reason": "Generated fixtures and protected acceptance data share this root" },
+    { "path": ".build", "class": "mixed", "reason": "Cache, build stages, diagnostics and unfinished evidence" },
+    { "path": ".build/downloads", "class": "cache", "reason": "Upstream runtime downloads; costly to fetch again" },
+    { "path": ".build/evidence-staging", "class": "pending", "reason": "May contain a test log that failed to archive" }
+  ]
+}

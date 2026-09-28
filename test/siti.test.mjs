@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdir,mkdtemp} from 'node:fs/promises';
+import {mkdir,mkdtemp,rm} from 'node:fs/promises';
 import path from 'node:path';
 import {FF,run,scan} from '../engine.mjs';
 import {complexity} from '../analysis.mjs';
@@ -43,6 +43,8 @@ test('frame parallel SI/TI exactly preserves every sample and aggregate',async()
       assert.equal(commands.length,sitiWorkerCount(stream,frames.length,3),'cancellation must not start serial fallback');
     }
   }
+  assert.ok(path.resolve(dir).startsWith(path.resolve('test-work')+path.sep),'fixture must stay inside test-work');
+  await rm(dir,{recursive:true,force:true});
 });
 
 test('unknown counts, tiny clips and explicit serial mode remain serial',()=>{
