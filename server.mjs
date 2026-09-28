@@ -10,7 +10,7 @@ import { FF,FP,run,probe,video,scan,summarize,compare,normalizeMediaPath,decodeT
 import {allPackets,structure,traceStructure,mapStructure,metadataSummary,complexity,trial,trialOptions} from './analysis.mjs';
 import {makePortable,maxPortableBytes} from './public/portable.js';
 const root=path.dirname(fileURLToPath(import.meta.url)),token=randomBytes(24).toString('hex'),jobs=new Map();
-const port=Number(process.env.PORT||4317),origin=`http://127.0.0.1:${port}`;
+const port=Number(process.env.PORT||4317);let origin=`http://127.0.0.1:${port}`;
 const execFileAsync=promisify(execFile);
 let active=null,pickerActive=false,queueRunning=false;
 const inputs=new Map();
@@ -84,7 +84,7 @@ function createJob(input){
   pump();return job;
 }
 async function execute(job,input){
-  const cwd=path.join(root,'.mediascope',job.id);await mkdir(cwd,{recursive:true});
+  const cwd=path.join(process.env.MEDIASCOPE_DATA_DIR || path.join(root,'.mediascope'),job.id);await mkdir(cwd,{recursive:true});
   await writeFile(path.join(cwd,'job-input.json'),JSON.stringify(input,null,2));
   const started=performance.now(),stages=[];
   const publish=value=>{
@@ -167,7 +167,7 @@ async function execute(job,input){
 }
 const server=http.createServer(async(req,res)=>{
   try{
-    if(req.headers.host!==`127.0.0.1:${port}`){send(res,403,{error:'仅允许本机地址'});return}
+    if(req.headers.host!==new URL(origin).host){send(res,403,{error:'仅允许本机地址'});return}
     const url=new URL(req.url,origin);
     if(url.pathname.startsWith('/api/')){
       if(req.headers['x-mediascope-token']!==token||(req.headers.origin&&req.headers.origin!==origin)){send(res,403,{error:'访问校验失败，请刷新本机页面'});return}
@@ -223,6 +223,6 @@ const server=http.createServer(async(req,res)=>{
     res.writeHead(200,{'Content-Type':name.endsWith('.html')?'text/html; charset=utf-8':name.endsWith('.js')?'text/javascript; charset=utf-8':'text/css; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' blob:; object-src 'none'; frame-ancestors 'none'"});res.end(data);
   }catch(e){send(res,400,{error:e.message})}
 });
-server.listen(port,'127.0.0.1',()=>console.log(`MediaScope 已启动：${origin}\n保持窗口运行，浏览器打开以上地址。Ctrl+C 停止。\n${versions.ffmpeg}`));
+server.listen(port,'127.0.0.1',()=>{origin=`http://127.0.0.1:${server.address().port}`;console.log(`MediaScope 已启动：${origin}\n保持窗口运行，浏览器打开以上地址。Ctrl+C 停止。\n${versions.ffmpeg}`)});
 server.on('error',e=>{console.error(e.message);process.exitCode=1});
 process.on('SIGINT',()=>{queueRunning=false;for(const j of jobs.values())j.controller.abort();server.close(()=>process.exit())});

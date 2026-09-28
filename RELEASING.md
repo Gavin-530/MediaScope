@@ -4,21 +4,23 @@
 
 ## 发布说明原则
 
-- Git Tag、`package.json` 版本、Release 标题和附件文件名必须一致。
+- Git Tag 使用 `v<version>`，Release 标题沿用 `MediaScope <version>`，附件文件名中的版本与 `package.json` 一致。
 - Release 正文使用 `.github/RELEASE_TEMPLATE.md`，主要章节统一使用二级标题。
+- 正文只固定“本次更新”和“校验”；“本次更新”用一个列表列出用户可感知的变化。其他确有必要的信息按实际情况补充，不要求特定栏目。
+- 固定的下载、环境要求和启动方式由 `README.md` 维护；本版本若改变了相关要求，在发布说明中如实写明。
 - 保留版本实际变化，不为了排版统一而合并、扩写或重新解释技术事实。
 - 自动化测试只报告可追溯的通过数；不粘贴完整终端日志。
 - 没有可靠历史记录时省略相应章节，不补造验证或兼容性结论。
-- SHA-256 固定放在“下载与校验”章节，并与确切附件文件名写在同一校验记录中。
+- SHA-256 固定放在“校验”章节，并与确切附件文件名写在同一校验记录中。
 
-## 预发布检查
+## 发布前检查
 
 1. 确认工作区只包含计划发布的变化。
-2. 确认 `package.json` 版本与目标 Tag 一致。
+2. 确认目标 Tag 为 `v<version>`，去掉前缀 `v` 后与 `package.json` 中的版本完全一致；包内版本与 ZIP 文件名不加 `v`。
 3. 运行 `npm test`，保存通过数及失败数；任何失败都不得发布。
-4. 运行 `scripts/package-prerelease.ps1 -Version <version>` 生成轻量预发布包；正式版仅在明确指定时使用 `scripts/package.ps1 -Version <version> -Formal`。
-5. 运行 `scripts/verify-release.ps1 -Archive <zip>`，核对归档文件数及 SHA-256。
-6. 从 `.github/RELEASE_TEMPLATE.md` 创建 Release 草稿，逐项核对正文中的版本、文件名、测试数和 SHA-256。
+4. 运行 `scripts/package.ps1 -Version <version>`，只生成一个 Windows x64 联网部署包。不得覆盖已存在的包或暂存目录。
+5. 运行 `scripts/verify-release.ps1 -Archive <zip> -Deployment`，核对归档文件数、实际字节数及 SHA-256；另运行 `scripts/test-deployment.ps1 -Archive <zip> -Online` 验证真实首次联网安装。部署验证必须覆盖环境复用、已有环境与变化检测、切回推荐环境、升级与回退、损坏下载、兼容性失败和用户数据保护。人工检查首次检测通过后的双选项弹窗、没有合格本地环境时的下载提示，以及已选择本地环境失效后的确认弹窗与拒绝路径。运行锁定私有环境下的应用回归测试；记录未验证的 Windows/运行时版本。产品说明必须注明选择推荐环境时首次安装需要联网。
+6. 从 `.github/RELEASE_TEMPLATE.md` 创建 Release 草稿，删除提示、占位符及无内容的小节，逐项核对正文中的版本、附件文件名、测试数（若填写）和 SHA-256。
 7. 检查正文只包含本版本能够直接支持的事实。
 8. 先上传全部附件并再次核对摘要，再发布 Release。
 
