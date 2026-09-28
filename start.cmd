@@ -1,33 +1,19 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-if exist "%~dp0runtime\node.exe" set "PATH=%~dp0runtime;%PATH%"
-if exist "%~dp0runtime\ffmpeg.exe" set "FFMPEG_PATH=%~dp0runtime\ffmpeg.exe"
-if exist "%~dp0runtime\ffprobe.exe" set "FFPROBE_PATH=%~dp0runtime\ffprobe.exe"
+if exist "%~dp0MANIFEST.json" goto package
 where node >nul 2>nul
 if errorlevel 1 (
-  echo [MediaScope] Node.js 22 or newer was not found in PATH.
-  echo Install Node.js, then run this file again.
+  echo [MediaScope] Source checkout requires Node.js 22 or newer in PATH.
   pause
   exit /b 1
 )
-if not defined FFMPEG_PATH (
-  where ffmpeg >nul 2>nul
-  if errorlevel 1 (
-    echo [MediaScope] FFmpeg was not found in PATH.
-    echo Install FFmpeg or set FFMPEG_PATH, then run this file again.
-    pause
-    exit /b 1
-  )
-)
-if not defined FFPROBE_PATH (
-  where ffprobe >nul 2>nul
-  if errorlevel 1 (
-    echo [MediaScope] FFprobe was not found in PATH.
-    echo Install FFmpeg or set FFPROBE_PATH, then run this file again.
-    pause
-    exit /b 1
-  )
-)
 node server.mjs
-pause
+set "EXIT_CODE=%errorlevel%"
+if not "%EXIT_CODE%"=="0" pause
+exit /b %EXIT_CODE%
+:package
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\manage.ps1" -Action Launch
+set "EXIT_CODE=%errorlevel%"
+if not "%EXIT_CODE%"=="0" pause
+exit /b %EXIT_CODE%
