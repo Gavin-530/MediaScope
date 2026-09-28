@@ -117,7 +117,8 @@ test('plan export is ordered and plan import validates every item before replaci
  const first=(await(await request('jobs','POST',{type:'analyze',file:source,stream:null,complexity:false,enqueue:true})).json()).id;
  const second=(await(await request('jobs','POST',{type:'inspect',file:source,enqueue:true})).json()).id;
  const saved=await(await request('plans')).json();
- assert.equal(saved.schema,'MediaScopePlan/1');
+ assert.equal(saved.schema,'MediaScope/0.3');
+ assert.deepEqual(saved.results,[]);
  assert.deepEqual(saved.plans.map(p=>p.entryId),[first,second]);
  assert.deepEqual(saved.plans.map(p=>p.input.type),['analyze','inspect']);
  assert.equal(saved.plans[0].input.enqueue,undefined);

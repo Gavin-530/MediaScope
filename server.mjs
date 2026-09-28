@@ -174,12 +174,12 @@ const server=http.createServer(async(req,res)=>{
       if(req.method==='GET'&&url.pathname==='/api/status'){send(res,200,{...capabilities,queueRunning,jobs:[...jobs.values()].map(({controller,result,...j})=>j)});return}
       if(req.method==='GET'&&url.pathname==='/api/plans'){
         const plans=[...jobs.values()].filter(j=>j.status==='queued').map(j=>{try{return {entryId:j.id,input:validatePlanInput(portableInput(inputs.get(j.id)))}}catch(e){throw Error(`待运行任务 ${j.id} 无法安全导出：${e.message}`)}});
-        send(res,200,makePortable('plan',{plans}));return;
+        send(res,200,makePortable({plans}));return;
       }
       if(req.method==='POST'&&url.pathname==='/api/plans/import'){
         const request=await body(req,maxPortableBytes);
         if(!['append','replace'].includes(request.mode)||typeof request.start!=='boolean'||!Array.isArray(request.plans)||request.plans.length>10000)throw Error('计划导入选项无效');
-        makePortable('plan',{plans:request.plans});
+        makePortable({plans:request.plans});
         const imported=request.plans.map((entry,i)=>{if(!entry||typeof entry!=='object'||typeof entry.entryId!=='string')throw Error(`计划第 ${i+1} 项格式错误`);try{return validatePlanInput(entry.input)}catch(e){throw Error(`计划第 ${i+1} 项：${e.message}`)}});
         queueRunning=false;
         if(request.mode==='replace')for(const [id,j]of jobs)if(j.status==='queued'){jobs.delete(id);inputs.delete(id)}

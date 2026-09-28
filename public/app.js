@@ -1,4 +1,3 @@
-import {parseReport} from './report.js';
 import {parsePortable,makePortable,maxPortableBytes} from './portable.js';
 import {plot,gopOverview} from './charts.js';
 import {parseCrfs,rowLabel,trialValue,trialPlotData,trialFramePlotData,metricLabels,trialSortFields,sortTrialRows} from './trial-model.js';
@@ -130,32 +129,36 @@ $('#trial').onclick=()=>{try{launch(trialInput())}catch(e){message(e.message,tru
 function timestamp(){const d=new Date(),pad=n=>String(n).padStart(2,'0');return `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`}
 function safeName(value){return String(value||'media').replace(/\.[^.\\/]+$/,'').replace(/[<>:"/\\|?*\x00-\x1f]/g,'_').replace(/[. ]+$/,'').slice(0,64)||'media'}
 function reportName(r){const first=r.file||r.source?.file||r.reference?.file,second=r.candidate?.file,media=safeName(fileName(first))+(second?'_vs_'+safeName(fileName(second)):'');return `MediaScope-${r.type}-${media.slice(0,100)}-${timestamp()}.json`}
-for(const mode of modes)document.querySelector('#'+mode+'-export').onclick=()=>{const saved=reports[mode];if(saved)download(JSON.stringify(saved,null,2),reportName(saved),'application/json')};
+function downloadPortable(results,plans,name){
+ const json=JSON.stringify(makePortable({results,plans}),null,2);
+ if(new Blob([json]).size>maxPortableBytes)throw Error('导出文件超过 256 MiB；请勾选较少的结果，确保文件能够重新导入');
+ download(json,name,'application/json');
+}
+for(const mode of modes)document.querySelector('#'+mode+'-export').onclick=()=>{const saved=reports[mode];if(saved)try{downloadPortable([{entryId:'current-report',report:saved}],[],reportName(saved))}catch(e){message(e.message,true)}};
 function syncPortableControls(){
- const importingKind=$('#import-kind').value||'report',hasResults=['results','bundle'].includes(importingKind),hasPlans=['plan','bundle'].includes(importingKind);
+ const hasResults=$('#import-results').checked,hasPlans=$('#import-plans').checked;
  for(const id of ['#import-results-mode','#import-results-mode-label'])$(id).classList.toggle('hidden',!hasResults);
  for(const id of ['#import-plan-mode','#import-plan-mode-label','#import-start-label'])$(id).classList.toggle('hidden',!hasPlans);
- const exportingKind=$('#export-kind').value||'report';for(const id of ['#export-scope','#export-scope-label'])$(id).classList.toggle('hidden',exportingKind==='report');
 }
-$('#import-kind').onchange=syncPortableControls;$('#export-kind').onchange=syncPortableControls;syncPortableControls();
+$('#import-results').onchange=syncPortableControls;$('#import-plans').onchange=syncPortableControls;syncPortableControls();
 async function portableExport(){
- const kind=$('#export-kind').value||'report';
- if(kind==='report'){if(!report)throw Error('请先打开一份报告');download(JSON.stringify(report,null,2),reportName(report),'application/json');return}
- const scope=$('#export-scope').value||'all',results=[],plans=[];
- if(['results','bundle'].includes(kind)){
-  const chosen=resultItems().filter(item=>scope==='all'||selectedResults.has(item.id));
-  if(scope==='selected'&&chosen.length!==selectedResults.size)throw Error('勾选的结果已变化，请重新确认导出范围');
+ const resultScope=$('#export-result-scope').value||'all',planScope=$('#export-plan-scope').value||'none',results=[],plans=[];
+ if(resultScope==='current'){
+  if(!report)throw Error('请先打开一份报告');
+  results.push({entryId:'current-report',report});
+ }else if(resultScope!=='none'){
+  const chosen=resultItems().filter(item=>resultScope==='all'||selectedResults.has(item.id));
+  if(resultScope==='selected'&&chosen.length!==selectedResults.size)throw Error('勾选的结果已变化，请重新确认导出范围');
   for(const item of chosen)results.push({entryId:item.id,report:item.report||await api('jobs/'+item.id+'/report')});
  }
- if(['plan','bundle'].includes(kind)){
-  const saved=await api('plans'),chosen=saved.plans.filter(item=>scope==='all'||selectedPlans.has(item.entryId));
-  if(scope==='selected'&&chosen.length!==selectedPlans.size)throw Error('勾选的待运行任务已变化，请重新确认导出范围');
+ if(planScope!=='none'){
+  const saved=await api('plans'),chosen=saved.plans.filter(item=>planScope==='all'||selectedPlans.has(item.entryId));
+  if(planScope==='selected'&&chosen.length!==selectedPlans.size)throw Error('勾选的待运行任务已变化，请重新确认导出范围');
   plans.push(...chosen);
  }
- if(!results.length&&!plans.length)throw Error(scope==='selected'?'请先勾选要导出的结果或计划':'当前没有可导出的结果或计划');
- const value=makePortable(kind,{results,plans}),json=JSON.stringify(value,null,2);
- if(new Blob([json]).size>maxPortableBytes)throw Error('导出文件超过 256 MiB；请勾选较少的结果，确保文件能够重新导入');
- download(json,`MediaScope-${kind==='results'?'queue':kind==='plan'?'plan':'bundle'}-${timestamp()}.json`,'application/json');
+ if(!results.length&&!plans.length)throw Error('当前选择没有可导出的结果或计划');
+ const name=resultScope==='current'&&!plans.length?reportName(report):`MediaScope-${results.length&&plans.length?'bundle':results.length?'queue':'plan'}-${timestamp()}.json`;
+ downloadPortable(results,plans,name);
 }
 $('#export-portable').onclick=async()=>{const button=$('#export-portable');button.disabled=true;try{await portableExport()}catch(e){message(e.message,true)}finally{button.disabled=false}};
 $('#import-button').onclick=()=>$('#import-report').click();
@@ -165,23 +168,24 @@ $('#import-report').onchange=async e=>{
  importing=true;busy(true);message('正在读取并校验 JSON…');
  try{
   if(f.size>maxPortableBytes)throw Error('JSON 文件超过 256 MiB 导入上限');
-  const kind=$('#import-kind').value||'report',saved=await f.text();
+  const useResults=$('#import-results').checked,usePlans=$('#import-plans').checked;
+  if(!useResults&&!usePlans)throw Error('请至少选择一项导入内容');
+  const saved=await f.text();
   if(current)throw Error('分析任务正在运行，请在任务完成后导入');
-  if(kind==='report'){
-   const data=parseReport(saved),previous=reports[modeOf(data)];
-   try{render(data)}catch(err){if(previous)render(previous);else document.querySelector('#'+modeOf(data)+'-result').classList.add('hidden');throw Error('报告无法完整显示：'+err.message)}
-   importedResults.push({id:`imported-${Date.now()}-${++importSequence}`,report:data});renderResultList();switchMode(modeOf(data));
-   message('已导入 '+f.name+'；使用保存的原始测量数据，无需原媒体文件或重新计算。');
-  }else{
-   const data=parsePortable(saved);if(data.kind!==kind)throw Error('所选导入类型与文件内容不一致');
-   if(['plan','bundle'].includes(kind))await api('plans/import',{method:'POST',body:JSON.stringify({plans:data.plans,mode:$('#import-plan-mode').value||'append',start:!!$('#import-start').checked})});
-   if(['results','bundle'].includes(kind)){
-    const incoming=data.results.map(item=>({id:`imported-${Date.now()}-${++importSequence}`,report:item.report}));
-    if(($('#import-results-mode').value||'append')==='replace'){for(const item of importedResults)selectedResults.delete(item.id);importedResults=[]}
-    importedResults.push(...incoming);resultView='';renderResultList();
-   }
-   await poll();message(`已导入 ${f.name}：${data.results?.length??0} 份结果、${data.plans?.length??0} 项计划。结果不重新计算；计划按所选方式进入待运行队列。`);
+  const data=parsePortable(saved),results=useResults?data.results:[],plans=usePlans?data.plans:[];
+  if(!results.length&&!plans.length)throw Error('文件中没有所选的可导入内容');
+  if(results.length===1&&!plans.length){
+   const shown=results[0].report,previous=reports[modeOf(shown)];
+   try{render(shown)}catch(err){if(previous)render(previous);else document.querySelector('#'+modeOf(shown)+'-result').classList.add('hidden');throw Error('报告无法完整显示：'+err.message)}
   }
+  if(plans.length)await api('plans/import',{method:'POST',body:JSON.stringify({plans,mode:$('#import-plan-mode').value||'append',start:!!$('#import-start').checked})});
+  if(results.length){
+   const incoming=results.map(item=>({id:`imported-${Date.now()}-${++importSequence}`,report:item.report}));
+   if(($('#import-results-mode').value||'append')==='replace'){for(const item of importedResults)selectedResults.delete(item.id);importedResults=[]}
+   importedResults.push(...incoming);resultView='';renderResultList();
+  }
+  if(results.length===1&&!plans.length)switchMode(modeOf(results[0].report));
+  await poll();message(`已导入 ${f.name}：${results.length} 份结果、${plans.length} 项计划。结果使用保存的原始数据，不重新计算。`);
  }catch(err){message(err.message,true)}finally{importing=false;busy(!!current);input.value=''}
 };
 function download(text,name,type){
