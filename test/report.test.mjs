@@ -18,7 +18,7 @@ const source=(await readFile(new URL('../public/app.js',import.meta.url),'utf8')
 function frontend(){
  const nodes=new Map(),plots=[];
  const classList=()=>{const values=new Set();return {add:v=>values.add(v),remove:v=>values.delete(v),contains:v=>values.has(v),toggle(v,on){if(on??!values.has(v))values.add(v);else values.delete(v)}}};
- const node=id=>{if(!nodes.has(id))nodes.set(id,{id,value:({'#rd-axis':'videoKiB','#rd-metric':'psnr','#trial-row':'0','#trial-frame-metric':'psnr','#trial-crfs':'20'})[id]??'',content:'token',innerHTML:'',textContent:'',classList:classList(),addEventListener(){},querySelectorAll(){return []},click(){this.onclick?.()}});return nodes.get(id)};
+ const node=id=>{if(!nodes.has(id))nodes.set(id,{id,value:({'#rd-axis':'videoKiB','#rd-metric':'psnr','#trial-row':'0','#trial-frame-metric':'psnr','#trial-crfs':'20','#export-result-scope':'all','#export-plan-scope':'none'})[id]??'',checked:['#import-results','#import-plans'].includes(id),content:'token',innerHTML:'',textContent:'',classList:classList(),addEventListener(){},querySelectorAll(){return []},click(){this.onclick?.()}});return nodes.get(id)};
  const tabs=['inspect','compare','trial'].map(mode=>Object.assign(node('.tab-'+mode),{dataset:{mode}}));
  const document={querySelector:node,querySelectorAll:s=>s==='.tab'?tabs:[]};
  const chart=(host,data,options)=>{plots.push({id:host.id,data,options});return {dispose(){},setRange(){},select(){}}};
@@ -94,7 +94,7 @@ test('tabs retain their own report DOM and controls without redrawing or replaci
  vm.runInContext("switchMode('trial')",app.context);
  assert.equal(app.node('#trial-details'),details);assert.equal(details.innerHTML,html);assert.equal(app.node('#trial-frame-metric').value,'ssim');
  assert.equal(JSON.parse(app.preview()).plots.length,0);
- app.context.exported=null;vm.runInContext('download=(text)=>{exported=JSON.parse(text)}',app.context);app.node('#trial-export').click();assert.equal(app.context.exported.type,'trial');
+ app.context.exported=null;vm.runInContext('download=(text)=>{exported=JSON.parse(text)}',app.context);app.node('#trial-export').click();assert.equal(app.context.exported.schema,portable.portableSchema);assert.equal(app.context.exported.results[0].report.type,'trial');
 });
 test('completion in another tab preserves the selected report and keeps it browsable during computation',async()=>{
  const app=frontend();app.context.media=fixtures[1];
@@ -152,8 +152,8 @@ test('paused queue stays actionable and cancelled work has a visible retry',asyn
 
 test('a result table imports multiple reports of the same mode without changing their measurements',async()=>{
  const app=frontend(),a=structuredClone(fixtures[1]),b=structuredClone(fixtures[1]);b.file='D:\\second.mp4';b.frames[0].bytes=999;
- const saved=portable.makePortable('results',{results:[{entryId:'a',report:a},{entryId:'b',report:b}]});
- app.node('#import-kind').value='results';app.context.fetch=async()=>({ok:true,json:async()=>({queueRunning:false,jobs:[]})});
+ const saved=portable.makePortable({results:[{entryId:'a',report:a},{entryId:'b',report:b}]});
+ app.context.fetch=async()=>({ok:true,json:async()=>({queueRunning:false,jobs:[]})});
  const input=app.node('#import-report');input.files=[{name:'MediaScope-queue.json',size:100,text:async()=>JSON.stringify(saved)}];await input.onchange({target:input});
  assert.match(app.node('#task-message').textContent,/2 份结果/);
  const list=app.node('#result-list').innerHTML,ids=[...list.matchAll(/data-result-open="([^"]+)"/g)].map(x=>x[1]);assert.equal(ids.length,2);
@@ -163,31 +163,83 @@ test('a result table imports multiple reports of the same mode without changing 
  }
 });
 
-test('a mismatched portable file is rejected without replacing the visible report',async()=>{
+test('a damaged unified file is rejected without replacing the visible report',async()=>{
  const app=frontend();app.context.currentReport=fixtures[1];vm.runInContext('render(currentReport)',app.context);const before=app.preview();
- app.node('#import-kind').value='plan';
- const saved=portable.makePortable('results',{results:[{entryId:'a',report:fixtures[1]}]});
+ const saved={...portable.makePortable({results:[{entryId:'a',report:fixtures[1]}]}),plans:undefined};
  const input=app.node('#import-report');input.files=[{name:'wrong.json',size:100,text:async()=>JSON.stringify(saved)}];await input.onchange({target:input});
- assert.match(app.node('#task-message').textContent,/类型与文件内容不一致/);assert.equal(app.preview(),before);
+ assert.match(app.node('#task-message').textContent,/plans/);assert.equal(app.preview(),before);
 });
 
 test('result export keeps every original report and the bundle keeps results separate from plans',async()=>{
- const app=frontend();app.context.fetch=async url=>({ok:true,json:async()=>url.endsWith('/plans')?portable.makePortable('plan',{plans:[{entryId:'waiting',input:{type:'inspect',file:'D:\\wait.mp4'}}]}):{queueRunning:false,jobs:[]}});
- const saved=portable.makePortable('results',{results:[{entryId:'a',report:fixtures[1]},{entryId:'b',report:fixtures[2]}]});
- app.node('#import-kind').value='results';const input=app.node('#import-report');input.files=[{name:'results.json',size:100,text:async()=>JSON.stringify(saved)}];await input.onchange({target:input});
+ const app=frontend();app.context.fetch=async url=>({ok:true,json:async()=>url.endsWith('/plans')?portable.makePortable({plans:[{entryId:'waiting',input:{type:'inspect',file:'D:\\wait.mp4'}}]}):{queueRunning:false,jobs:[]}});
+ const saved=portable.makePortable({results:[{entryId:'a',report:fixtures[1]},{entryId:'b',report:fixtures[2]}]});
+ const input=app.node('#import-report');input.files=[{name:'results.json',size:100,text:async()=>JSON.stringify(saved)}];await input.onchange({target:input});
  app.context.exported=null;vm.runInContext('download=(text,name)=>{exported={value:JSON.parse(text),name}}',app.context);
- app.node('#export-kind').value='bundle';await app.node('#export-portable').onclick();
+ app.node('#export-plan-scope').value='all';await app.node('#export-portable').onclick();
  const exported=app.context.exported;assert.match(exported.name,/^MediaScope-bundle-\d{8}-\d{6}\.json$/);
- assert.equal(exported.value.kind,'bundle');assert.equal(JSON.stringify(exported.value.results.map(x=>x.report)),JSON.stringify([fixtures[1],fixtures[2]]));
+ assert.equal(exported.value.schema,portable.portableSchema);assert.equal(JSON.stringify(exported.value.results.map(x=>x.report)),JSON.stringify([fixtures[1],fixtures[2]]));
  assert.equal(JSON.stringify(exported.value.plans),JSON.stringify([{entryId:'waiting',input:{type:'inspect',file:'D:\\wait.mp4'}}]));
 });
 
 test('bundle import sends only plans to the queue and keeps reports in the result list',async()=>{
  const app=frontend(),calls=[];app.context.fetch=async(url,options)=>{calls.push({url,body:options?.body});return {ok:true,json:async()=>url.endsWith('/plans/import')?{imported:1,ids:['new-job'],queueRunning:false}:{queueRunning:false,jobs:[]}}};
- const value=portable.makePortable('bundle',{results:[{entryId:'finished',report:fixtures[3]}],plans:[{entryId:'waiting',input:{type:'inspect',file:'D:\\wait.mp4'}}]});
- app.node('#import-kind').value='bundle';const input=app.node('#import-report');input.files=[{name:'bundle.json',size:100,text:async()=>JSON.stringify(value)}];await input.onchange({target:input});
+ const value=portable.makePortable({results:[{entryId:'finished',report:fixtures[3]}],plans:[{entryId:'waiting',input:{type:'inspect',file:'D:\\wait.mp4'}}]});
+ const input=app.node('#import-report');input.files=[{name:'bundle.json',size:100,text:async()=>JSON.stringify(value)}];await input.onchange({target:input});
  const submission=calls.find(x=>x.url.endsWith('/plans/import'));assert.ok(submission);
  const body=JSON.parse(submission.body);assert.equal(body.plans.length,1);assert.equal(body.plans[0].input.file,'D:\\wait.mp4');assert.equal(body.results,undefined);
  assert.equal((app.node('#result-list').innerHTML.match(/data-result-open=/g)||[]).length,1);
  assert.equal(vm.runInContext('report',app.context),null);
+});
+
+test('import choices apply only selected content without submitting unchecked plans',async()=>{
+ const app=frontend(),calls=[];app.context.fetch=async(url,options)=>{calls.push({url,body:options?.body});return {ok:true,json:async()=>({queueRunning:false,jobs:[]})}};
+ const value=portable.makePortable({results:[{entryId:'finished',report:fixtures[1]}],plans:[{entryId:'waiting',input:{type:'inspect',file:'D:\\wait.mp4'}}]});
+ app.node('#import-plans').checked=false;app.node('#import-plans').onchange();
+ const input=app.node('#import-report');input.files=[{name:'combined.json',size:100,text:async()=>JSON.stringify(value)}];await input.onchange({target:input});
+ assert.equal(calls.some(x=>x.url.endsWith('/plans/import')),false);
+ assert.equal((app.node('#result-list').innerHTML.match(/data-result-open=/g)||[]).length,1);
+ assert.equal(vm.runInContext('report.type',app.context),'analyze');
+ assert.match(app.node('#task-message').textContent,/1 份结果、0 项计划/);
+});
+
+test('plan-only import and export use the unified schema without touching results',async()=>{
+ const app=frontend(),calls=[],plans=[{entryId:'waiting',input:{type:'inspect',file:'D:\\wait.mp4'}}];
+ app.context.fetch=async(url,options)=>{calls.push({url,body:options?.body});return {ok:true,json:async()=>url.endsWith('/plans')?portable.makePortable({plans}):url.endsWith('/plans/import')?{imported:1,ids:['new-job'],queueRunning:false}:{queueRunning:false,jobs:[]}}};
+ app.node('#import-results').checked=false;app.node('#import-results').onchange();
+ const input=app.node('#import-report');input.files=[{name:'plan.json',size:100,text:async()=>JSON.stringify(portable.makePortable({results:[{entryId:'ignored',report:fixtures[1]}],plans}))}];await input.onchange({target:input});
+ assert.equal(JSON.parse(calls.find(x=>x.url.endsWith('/plans/import')).body).plans.length,1);
+ assert.equal((app.node('#result-list').innerHTML.match(/data-result-open=/g)||[]).length,0);
+ app.context.exported=null;vm.runInContext('download=(text,name)=>{exported={value:JSON.parse(text),name}}',app.context);
+ app.node('#export-result-scope').value='none';app.node('#export-plan-scope').value='all';await app.node('#export-portable').onclick();
+ assert.equal(app.context.exported.value.schema,portable.portableSchema);
+ assert.equal(app.context.exported.value.results.length,0);
+ assert.equal(app.context.exported.value.plans.length,1);
+ assert.match(app.context.exported.name,/^MediaScope-plan-\d{8}-\d{6}\.json$/);
+});
+
+test('current-report export uses the unified schema and preserves its report exactly',async()=>{
+ const app=frontend();app.context.input=fixtures[2];vm.runInContext('render(input)',app.context);
+ app.context.exported=null;vm.runInContext('download=(text,name)=>{exported={value:JSON.parse(text),name}}',app.context);
+ app.node('#export-result-scope').value='current';await app.node('#export-portable').onclick();
+ assert.equal(app.context.exported.value.schema,portable.portableSchema);
+ assert.equal(JSON.stringify(app.context.exported.value.results[0].report),JSON.stringify(fixtures[2]));
+ assert.equal(app.context.exported.value.plans.length,0);
+ assert.match(app.context.exported.name,/^MediaScope-compare-.*\.json$/);
+});
+
+test('selected result and plan scopes independently include only checked rows',async()=>{
+ const app=frontend(),plans=[{entryId:'waiting-1',input:{type:'inspect',file:'D:\\one.mp4'}},{entryId:'waiting-2',input:{type:'inspect',file:'D:\\two.mp4'}}];
+ app.context.fetch=async url=>({ok:true,json:async()=>url.endsWith('/plans')?portable.makePortable({plans}):{queueRunning:false,jobs:[{id:'waiting-1',type:'inspect',file:'D:\\one.mp4',status:'queued'},{id:'waiting-2',type:'inspect',file:'D:\\two.mp4',status:'queued'}]}});
+ const value=portable.makePortable({results:[{entryId:'a',report:fixtures[1]},{entryId:'b',report:fixtures[2]}]});
+ const input=app.node('#import-report');input.files=[{name:'results.json',size:100,text:async()=>JSON.stringify(value)}];await input.onchange({target:input});
+ const resultId=[...app.node('#result-list').innerHTML.matchAll(/data-result-select="([^"]+)"/g)][1][1];
+ app.node('#result-list').onchange({target:{dataset:{resultSelect:resultId},checked:true}});
+ app.node('#queue-list').onchange({target:{dataset:{planSelect:'waiting-2'},checked:true}});
+ app.node('#export-result-scope').value='selected';app.node('#export-plan-scope').value='selected';
+ app.context.exported=null;vm.runInContext('download=(text)=>{exported=JSON.parse(text)}',app.context);await app.node('#export-portable').onclick();
+ assert.equal(app.context.exported.schema,portable.portableSchema);
+ assert.equal(app.context.exported.results.length,1);
+ assert.equal(JSON.stringify(app.context.exported.results[0].report),JSON.stringify(fixtures[2]));
+ assert.equal(app.context.exported.plans.length,1);
+ assert.equal(app.context.exported.plans[0].input.file,'D:\\two.mp4');
 });
