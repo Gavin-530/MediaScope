@@ -1,9 +1,16 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdir,mkdtemp,utimes} from 'node:fs/promises';
+import {mkdir,mkdtemp,rm,utimes} from 'node:fs/promises';
 import path from 'node:path';
 import {FF,run,probe,scan,compare,createComparisonSession} from '../engine.mjs';
 import {allPackets,structure,traceStructure,mapStructure} from '../analysis.mjs';
+
+const testRoot=path.resolve('test-work');
+async function discardSuccessfulFixture(dir){
+  const target=path.resolve(dir);
+  assert.ok(target.startsWith(testRoot+path.sep),'fixture must stay inside test-work');
+  await rm(target,{recursive:true,force:true});
+}
 
 test('shared decoding exactly matches separate metrics, including raw component logs',async()=>{
   await mkdir('test-work',{recursive:true});
@@ -27,6 +34,7 @@ test('shared decoding exactly matches separate metrics, including raw component 
     assert.deepEqual(combined.alignment,baseline.alignment);
     assert.ok(context.commands.every(c=>c.elapsedSeconds>=0&&c.exitCode===0));
   }
+  await discardSuccessfulFixture(root);
 });
 
 test('task reference cache preserves results, still checks candidates, rejects changed reference',async()=>{
@@ -44,6 +52,7 @@ test('task reference cache preserves results, still checks candidates, rejects c
   await assert.rejects(compare(ref,ref,0,0,['psnr'],{...ctx,expectedCandidatePixelFormat:'yuv420p10le'}),/编码输出位深/);
   await utimes(ref,new Date(),new Date(Date.now()+2000));
   await assert.rejects(compare(ref,ref,0,0,['psnr'],ctx),/参考文件.*变化/);
+  await discardSuccessfulFixture(dir);
 });
 
 test('VFR cross-depth shared metrics match separate decoding and keep progressive validation',async()=>{
@@ -60,6 +69,7 @@ test('VFR cross-depth shared metrics match separate decoding and keep progressiv
   const separate=await compare(ten,eight,0,0,['psnr','ssim'],{...ctx,separateMetrics:true},'bt709-limited-8-10');
   assert.deepEqual(combined.metrics,separate.metrics);
   assert.deepEqual(combined.alignment,separate.alignment);
+  await discardSuccessfulFixture(dir);
 });
 
 test('concurrent frame, packet and header passes exactly match sequential structure analysis',async()=>{
@@ -82,4 +92,5 @@ test('concurrent frame, packet and header passes exactly match sequential struct
     assert.deepEqual(tracks,sequentialTracks,path.basename(file)+' packets');
     assert.deepEqual(coding,sequentialCoding,path.basename(file)+' structure');
   }
+  await discardSuccessfulFixture(root);
 });
