@@ -1385,7 +1385,6 @@ button#import-button:hover {
 .task.task-banner {
   background: #e3f2fd !important;
   border: 1px solid var(--accent);
-  box-shadow: 0 8px 32px rgba(74, 144, 226, 0.15);
   padding-right: 48px; /* Avoid overlap with toggle button */
   top: 80px !important;
   z-index: 90; /* Keep it below header but above content */
@@ -1394,7 +1393,7 @@ button#import-button:hover {
   .task.task-banner {
     background: #183329 !important; /* Brighter dark green */
     border-color: rgba(128, 225, 196, 0.4);
-    box-shadow: 0 8px 32px rgba(128, 225, 196, 0.2);
+    box-shadow: var(--panel-shadow);
   }
 }
 .island-header {
