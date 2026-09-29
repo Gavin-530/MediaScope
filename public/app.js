@@ -1706,8 +1706,11 @@ function updateNav() {
   visiblePanels.forEach((panel) => {
     const titleEls = panel.querySelectorAll("h2, h3");
     titleEls.forEach((titleEl) => {
+      if (!titleEl.id) {
+        titleEl.id = "heading-" + Math.random().toString(36).substr(2, 9);
+      }
       const a = document.createElement("a");
-      a.href = "#" + panel.id;
+      a.href = "#" + titleEl.id;
       a.className = "nav-dot";
       a.innerHTML = "<span>" + titleEl.innerText + "</span>";
       nav.appendChild(a);
