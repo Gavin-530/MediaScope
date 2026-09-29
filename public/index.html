@@ -464,42 +464,35 @@
         <div id="result-list"></div>
       </section>
       <section id="task" class="task hidden task-banner" aria-live="polite">
+        <button
+          id="toggle-island"
+          class="toggle-btn"
+          title="切换视图模式"
+          aria-label="切换视图模式"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            width="16"
+            height="16"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            id="toggle-island-icon"
+          >
+            <polyline points="4 14 10 14 10 20"></polyline>
+            <polyline points="20 10 14 10 14 4"></polyline>
+            <line x1="14" y1="10" x2="21" y2="3"></line>
+            <line x1="3" y1="21" x2="10" y2="14"></line>
+          </svg>
+        </button>
         <div class="task-main">
           <div class="task-heading">
             <div style="display: flex; align-items: center; gap: 8px">
-              <strong id="task-label"></strong
-              ><span id="task-phase" class="task-phase hidden"></span>
+              <strong id="task-label"></strong>
+              <span id="task-phase" class="task-phase hidden"></span>
             </div>
-            <button
-              id="toggle-island"
-              class="icon-btn"
-              title="切换视图模式"
-              aria-label="切换视图模式"
-              style="
-                background: transparent;
-                border: none;
-                color: inherit;
-                padding: 4px;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                box-shadow: none;
-              "
-            >
-              <svg
-                viewBox="0 0 24 24"
-                width="18"
-                height="18"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                id="toggle-island-icon"
-              >
-                <path d="M4 14l8-8 8 8" />
-              </svg>
-            </button>
           </div>
           <strong id="task-stage" class="task-stage hidden"></strong>
           <p id="task-message"></p>
