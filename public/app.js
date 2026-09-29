@@ -1689,83 +1689,105 @@ api("status")
   })
   .catch((e) => message(e.message, true));
 
+// 1. Dynamic Floating Nav
+const nav = document.createElement("aside");
+nav.className = "floating-nav";
+document.body.appendChild(nav);
 
+function updateNav() {
+  nav.innerHTML = "";
+  const visiblePanels = Array.from(
+    document.querySelectorAll(
+      ".panel:not(.hidden), #inspect-result:not(.hidden), #compare-result:not(.hidden), #trial-result:not(.hidden)",
+    ),
+  );
 
-    
-      // 1. Dynamic Floating Nav
-      const nav = document.createElement("aside");
-      nav.className = "floating-nav";
-      document.body.appendChild(nav);
+  let hasItems = false;
+  visiblePanels.forEach((panel) => {
+    const titleEls = panel.querySelectorAll("h2, h3");
+    titleEls.forEach((titleEl) => {
+      const a = document.createElement("a");
+      a.href = "#" + panel.id;
+      a.className = "nav-dot";
+      a.innerHTML = "<span>" + titleEl.innerText + "</span>";
+      nav.appendChild(a);
+      hasItems = true;
+    });
+  });
+  nav.style.display = hasItems ? "flex" : "none";
+}
 
-      function updateNav() {
-        nav.innerHTML = "";
-        const visiblePanels = Array.from(document.querySelectorAll(".panel:not(.hidden), #inspect-result:not(.hidden), #compare-result:not(.hidden), #trial-result:not(.hidden)"));
+updateNav();
 
-        let hasItems = false;
-        visiblePanels.forEach(panel => {
-          const titleEls = panel.querySelectorAll("h2, h3");
-          titleEls.forEach(titleEl => {
-            const a = document.createElement("a");
-            a.href = "#" + panel.id;
-            a.className = "nav-dot";
-            a.innerHTML = "<span>" + titleEl.innerText + "</span>";
-            nav.appendChild(a);
-            hasItems = true;
-          });
-        });
-        nav.style.display = hasItems ? "flex" : "none";
-      }
+// Update nav when clicking tabs or importing
+document.body.addEventListener("click", () => {
+  setTimeout(updateNav, 100);
+});
 
-      updateNav();
+// 2. Dynamic Island Task Queue
+const taskEl = document.getElementById("task");
+if (taskEl) {
+  taskEl.removeAttribute("onclick"); // Clean old attribute
 
-      // Update nav when clicking tabs or importing
-      document.body.addEventListener("click", () => {
-        setTimeout(updateNav, 100);
-      });
-
-      // 2. Dynamic Island Task Queue
-      const taskEl = document.getElementById("task");
-      if (taskEl) {
-        taskEl.classList.add("island");
-        taskEl.removeAttribute("onclick"); // Clean old attribute
-
-        const header = document.createElement("div");
-        header.className = "island-header";
-        header.innerHTML = `
+  const header = document.createElement("div");
+  header.className = "island-header";
+  header.innerHTML = `
           <div class="island-brief">
             <div class="pulse-dot"></div>
             <span id="island-brief-text">当前无任务</span>
           </div>
           <div class="island-queue">排队: <span id="island-q-count">0</span></div>
         `;
-        // Toggle expansion
-        header.onclick = () => {
-          taskEl.classList.toggle("expanded");
-        };
-        taskEl.insertBefore(header, taskEl.firstChild);
+  // Toggle expansion
+  header.onclick = () => {
+    if (taskEl.classList.contains("island")) {
+      taskEl.classList.toggle("expanded");
+    }
+  };
+  taskEl.insertBefore(header, taskEl.firstChild);
 
-        // Loop to sync states without changing app.js
-        setInterval(() => {
-          const qCountEl = document.getElementById("queue-count");
-          const iqCountEl = document.getElementById("island-q-count");
-          if (qCountEl && iqCountEl) {
-            iqCountEl.innerText = qCountEl.innerText || "0";
-          }
-
-          const labelEl = document.getElementById("task-label");
-          const phaseEl = document.getElementById("task-phase");
-          const briefText = document.getElementById("island-brief-text");
-
-          if (briefText) {
-            if (taskEl.classList.contains("hidden")) {
-              briefText.innerText = "当前无任务";
-            } else {
-              let text = "";
-              if (labelEl && labelEl.innerText) text += labelEl.innerText + " ";
-              if (phaseEl && phaseEl.innerText) text += phaseEl.innerText;
-              briefText.innerText = text.trim() || "运行中...";
-            }
-          }
-        }, 300);
+  const toggleBtn = document.getElementById("toggle-island");
+  if (toggleBtn) {
+    toggleBtn.onclick = (e) => {
+      e.stopPropagation();
+      if (taskEl.classList.contains("task-banner")) {
+        taskEl.classList.remove("task-banner");
+        taskEl.classList.add("island");
+        toggleBtn.innerHTML =
+          '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10l8 8 8-8"/></svg>';
+        toggleBtn.title = "还原为顶部视图";
+      } else {
+        taskEl.classList.remove("island");
+        taskEl.classList.remove("expanded");
+        taskEl.classList.add("task-banner");
+        toggleBtn.innerHTML =
+          '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14l8-8 8 8"/></svg>';
+        toggleBtn.title = "切换到灵动岛视图";
       }
-    
+    };
+  }
+
+  // Loop to sync states without changing app.js
+  setInterval(() => {
+    const qCountEl = document.getElementById("queue-count");
+    const iqCountEl = document.getElementById("island-q-count");
+    if (qCountEl && iqCountEl) {
+      iqCountEl.innerText = qCountEl.innerText || "0";
+    }
+
+    const labelEl = document.getElementById("task-label");
+    const phaseEl = document.getElementById("task-phase");
+    const briefText = document.getElementById("island-brief-text");
+
+    if (briefText) {
+      if (taskEl.classList.contains("hidden")) {
+        briefText.innerText = "当前无任务";
+      } else {
+        let text = "";
+        if (labelEl && labelEl.innerText) text += labelEl.innerText + " ";
+        if (phaseEl && phaseEl.innerText) text += phaseEl.innerText;
+        briefText.innerText = text.trim() || "运行中...";
+      }
+    }
+  }, 300);
+}

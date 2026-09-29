@@ -312,6 +312,7 @@ input[type="checkbox"] {
   top: 80px;
   z-index: 5;
   gap: 24px;
+  transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .task p {
@@ -1118,7 +1119,7 @@ button#import-button:hover {
 }
 
 /* Floating Task Queue Override (Dynamic Island) */
-.task {
+.task.island {
   position: fixed !important;
   right: 24px;
   bottom: 24px;
@@ -1129,7 +1130,6 @@ button#import-button:hover {
   margin: 0 !important;
   z-index: 1000 !important;
   box-shadow: 0 12px 48px rgba(0, 0, 0, 0.3) !important;
-  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
   background: var(--panel) !important;
   border: 1px solid var(--panel-border) !important;
   border-radius: 40px !important;
@@ -1272,9 +1272,15 @@ button#import-button:hover {
   top: -100px;
   width: 400px;
   height: 400px;
-  background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.4), rgba(128, 225, 196, 0.05));
+  background: radial-gradient(
+    circle at 30% 30%,
+    rgba(255, 255, 255, 0.4),
+    rgba(128, 225, 196, 0.05)
+  );
   border-radius: 50%;
-  box-shadow: inset 0 0 50px rgba(255, 255, 255, 0.3), 0 20px 80px rgba(0, 0, 0, 0.15);
+  box-shadow:
+    inset 0 0 50px rgba(255, 255, 255, 0.3),
+    0 20px 80px rgba(0, 0, 0, 0.15);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border: 1px solid rgba(255, 255, 255, 0.4);
@@ -1285,12 +1291,18 @@ button#import-button:hover {
 .glass-orb.small {
   width: 200px;
   height: 200px;
-  background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.3), rgba(167, 139, 250, 0.1));
+  background: radial-gradient(
+    circle at 30% 30%,
+    rgba(255, 255, 255, 0.3),
+    rgba(167, 139, 250, 0.1)
+  );
   right: 2%;
   top: 150px;
   animation-delay: -3s;
   animation-duration: 7s;
-  box-shadow: inset 0 0 30px rgba(255, 255, 255, 0.2), 0 10px 40px rgba(0, 0, 0, 0.1);
+  box-shadow:
+    inset 0 0 30px rgba(255, 255, 255, 0.2),
+    0 10px 40px rgba(0, 0, 0, 0.1);
 }
 
 @keyframes orbFloat {
@@ -1307,4 +1319,12 @@ button#import-button:hover {
   .intro-decorations {
     display: none;
   }
+}
+
+.task-banner .island-header {
+  display: none;
+}
+.icon-btn:hover {
+  background: var(--line) !important;
+  border-radius: 4px;
 }
