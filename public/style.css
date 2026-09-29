@@ -87,7 +87,10 @@ body {
     14px/1.65 "Segoe UI",
     "Microsoft YaHei",
     sans-serif;
-  min-height: 100vh;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 header {
@@ -138,7 +141,12 @@ header {
 
 main {
   width: 100%;
-  padding: 42px 3%;
+  padding: 16px 3%;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .intro {
@@ -204,12 +212,13 @@ nav.header-nav {
 .section {
   background: var(--panel);
   border: 1px solid var(--panel-border);
-  border-radius: 16px;
-  padding: 32px;
-  margin-bottom: 24px;
+  border-radius: 12px;
+  padding: 20px 24px;
+  margin-bottom: 16px;
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   box-shadow: var(--panel-shadow);
+  flex-shrink: 0;
 }
 
 .panel-title {
@@ -330,16 +339,30 @@ button:disabled {
 .two {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 20px;
+  gap: 16px;
 }
 
 .bottom-panels {
-  margin-bottom: 24px;
+  margin-bottom: 16px;
+  flex: 1;
+  min-height: 0;
+  flex-shrink: 1;
 }
 
 .bottom-panels .panel {
   margin-bottom: 0;
   height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+#queue-list,
+#result-list {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  margin-top: 12px;
+  padding-right: 6px;
 }
 
 .checks {
