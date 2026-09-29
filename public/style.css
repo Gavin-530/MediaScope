@@ -202,11 +202,13 @@ nav.header-nav {
 h2 {
   font-size: 18px;
   margin: 0;
+  scroll-margin-top: 100px;
 }
 
 h3 {
   font-size: 15px;
   margin: 0 0 14px;
+  scroll-margin-top: 100px;
 }
 
 label {
