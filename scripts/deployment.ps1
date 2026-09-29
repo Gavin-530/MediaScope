@@ -66,23 +66,26 @@ function Get-TreeRecords($Root) {
     @{path=$_.FullName.Substring($Root.TrimEnd('\').Length+1).Replace('\','/');bytes=$_.Length;sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash}
   })
 }
-function Get-PrivateRuntime($App,$InstallRoot) {
+function Get-PrivateRuntime($App,$RuntimeRoot) {
+  foreach($dir in @('runtimes','staging')){New-Item -ItemType Directory -Force (Join-Path $RuntimeRoot $dir) | Out-Null}
+  $runtimeGate=[IO.File]::Open((Join-Path $RuntimeRoot 'runtime.lock'),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+  try {
   $lock=Read-Json (Join-Path $App 'runtime-lock.json');$paths=@{}
   foreach($component in $lock.components){
     if($component.name -notin @('node','ffmpeg') -or $component.sha256 -notmatch '^[a-f0-9]{64}$' -or $component.url -notmatch '^https://'){throw 'Invalid runtime lock'}
-    $target=Join-Path $InstallRoot "runtimes/$($component.sha256)"
-    $receipt=Join-Path $InstallRoot "runtimes/$($component.sha256).json"
+    $target=Join-Path $RuntimeRoot "runtimes/$($component.sha256)"
+    $receipt=Join-Path $RuntimeRoot "runtimes/$($component.sha256).json"
     if(Test-Path -LiteralPath $target){
       $record=Read-Json $receipt
       foreach($f in $record){$p=Safe-Path $target $f.path;Assert-Hash $p $f.sha256}
       if(@(Get-ChildItem -LiteralPath $target -Recurse -File).Count -ne @($record).Count){throw "Private runtime changed: $target"}
       Write-Host "Reusing verified $($component.name)"
     } else {
-      $download=Join-Path $InstallRoot "staging/$([guid]::NewGuid().ToString('N')).zip"
+      $download=Join-Path $RuntimeRoot "staging/$([guid]::NewGuid().ToString('N')).zip"
       Write-Host "Downloading $($component.name) (first installation requires internet)..."
       [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12
       try{Invoke-WebRequest -UseBasicParsing -Uri $component.url -OutFile $download -TimeoutSec 300;Assert-Hash $download $component.sha256}catch{throw "Download failed; current installation is unchanged. $($_.Exception.Message)"}
-      $expanded=Join-Path $InstallRoot "staging/$([guid]::NewGuid().ToString('N'))"
+      $expanded=Join-Path $RuntimeRoot "staging/$([guid]::NewGuid().ToString('N'))"
       Expand-SafeZip $download $expanded
       $record=Get-TreeRecords $expanded
       [IO.Directory]::Move($expanded,$target)
@@ -92,6 +95,7 @@ function Get-PrivateRuntime($App,$InstallRoot) {
     foreach($p in $component.executables.PSObject.Properties){$paths[$p.Name]=Safe-Path $target $p.Value}
   }
   return $paths
+  } finally {$runtimeGate.Dispose()}
 }
 function Resolve-Program($Value,$Name) {
   if(!$Value){$Value=(Get-Command "$Name.exe" -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source}
@@ -105,10 +109,10 @@ function Test-Environment($App,$Paths,$InstallRoot) {
     $p=$Paths[$name];if(!(Test-Path -LiteralPath $p -PathType Leaf)){throw "Missing executable: $name ($p)"}
     # Reject ARM64/x86 binaries before executing them, including on ARM64 Windows.
     $stream=[IO.File]::OpenRead($p);$reader=New-Object IO.BinaryReader($stream)
-    try{$stream.Position=0x3c;$offset=$reader.ReadInt32();$stream.Position=$offset;if($reader.ReadUInt32() -ne 0x4550 -or $reader.ReadUInt16() -ne 0x8664){throw 'Invalid PE architecture'}}catch{throw "Invalid Windows x64 executable: $p. No automatic fallback; select Recommended.cmd to switch environments."}finally{$reader.Dispose()}
+    try{$stream.Position=0x3c;$offset=$reader.ReadInt32();$stream.Position=$offset;if($reader.ReadUInt32() -ne 0x4550 -or $reader.ReadUInt16() -ne 0x8664){throw 'Invalid PE architecture'}}catch{throw "Invalid Windows x64 executable: $p. Select the recommended private environment when prompted."}finally{$reader.Dispose()}
   }
   & $Paths.node (Join-Path $App 'scripts/check-environment.mjs') $App $Paths.ffmpeg $Paths.ffprobe $result
-  if($LASTEXITCODE -ne 0){throw 'Environment validation failed. No automatic fallback. Use Recommended.cmd to select the private environment.'}
+  if($LASTEXITCODE -ne 0){throw 'Environment validation failed. Select the recommended private environment when prompted.'}
   $check=Read-Json $result
   $programs=@{}
   foreach($name in @('node','ffmpeg','ffprobe')){

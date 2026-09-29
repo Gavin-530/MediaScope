@@ -1,24 +1,46 @@
 ﻿param(
   [ValidateSet('Install','Launch','Update','External','Recommended','Rollback','Check')][string]$Action='Launch',
   [string]$Archive,
-  [string]$InstallRoot=$(if($env:MEDIASCOPE_HOME){$env:MEDIASCOPE_HOME}else{Join-Path $env:LOCALAPPDATA 'MediaScope'}),
+  [string]$InstallRoot,
+  [string]$RuntimeRoot=$(if($env:MEDIASCOPE_RUNTIME_HOME){$env:MEDIASCOPE_RUNTIME_HOME}else{Join-Path $env:LOCALAPPDATA 'MediaScope'}),
   [string]$NodePath,[string]$FFmpegPath,[string]$FFprobePath,
   [switch]$NonInteractive
 )
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'deployment.ps1')
+. (Join-Path $PSScriptRoot 'install-location.ps1')
 if(!$NonInteractive){Add-Type -AssemblyName System.Windows.Forms}
-$InstallRoot=[IO.Path]::GetFullPath($InstallRoot)
 $source=Split-Path $PSScriptRoot
+$InstallRoot=Resolve-InstallRoot $source $InstallRoot $PSBoundParameters.ContainsKey('InstallRoot') $Action ([bool]$NonInteractive)
+$RuntimeRoot=[IO.Path]::GetFullPath($RuntimeRoot)
+if(!$PSBoundParameters.ContainsKey('RuntimeRoot') -and !$env:MEDIASCOPE_RUNTIME_HOME){
+  $marker=Join-Path $InstallRoot 'install.json'
+  if(Test-Path -LiteralPath $marker){
+    $savedRuntime=(Read-Json $marker).runtimeRoot
+    if($savedRuntime){$RuntimeRoot=[IO.Path]::GetFullPath($savedRuntime)}
+  } elseif(Test-Path -LiteralPath (Join-Path $InstallRoot 'current.json')){
+    $prior=Read-Json (Join-Path $InstallRoot 'current.json')
+    $nodePath=$prior.current.environment.validation.programs.node.path
+    $privatePrefix=[IO.Path]::GetFullPath((Join-Path $InstallRoot 'runtimes')).TrimEnd('\')+'\'
+    if($prior.current.environment.mode -eq 'private' -and $nodePath -and $nodePath.StartsWith($privatePrefix,[StringComparison]::OrdinalIgnoreCase)){$RuntimeRoot=$InstallRoot}
+  }
+}
 function Show-EnvironmentPrompt($Message,$Buttons,$DefaultButton=[Windows.Forms.MessageBoxDefaultButton]::Button2) {
   return [Windows.Forms.MessageBox]::Show($Message,'MediaScope 运行环境',$Buttons,[Windows.Forms.MessageBoxIcon]::Information,$DefaultButton)
+}
+function Save-InstallMarker {
+  $path=Join-Path $InstallRoot 'install.json'
+  $created=if(Test-Path -LiteralPath $path){(Read-Json $path).createdAt}else{(Get-Date).ToUniversalTime().ToString('o')}
+  Write-Json $path @{schema=1;product='MediaScope';runtimeRoot=$RuntimeRoot;createdAt=$created}
+  $retained=Join-Path $InstallRoot 'retained.json'
+  if(Test-Path -LiteralPath $retained){Remove-Item -LiteralPath $retained -Force}
 }
 function Select-ExplicitEnvironment($App) {
   try {
     return @{mode='external';paths=@{node=(Resolve-Program $NodePath 'node');ffmpeg=(Resolve-Program $FFmpegPath 'ffmpeg');ffprobe=(Resolve-Program $FFprobePath 'ffprobe')}}
   } catch {
     if(!(Confirm-ExternalFallback $_.Exception.Message)){throw}
-    return @{mode='private';paths=(Get-PrivateRuntime $App $InstallRoot)}
+    return @{mode='private';paths=(Get-PrivateRuntime $App $RuntimeRoot)}
   }
 }
 function Select-FirstEnvironment($App) {
@@ -42,7 +64,7 @@ function Select-FirstEnvironment($App) {
       if($choice -ne [Windows.Forms.DialogResult]::OK){throw 'Installation cancelled; no environment was selected'}
     }
   }
-  return @{mode='private';paths=(Get-PrivateRuntime $App $InstallRoot)}
+  return @{mode='private';paths=(Get-PrivateRuntime $App $RuntimeRoot)}
 }
 function Confirm-ExternalFallback($Reason) {
   if($NonInteractive -or $Action -notin @('Launch','Install','External','Update','Rollback')){return $false}
@@ -54,7 +76,7 @@ function Validate-SelectedEnvironment($App,$Paths,$Mode) {
   catch {
     if($Mode -ne 'external' -or !(Confirm-ExternalFallback $_.Exception.Message)){throw}
     Write-Host 'Switching to the recommended private environment by user choice.'
-    $Paths=Get-PrivateRuntime $App $InstallRoot
+    $Paths=Get-PrivateRuntime $App $RuntimeRoot
     $Mode='private'
     $validation=Test-Environment $App $Paths $InstallRoot
   }
@@ -63,8 +85,11 @@ function Validate-SelectedEnvironment($App,$Paths,$Mode) {
 $gate=$null
 try {
   if(![Environment]::Is64BitOperatingSystem -or $env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or $env:PROCESSOR_ARCHITEW6432 -eq 'ARM64'){throw 'MediaScope supports Windows x64 only'}
-  foreach($dir in @('apps','runtimes','data','staging')){New-Item -ItemType Directory -Force (Join-Path $InstallRoot $dir) | Out-Null}
+  New-Item -ItemType Directory -Force $InstallRoot,$RuntimeRoot | Out-Null
   Assert-NoLinks $InstallRoot
+  if($RuntimeRoot -ne $InstallRoot){Assert-NoLinks $RuntimeRoot}
+  foreach($dir in @('apps','data','staging')){New-Item -ItemType Directory -Force (Join-Path $InstallRoot $dir) | Out-Null}
+  foreach($dir in @('runtimes','staging')){New-Item -ItemType Directory -Force (Join-Path $RuntimeRoot $dir) | Out-Null}
   # Process lifetime lock: prevents upgrades or competing launches while this app is running.
   $gate=[IO.File]::Open((Join-Path $InstallRoot 'deployment.lock'),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
   $statePath=Join-Path $InstallRoot 'current.json'
@@ -77,8 +102,21 @@ try {
     if($children.Count -ne 1 -or !$children[0].PSIsContainer){throw 'Expected one package root directory'}
     $source=$children[0].FullName
   }
-  if($Action -in @('Install','Update') -or !$state){
-    $manifest=Test-App $source
+  $sourceManifest=$null
+  $installPackage=$Action -in @('Install','Update') -or !$state
+  if($Action -eq 'Launch' -and $state -and !(Get-SourceInstallRoot $source)){
+    # A newly extracted ZIP is an explicit version choice. An installed copy of
+    # start.cmd always launches the currently selected version instead.
+    $sourceManifest=Test-App $source
+    $activeManifest=Join-Path $InstallRoot "apps/$($state.current.version)/MANIFEST.json"
+    if($sourceManifest.version -ne $state.current.version -or
+       !(Test-Path -LiteralPath $activeManifest) -or
+       (Get-FileHash -LiteralPath (Join-Path $source 'MANIFEST.json')).Hash -ne (Get-FileHash -LiteralPath $activeManifest).Hash){
+      $installPackage=$true
+    }
+  }
+  if($installPackage){
+    $manifest=if($sourceManifest){$sourceManifest}else{Test-App $source}
     $app=Join-Path $InstallRoot "apps/$($manifest.version)"
     if(Test-Path -LiteralPath $app){
       $null=Test-App $app
@@ -95,12 +133,14 @@ try {
       $explicit=Select-ExplicitEnvironment $app;$paths=$explicit.paths;$mode=$explicit.mode
     } elseif(!$state) {
       $first=Select-FirstEnvironment $app;$paths=$first.paths;$mode=$first.mode
-    } else {$paths=Get-SelectedPaths $selection $app $InstallRoot;$mode=$selection.mode}
+    } else {$paths=Get-SelectedPaths $selection $app $RuntimeRoot;$mode=$selection.mode}
     $selected=Validate-SelectedEnvironment $app $paths $mode
     $next=@{version=$manifest.version;environment=@{mode=$selected.mode;validation=$selected.validation}}
     $previous=if($state -and $state.current.version -ne $next.version){$state.current}elseif($state){$state.previous}else{$null}
     Write-Json $statePath @{current=$next;previous=$previous}
+    Save-InstallMarker
     $state=Read-Json $statePath
+    if(!$NonInteractive){Register-MediaScopeInstall $InstallRoot $manifest.version}
     Write-Host "Installed and verified MediaScope $($manifest.version). Data: $(Join-Path $InstallRoot 'data')"
     if($Action -in @('Install','Update','External')){exit 0}
   }
@@ -112,13 +152,15 @@ try {
   $null=Test-App $app
   if($Action -eq 'External'){
     $explicit=Select-ExplicitEnvironment $app;$paths=$explicit.paths;$mode=$explicit.mode
-  } elseif($Action -eq 'Recommended'){$paths=Get-PrivateRuntime $app $InstallRoot;$mode='private'}
-  else {$paths=Get-SelectedPaths $candidate.environment $app $InstallRoot;$mode=$candidate.environment.mode}
+  } elseif($Action -eq 'Recommended'){$paths=Get-PrivateRuntime $app $RuntimeRoot;$mode='private'}
+  else {$paths=Get-SelectedPaths $candidate.environment $app $RuntimeRoot;$mode=$candidate.environment.mode}
   $selected=Validate-SelectedEnvironment $app $paths $mode
   $paths=$selected.paths;$mode=$selected.mode
   $next=@{version=$candidate.version;environment=@{mode=$mode;validation=$selected.validation}}
   $previous=if($Action -eq 'Rollback'){$state.current}else{$state.previous}
   Write-Json $statePath @{current=$next;previous=$previous}
+  Save-InstallMarker
+  if(!$NonInteractive -and $Action -in @('Launch','Rollback')){Register-MediaScopeInstall $InstallRoot $candidate.version}
   Write-Host "Verified $mode environment. Audit: $statePath"
   if($Action -eq 'Launch'){
     $env:FFMPEG_PATH=$paths.ffmpeg;$env:FFPROBE_PATH=$paths.ffprobe;$env:MEDIASCOPE_DATA_DIR=Join-Path $InstallRoot 'data'

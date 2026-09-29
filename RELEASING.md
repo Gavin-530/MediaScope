@@ -19,7 +19,7 @@
 2. 确认目标 Tag 为 `v<version>`，去掉前缀 `v` 后与 `package.json` 中的版本完全一致；包内版本与 ZIP 文件名不加 `v`。
 3. 运行 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/record-test.ps1 -Kind App -RequireClean`，保存逐次测试证据；任何失败都不得发布。
 4. 运行 `scripts/package.ps1 -Version <version>`，只生成一个 Windows x64 联网部署包。不得覆盖已存在的包或暂存目录。
-5. 运行 `scripts/record-test.ps1 -Kind Package -Archive <zip> -RequireClean`，核对归档文件数、实际字节数及 SHA-256，并执行离线部署验证；另运行 `scripts/record-test.ps1 -Kind OnlineDeployment -Archive <zip> -RequireClean` 验证真实首次联网安装。部署验证必须覆盖环境复用、已有环境与变化检测、切回推荐环境、升级与回退、损坏下载、兼容性失败和用户数据保护。人工检查首次检测通过后的双选项弹窗、没有合格本地环境时的下载提示，以及已选择本地环境失效后的确认弹窗与拒绝路径。运行锁定私有环境下的应用回归测试；记录未验证的 Windows/运行时版本。产品说明必须注明选择推荐环境时首次安装需要联网。
+5. 运行 `scripts/record-test.ps1 -Kind Package -Archive <zip> -RequireClean`，核对归档文件数、实际字节数及 SHA-256，并执行离线部署验证；另运行 `scripts/record-test.ps1 -Kind OnlineDeployment -Archive <zip> -RequireClean` 验证真实首次联网安装。部署验证必须覆盖环境复用、已有环境与变化检测、切回推荐环境、升级与回退、损坏下载、兼容性失败、用户数据保护、自定义安装位置、共享组件及卸载边界。人工检查首次安装位置选择和取消、首次检测通过后的双选项弹窗、没有合格本地环境时的下载提示、已选择本地环境失效后的确认与拒绝路径，以及从 Windows“已安装的应用”启动卸载后保留报告的路径。运行锁定私有环境下的应用回归测试；记录未验证的 Windows/运行时版本。产品说明必须注明选择推荐环境时首次安装需要联网。
 6. 从 `.github/RELEASE_TEMPLATE.md` 创建 Release 草稿，删除提示、占位符及无内容的小节，逐项核对正文中的版本、附件文件名、测试数（若填写）和 SHA-256。
 7. 检查正文只包含本版本能够直接支持的事实。
 8. 先上传全部附件并再次核对摘要，再发布 Release。

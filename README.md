@@ -1,15 +1,16 @@
-# MediaScope 0.2.0
+# MediaScope
 
 Windows 本地媒体结构与质量分析工具。原生 Node.js + 浏览器 + FFmpeg/FFprobe，无 npm 依赖，媒体不上传。
 
 ## 安装、更新与环境选项
 
-- **首次安装可能需要联网**。Windows x64（Windows 10/11，PowerShell 5.1+）下载 `MediaScope-0.2.0-win-x64.zip`，完整解压后双击 `start.cmd` 自动安装并启动；`Install.cmd` 只安装。首次会检测电脑已有的 Node.js、FFmpeg、FFprobe：若三者通过版本、功能和实际运行验证，会弹窗让用户选择已有环境或推荐私有环境；若没有完整可用的已有环境，会告知原因并提示联网下载。完成后打开 http://127.0.0.1:4317 。
-- 推荐环境是 MediaScope 私有 Node.js、FFmpeg、FFprobe，固定版本及 SHA-256 见 `runtime-lock.json`。选择推荐环境时**首次安装需要联网**，从 nodejs.org 和 GitHub 的构建下载服务下载约 219.4 MiB 的两个上游 ZIP，校验后解压并保留上游许可证；用户现有 PATH、注册表和全局程序不变。后续版本复用摘要相同、通过兼容性检查的组件，只下载清单中变化的部分；没有二进制差分下载。已安装且环境未损坏时启动不需要联网。
-- 软件位于 `%LOCALAPPDATA%\MediaScope\apps\<版本>`，私有环境位于 `runtimes\<组件摘要>`，报告与任务文件位于 `data`，临时下载位于 `staging`。可通过 `MEDIASCOPE_HOME` 指定另一独立、可写安装目录（不要指向源码目录）。安装不需要管理员权限。Fork/克隆源码后可直接双击源码目录的 `start.cmd`：它优先验证并使用电脑已有的 Node.js、FFmpeg、FFprobe；缺少完整可用的环境时会自动下载并校验私有运行时，首次需要联网，后续复用。源码直接从当前工作区运行，报告仍保留在 `.mediascope`；`npm start` 则仍要求自行准备 Node.js 与 FFmpeg/FFprobe。
-- 更新时先停止服务，将新 ZIP 拖到 `Update.cmd`，或运行 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/manage.ps1 -Action Update -Archive "新包.zip"`。验证包内全部文件、运行时及实际应用启动后，才原子切换 `current.json`。同版本不同内容会拒绝安装；旧版与用户数据不覆盖。更新失败继续双击原 `start.cmd`；`Rollback.cmd` 可验证并切回上一版本。更新不会自动查询或发布 GitHub Release。
-- **从旧版转到 0.2.0**：旧版尚未使用上述独立安装目录。先保留旧目录，完整解压 `0.2.0` ZIP 后运行新包中的 `start.cmd`；首次选择或下载运行环境。旧版 `.mediascope` 报告不会被搬动或删除，可在旧版导出 JSON，再在新版界面导入。`Update.cmd` 用于今后更新已按新方式安装的版本；首次从旧版转入时直接运行新包。
-- **已有环境选项**：首次弹窗可选择电脑已有环境；之后也可双击 `ExistingEnvironment.cmd` 从 PATH 选择，或使用下方显式路径命令。支持 Node.js 22/24 x64 与 FFmpeg/FFprobe 7+ 稳定版本；无法比较版本的 Git 开发快照不接受。检查 `libvmaf`、`siti`、`psnr`、`ssim`、`zscale`、`trace_headers`、x264/x265/AV1/FFV1，并执行真实编码、解码、指标和 HTTP 启动测试。每次启动重新验证，程序绝对路径、版本、SHA-256 和相邻 DLL 摘要记录在 `current.json`。环境变化或检查失败时弹窗询问是否改用推荐环境；用户拒绝则保留原选择并停止，不静默切换。双击 `Recommended.cmd` 也可主动切回。
+- **首次安装可能需要联网**。Windows x64（Windows 10/11，PowerShell 5.1+）从 GitHub Release 下载对应版本的 Windows ZIP，完整解压后双击 `start.cmd` 自动安装并启动。首次先选择并确认实际安装文件夹，再检测电脑已有的 Node.js、FFmpeg、FFprobe：若三者通过版本、功能和实际运行验证，会弹窗让用户选择已有环境或推荐私有环境；若没有完整可用的已有环境，会告知原因并提示联网下载。完成后打开 http://127.0.0.1:4317 。
+- 推荐环境是 MediaScope 私有 Node.js、FFmpeg、FFprobe，固定版本及 SHA-256 见 `runtime-lock.json`。选择推荐环境时**首次安装需要联网**，从 nodejs.org 和 GitHub 的构建下载服务下载约 219.4 MiB 的两个上游 ZIP，校验后解压并保留上游许可证；用户现有 PATH 和全局程序不变。交互式安装会在当前用户注册安装位置和卸载入口。后续版本复用摘要相同、通过兼容性检查的组件，只下载清单中变化的部分；没有二进制差分下载。已安装且环境未损坏时启动不需要联网。
+- 默认程序安装根目录为 `%LOCALAPPDATA%\MediaScope`，首次交互式安装可选择其他空的、可写文件夹；后续启动从当前用户的安装记录读取该位置。所选目录中的 `apps\<版本>` 是程序，`data` 是报告和任务文件。私有组件默认位于 `%LOCALAPPDATA%\MediaScope\runtimes\<组件摘要>`，即使程序选择安装到其他位置，开发版与用户版仍可按摘要复用组件。已安装旧版会沿用原位置及已有组件位置；自动化可通过 `MEDIASCOPE_HOME` 或 `-InstallRoot` 指定程序目录，通过 `MEDIASCOPE_RUNTIME_HOME` 或 `-RuntimeRoot` 指定组件根目录；`-NonInteractive` 不弹窗。安装不需要管理员权限。Fork/克隆源码后可直接双击源码目录的 `start.cmd`：它优先验证并使用电脑已有的 Node.js、FFmpeg、FFprobe；缺少完整可用的环境时会自动下载并校验私有运行时，首次需要联网，后续复用。源码直接从当前工作区运行，报告仍保留在 `.mediascope`；`npm start` 则仍要求自行准备 Node.js 与 FFmpeg/FFprobe。
+- **卸载**：运行已安装版本中的 `Uninstall.cmd`，也可运行解压包中的同名入口；安装后亦可从 Windows“已安装的应用”打开卸载。卸载程序会检查安装记录、程序清单和运行锁，默认删除已安装的程序与临时文件，保留报告和私有运行时缓存；交互式卸载可分别选择删除报告、组件缓存。开发源码、外部 Node.js/FFmpeg 和历史测试归档不会被删除。卸载后若仍保留报告或组件，可在提示的安装根目录查看；再次运行旧解压包的 `start.cmd` 会重新安装。
+- **换版本**：先停止服务，从 GitHub Release 下载目标版本的 ZIP，解压到单独文件夹，双击其中的 `start.cmd`。新包通过完整性与环境验证后安装到首次选择的软件位置并启动；不同版本的程序分开保存，报告继续使用原来的 `data`。从已安装程序目录运行 `start.cmd` 则启动当前选中的版本。相同版本若文件内容不同会拒绝覆盖。更新失败时，仍可运行原已安装程序的 `start.cmd`。程序不会自动查询 GitHub Release。开发者在源码目录运行 `start.cmd`，用 Git 切换源码版本。
+- **从旧版安装方式转入**：完整解压新 ZIP，运行新包中的 `start.cmd`；已有安装位置和报告继续保留。旧源码目录中的 `.mediascope` 报告不会被搬动或删除，可在旧版导出 JSON，再在新版界面导入。
+- **已有环境选项**：首次弹窗可选择电脑已有环境；高级用户也可使用下方显式路径命令。支持 Node.js 22/24 x64 与 FFmpeg/FFprobe 7+ 稳定版本；无法比较版本的 Git 开发快照不接受。检查 `libvmaf`、`siti`、`psnr`、`ssim`、`zscale`、`trace_headers`、x264/x265/AV1/FFV1，并执行真实编码、解码、指标和 HTTP 启动测试。每次启动重新验证，程序绝对路径、版本、SHA-256 和相邻 DLL 摘要记录在 `current.json`。已有环境变化或检查失败时弹窗询问是否改用推荐环境；用户拒绝则保留原选择并停止。
 - 版本下载和校验值见 [GitHub Releases](https://github.com/Gavin-530/MediaScope/releases)。每版保留独立附件，不覆盖已发布文件。旧版 `.mediascope` 报告不移动、不删除；可从原目录另行保存或在界面导入已导出的报告。
 - 包内没有个人媒体、报告或测试生成文件。校验清单用于发现损坏，不能认证整包被恶意替换；请核对可信发布渠道公布的整个 ZIP 摘要。故障暂存与旧版默认保留，安装工具不会自动清理用户数据。
 - 保持服务窗口运行，Ctrl+C 停止。通过 PORT 环境变量可改变端口。程序只监听本机回环地址，API 检查会话令牌与来源。
@@ -90,7 +91,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/manage.ps1 -Action E
 
 本地文件由 [LOCAL_DATA.md](LOCAL_DATA.md) 和 `local-data-policy.json` 分类管理。`scripts/local-data.ps1 -Action Status` 列出占用与未分类项，`-Action Verify` 校验证据；`-Action Clean -Category BuildStages` 等命令默认只预览，明确加 `-Apply` 才执行。Git 忽略的报告、验收资料、测试证据与发布 ZIP 都不是缓存。
 
-`scripts/package.ps1 -Version 0.2.0` 在本地生成一个 Windows x64 安装 ZIP，不覆盖已有文件。发布前按 [RELEASING.md](RELEASING.md) 使用 `scripts/record-test.ps1` 记录应用、最终 ZIP 离线部署及真实联网部署测试。离线测试使用 `.build/downloads` 中与锁文件一致的上游归档。逐次日志、结果清单和校验值自动存入 Git 忽略的 `local-test-archive/` 并校验项目内副本；大型部署沙箱仍留在 `.build`，审查归档后可按清理脚本的预览结果删除。
+`scripts/package.ps1 -Version <package.json 中的版本>` 在本地生成一个 Windows x64 安装 ZIP，不覆盖已有文件。发布前按 [RELEASING.md](RELEASING.md) 使用 `scripts/record-test.ps1` 记录应用、最终 ZIP 离线部署及真实联网部署测试。离线测试使用 `.build/downloads` 中与锁文件一致的上游归档。逐次日志、结果清单和校验值自动存入 Git 忽略的 `local-test-archive/` 并校验项目内副本；大型部署沙箱仍留在 `.build`，审查归档后可按清理脚本的预览结果删除。
 
 历史上的 `0.1.11-beta` 本地验证包已废弃并从本机 `releases/` 移除。发布 ZIP 由本机单独保管，不自动同步到 GitHub Release。重复生成的测试素材可先用 `scripts/archive-test-generated.ps1` 建立可校验快照，再按 [LOCAL_DATA.md](LOCAL_DATA.md) 清理散目录；历史验收资料不参与清理。
 

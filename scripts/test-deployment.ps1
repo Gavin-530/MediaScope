@@ -12,7 +12,7 @@ function Manifest($App,$Version){
   Write-Json $existing @{schema=1;platform='win32-x64';version=$Version;files=@(Get-TreeRecords $App)}
 }
 function Invoke-Manager($App,$Action,$Extra=@(),$Expected=0){
-  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $App 'scripts/manage.ps1') -InstallRoot $homeDir -Action $Action -NonInteractive @Extra
+  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $App 'scripts/manage.ps1') -InstallRoot $homeDir -RuntimeRoot $homeDir -Action $Action -NonInteractive @Extra
   Assert ($LASTEXITCODE -eq $Expected) "$Action exit=$Expected"
 }
 if($Archive){
@@ -20,11 +20,12 @@ if($Archive){
   $app=(Get-ChildItem (Join-Path $work 'package') -Directory)[0].FullName
 } else {
   $app=Join-Path $work 'app';New-Item -ItemType Directory -Force $app,(Join-Path $app 'scripts') | Out-Null
-  foreach($item in @('analysis.mjs','siti.mjs','engine.mjs','server.mjs','package.json','README.md','start.cmd','Install.cmd','Update.cmd','ExistingEnvironment.cmd','Recommended.cmd','Rollback.cmd','runtime-lock.json','public','licenses')){Copy-Item (Join-Path $project $item) $app -Recurse}
-  foreach($item in @('deployment.ps1','manage.ps1','check-environment.mjs')){Copy-Item (Join-Path $PSScriptRoot $item) (Join-Path $app 'scripts')}
+  foreach($item in @('analysis.mjs','siti.mjs','engine.mjs','server.mjs','package.json','README.md','start.cmd','Uninstall.cmd','runtime-lock.json','public','licenses')){Copy-Item (Join-Path $project $item) $app -Recurse}
+  foreach($item in @('deployment.ps1','manage.ps1','install-location.ps1','uninstall.ps1','check-environment.mjs')){Copy-Item (Join-Path $PSScriptRoot $item) (Join-Path $app 'scripts')}
   Manifest $app (Read-Json (Join-Path $project 'package.json')).version
 }
 $null=Test-App $app
+Assert ((@(Get-ChildItem -LiteralPath $app -Filter '*.cmd' -File | ForEach-Object Name | Sort-Object) -join ',') -eq 'start.cmd,Uninstall.cmd') 'package exposes only launch and uninstall CMD files'
 $baseVersion=(Read-Json (Join-Path $app 'package.json')).version
 $parts=$baseVersion.Split('-')[0].Split('.')
 $suffix=if($baseVersion -match '-'){ '-beta' }else{ '' }
@@ -82,7 +83,24 @@ try {
   $homeDir=Join-Path $work 'external-first'
   Invoke-Manager $app External $externalArgs
   Assert (@(Get-ChildItem (Join-Path $homeDir 'runtimes') -Force).Count -eq 0) 'first external installation downloads no private runtime'
+  'keep report' | Set-Content (Join-Path $homeDir 'data/report.txt')
+  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $app 'scripts/uninstall.ps1') -InstallRoot $homeDir -Execute -NonInteractive
+  Assert ($LASTEXITCODE -eq 0) 'dedicated uninstaller exits successfully'
+  Assert (!(Test-Path (Join-Path $homeDir 'apps')) -and !(Test-Path (Join-Path $homeDir 'current.json'))) 'uninstaller removes application and installation state'
+  Assert ((Get-Content (Join-Path $homeDir 'data/report.txt')) -eq 'keep report') 'uninstaller preserves reports by default'
 } finally {$homeDir=$primaryHome}
+$separateHome=Join-Path $work 'separate-program-location'
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $app 'scripts/manage.ps1') -InstallRoot $separateHome -RuntimeRoot $primaryHome -Action Install -NonInteractive
+Assert ($LASTEXITCODE -eq 0) 'custom program location installs with shared runtime root'
+Assert (!(Test-Path (Join-Path $separateHome 'runtimes'))) 'custom program location does not duplicate private components'
+$sharedState=Read-Json (Join-Path $separateHome 'current.json')
+Assert ($sharedState.current.environment.validation.programs.node.path.StartsWith((Join-Path $primaryHome 'runtimes'),[StringComparison]::OrdinalIgnoreCase)) 'custom installation records shared component path'
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $separateHome "apps/$baseVersion/scripts/manage.ps1") -RuntimeRoot $primaryHome -Action Check -NonInteractive
+Assert ($LASTEXITCODE -eq 0) 'installed launcher rediscovers custom program location'
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $app 'scripts/uninstall.ps1') -InstallRoot $separateHome -Execute -RemoveRuntime -NonInteractive
+Assert ($LASTEXITCODE -eq 1 -and (Test-Path (Join-Path $separateHome 'current.json'))) 'uninstaller refuses to remove shared runtime used by another installation without removing the app'
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $app 'scripts/uninstall.ps1') -InstallRoot $separateHome -Execute -NonInteractive
+Assert ($LASTEXITCODE -eq 0 -and !(Test-Path (Join-Path $separateHome 'apps'))) 'uninstaller removes custom program and retains shared runtime'
 $before=(Get-FileHash $stateFile).Hash
 [IO.File]::WriteAllText((Join-Path $external 'ffprobe.exe'),'damaged')
 Invoke-Manager $app Check @() 1
@@ -100,6 +118,15 @@ Assert ((Get-Content $data) -eq 'user report: preserve') 'upgrade preserves user
 Assert (Test-Path (Join-Path $homeDir "apps/$baseVersion/server.mjs")) 'old version preserved'
 Invoke-Manager $app Rollback
 Assert ((Read-Json $stateFile).current.version -eq $baseVersion) 'rollback revalidates and restores old version'
+$media=Join-Path $work 'launch-fixture.mkv'
+& $ffmpeg -v error -nostdin -f lavfi -i 'testsrc2=size=64x64:rate=4:duration=0.5' -c:v libx264 $media
+if($LASTEXITCODE -ne 0){throw 'Could not generate launch fixture'}
+& $node (Join-Path $PSScriptRoot 'test-launch.mjs') $next $homeDir $media $nextVersion
+Assert ($LASTEXITCODE -eq 0) 'launching a newly extracted package activates that version'
+& $node (Join-Path $PSScriptRoot 'test-launch.mjs') (Join-Path $homeDir "apps/$baseVersion") $homeDir $media $nextVersion
+Assert ($LASTEXITCODE -eq 0) 'installed launcher starts the selected version'
+Invoke-Manager $app Rollback
+Assert ((Read-Json $stateFile).current.version -eq $baseVersion) 'rollback remains available internally'
 $before=(Get-FileHash $stateFile).Hash
 $incompatible=Join-Path $work 'incompatible';Copy-Item $app $incompatible -Recurse
 $lock=Read-Json (Join-Path $incompatible 'runtime-lock.json');$lock.nodeMajors=@(99);Write-Json (Join-Path $incompatible 'runtime-lock.json') $lock;Manifest $incompatible $incompatibleVersion
@@ -133,9 +160,6 @@ Invoke-Manager $app Check
    Assert ((Get-FileHash $stateFile).Hash -eq $beforeDamage) 'private runtime corruption is rejected without changing current version'
  } finally {Copy-Item -LiteralPath (Join-Path $external 'node.exe') -Destination $node -Force}
  Invoke-Manager $app Check
- $media=Join-Path $work 'launch-fixture.mkv'
- & $ffmpeg -v error -nostdin -f lavfi -i 'testsrc2=size=64x64:rate=4:duration=0.5' -c:v libx264 $media
- if($LASTEXITCODE -ne 0){throw 'Could not generate launch fixture'}
  & $node (Join-Path $PSScriptRoot 'test-launch.mjs') $app $homeDir $media
  Assert ($LASTEXITCODE -eq 0) 'packaged launcher HTTP and separate report storage'
 Write-Host "Deployment verification: $script:passed passed. Evidence preserved: $work"
