@@ -1345,16 +1345,18 @@ button#import-button:hover {
   color: var(--text);
 }
 .task.task-banner {
-  background: #f4fbff !important;
+  background: #e3f2fd !important;
   border: 1px solid var(--accent);
   box-shadow: 0 8px 32px rgba(74, 144, 226, 0.15);
   padding-right: 48px; /* Avoid overlap with toggle button */
+  top: 80px !important;
+  z-index: 90; /* Keep it below header but above content */
 }
 @media (prefers-color-scheme: dark) {
   .task.task-banner {
-    background: #0d1a16 !important;
-    border-color: rgba(128, 225, 196, 0.3);
-    box-shadow: 0 8px 32px rgba(128, 225, 196, 0.15);
+    background: #183329 !important; /* Brighter dark green */
+    border-color: rgba(128, 225, 196, 0.4);
+    box-shadow: 0 8px 32px rgba(128, 225, 196, 0.2);
   }
 }
 .island-header {
