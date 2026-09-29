@@ -30,7 +30,7 @@ let current = null,
   charts = [],
   importing = false;
 const esc = (v) =>
-  String(v ?? "未报�?).replace(
+  String(v ?? "未报告").replace(
     /[&<>"']/g,
     (c) =>
       ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
@@ -40,10 +40,10 @@ const esc = (v) =>
 const fmt = (v, d = 3) =>
   typeof v === "number"
     ? v.toLocaleString("zh-CN", { maximumFractionDigits: d })
-    : (v ?? "未报�?);
+    : (v ?? "未报告");
 const size = (v) =>
   v == null
-    ? "未报�?
+    ? "未报告"
     : v >= 1073741824
       ? `${fmt(v / 1073741824)} GiB`
       : v >= 1048576
@@ -78,7 +78,7 @@ function elapsed(startedAt) {
   const h = Math.floor(seconds / 3600),
     m = Math.floor((seconds % 3600) / 60),
     s = seconds % 60;
-  return `已运�?${h ? String(h).padStart(2, "0") + ":" : ""}${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  return `已运行 ${h ? String(h).padStart(2, "0") + ":" : ""}${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 function message(
   text,
@@ -90,9 +90,9 @@ function message(
   $("#task").classList.remove("hidden");
   $("#task").classList.toggle("error", error);
   $("#task-label").textContent = error
-    ? "任务未完�?
+    ? "任务未完成"
     : status === "cancelled"
-      ? "任务已取�?
+      ? "任务已取消"
       : status === "done"
         ? "任务完成"
         : "分析任务";
@@ -131,11 +131,11 @@ function message(
     count === null
       ? "正在处理"
       : total === null
-        ? `已处�?${count}${progress.unit ? " " + progress.unit : ""}`
+        ? `已处理 ${count}${progress.unit ? " " + progress.unit : ""}`
         : `${count} / ${total}${progress.unit ? " " + progress.unit : ""}`;
   $("#task-percent").textContent =
     percent === null
-      ? "总量待核�?
+      ? "总量待核验"
       : `${percent.toFixed(percent < 10 && percent % 1 ? 1 : 0)}%`;
   const track = $("#task-progress-track"),
     bar = $("#task-progress-bar");
@@ -149,7 +149,7 @@ function message(
     .map((item) => {
       const done = progressValue(item.completed),
         all = progressValue(item.total);
-      return `<div class="task-subtask"><span>${esc(item.label || "并行任务")}</span><span>${done ?? "准备�?}${all !== null ? " / " + all : ""}${item.unit ? " " + esc(item.unit) : ""}</span></div>`;
+      return `<div class="task-subtask"><span>${esc(item.label || "并行任务")}</span><span>${done ?? "准备中"}${all !== null ? " / " + all : ""}${item.unit ? " " + esc(item.unit) : ""}</span></div>`;
     })
     .join("");
   $("#task-elapsed").textContent = startedAt ? elapsed(startedAt) : "";
@@ -177,7 +177,7 @@ async function launch(data) {
   try {
     const j = await api("jobs", { method: "POST", body: JSON.stringify(data) });
     if (!data.enqueue) autoOpen = j.id;
-    message(data.enqueue ? "已加入队列，参数已保�? : "任务已提�?);
+    message(data.enqueue ? "已加入队列，参数已保存" : "任务已提交");
     await poll();
   } catch (e) {
     message(e.message, true);
@@ -186,7 +186,7 @@ async function launch(data) {
   }
 }
 const fileName = (file) =>
-  String(file || "未指定文�?)
+  String(file || "未指定文件")
     .split(/[\\/]/)
     .pop();
 function queueRow(j, position) {
@@ -198,15 +198,15 @@ function queueRow(j, position) {
     },
     states = {
       queued: "等待",
-      running: "运行�?,
+      running: "运行中",
       done: "完成",
       error: "失败",
-      cancelled: "已取�?,
+      cancelled: "已取消",
     };
   const primary = fileName(j.file || j.reference),
-    secondary = j.candidate ? " �?" + fileName(j.candidate) : "";
+    secondary = j.candidate ? " → " + fileName(j.candidate) : "";
   const pathText =
-    (j.file || j.reference || "") + (j.candidate ? " �?" + j.candidate : "");
+    (j.file || j.reference || "") + (j.candidate ? " → " + j.candidate : "");
   const action =
     j.status === "done"
       ? "report"
@@ -248,12 +248,12 @@ function renderResultList() {
             r?.reference?.file ||
             j?.file ||
             j?.reference ||
-            "未指定文�?,
+            "未指定文件",
           other = r?.candidate?.file || j?.candidate;
-        const label = fileName(file) + (other ? " �?" + fileName(other) : "");
-        return `<div class="queue-item"><input class="portable-check" type="checkbox" data-result-select="${esc(x.id)}" aria-label="选择结果 ${esc(label)}" ${selectedResults.has(x.id) ? "checked" : ""}><div class="queue-item-main"><strong>${esc(label)}</strong><span class="queue-state">${esc(type)} · ${r ? "已导�? : "已完�?}</span><p class="queue-path">${esc(file)}${other ? " �?" + esc(other) : ""}</p></div><button class="secondary" data-result-open="${esc(x.id)}">查看报告</button></div>`;
+        const label = fileName(file) + (other ? " → " + fileName(other) : "");
+        return `<div class="queue-item"><input class="portable-check" type="checkbox" data-result-select="${esc(x.id)}" aria-label="选择结果 ${esc(label)}" ${selectedResults.has(x.id) ? "checked" : ""}><div class="queue-item-main"><strong>${esc(label)}</strong><span class="queue-state">${esc(type)} · ${r ? "已导入" : "已完成"}</span><p class="queue-path">${esc(file)}${other ? " → " + esc(other) : ""}</p></div><button class="secondary" data-result-open="${esc(x.id)}">查看报告</button></div>`;
       })
-      .join("") || '<p class="hint">暂无已完成结果�?/p>';
+      .join("") || '<p class="hint">暂无已完成结果。</p>';
 }
 $("#queue-list").onchange = (e) => {
   const id = e.target.dataset?.planSelect;
@@ -323,10 +323,10 @@ async function poll() {
     for (const id of selectedPlans)
       if (!waitingIds.has(id)) selectedPlans.delete(id);
     $("#queue-count").textContent =
-      (s.queueRunning ? "运行�? : "已暂�?/ 待开�?) +
+      (s.queueRunning ? "运行中" : "已暂停 / 待开始") +
       " · " +
       pending.filter((j) => j.status === "queued").length +
-      " 项等�?;
+      " 项等待";
     $("#queue-start").disabled = !s.jobs.some((j) => j.status === "queued");
     $("#queue-pause").disabled = !s.queueRunning;
     $("#queue-history-count").textContent = `已结束任务（${history.length}）`;
@@ -337,7 +337,7 @@ async function poll() {
     if (nextQueue !== queueView) {
       $("#queue-list").innerHTML =
         pending.map((j, i) => queueRow(j, i + 1)).join("") ||
-        '<p class="hint">暂无待运行任务。设置文件后点击“加入队列”�?/p>';
+        '<p class="hint">暂无待运行任务。设置文件后点击“加入队列”。</p>';
       queueView = nextQueue;
     }
     if (nextHistory !== historyView) {
@@ -433,9 +433,9 @@ document.querySelectorAll(".file-picker").forEach(
     (button.onclick = async () => {
       button.disabled = true;
       const label = button.textContent;
-      button.textContent = "正在打开�?;
+      button.textContent = "正在打开…";
       message(
-        "正在打开 Windows 文件选择器；如果没有出现在前台，请查看任务栏�?,
+        "正在打开 Windows 文件选择器；如果没有出现在前台，请查看任务栏。",
       );
       try {
         const result = await api("select-file", { method: "POST", body: "{}" });
@@ -443,12 +443,12 @@ document.querySelectorAll(".file-picker").forEach(
           const input = $("#" + button.dataset.target);
           input.value = result.file;
           input.dispatchEvent(new Event("input"));
-          message("已选择文件�? + result.file);
+          message("已选择文件：" + result.file);
         } else message("已取消选择文件");
       } catch (e) {
         message(
           e.message === "Failed to fetch"
-            ? "本机分析服务未运行，请重新启�?MediaScope"
+            ? "本机分析服务未运行，请重新启动 MediaScope"
             : e.message,
           true,
         );
@@ -470,7 +470,7 @@ syncSitiWorkers();
 $("#inspect").onclick = async () => {
   const requested = clean($("#file").value);
   try {
-    message("正在读取文件信息�?);
+    message("正在读取文件信息…");
     const result = await api("probe", {
       method: "POST",
       body: JSON.stringify({ file: requested }),
@@ -506,7 +506,7 @@ $("#compare").onclick = (event) => {
   if (input.timingMode === "ordinal-confirmed") {
     if (!$("#timing-confirm").checked) {
       message(
-        "请确认两路视频的每个显示帧按顺序一一对应，且没有丢帧、重复帧或重排�?,
+        "请确认两路视频的每个显示帧按顺序一一对应，且没有丢帧、重复帧或重排。",
         true,
       );
       return;
@@ -516,7 +516,7 @@ $("#compare").onclick = (event) => {
   if (input.timingMode === "playback-sample") {
     if (!$("#playback-confirm").checked) {
       message(
-        "请确认两路首帧对应同一播放时刻，并接受 CFR 一侧作为采样网格的实验性解释�?,
+        "请确认两路首帧对应同一播放时刻，并接受 CFR 一侧作为采样网格的实验性解释。",
         true,
       );
       return;
@@ -525,7 +525,7 @@ $("#compare").onclick = (event) => {
   }
   if ($("#chroma-confirm-mode").checked) {
     if (!$("#chroma-confirm").checked) {
-      message("请先确认色度位置来自可信来源，并了解结果依赖此假设�?, true);
+      message("请先确认色度位置来自可信来源，并了解结果依赖此假设。", true);
       return;
     }
     input.chromaConfirmed = true;
@@ -603,7 +603,7 @@ function trialControls() {
       p = av1 ? 1 : input.presets.length,
       points = input.crfs.length * p * (both ? 2 : 1);
     $("#trial-count").textContent =
-      `${input.crfs.length} �?CRF × ${p} 个预�?× ${both ? 2 : 1} 种位�?= ${points} 个编码点�?{points > 64 ? "超过 64 点上限，请减少选项�? : p < 1 || p > 4 ? "请选择 1�? �?preset�? : "顺序运行，耗时曲线仅代表本机本次实验�?}`;
+      `${input.crfs.length} 个 CRF × ${p} 个预设 × ${both ? 2 : 1} 种位深 = ${points} 个编码点。${points > 64 ? "超过 64 点上限，请减少选项。" : p < 1 || p > 4 ? "请选择 1–4 个 preset。" : "顺序运行，耗时曲线仅代表本机本次实验。"}`;
   } catch (e) {
     $("#trial-count").textContent = e.message;
   }
@@ -646,7 +646,7 @@ function reportName(r) {
 function downloadPortable(results, plans, name) {
   const json = JSON.stringify(makePortable({ results, plans }), null, 2);
   if (new Blob([json]).size > maxPortableBytes)
-    throw Error("导出文件超过 256 MiB；请勾选较少的结果，确保文件能够重新导�?);
+    throw Error("导出文件超过 256 MiB；请勾选较少的结果，确保文件能够重新导入");
   download(json, name, "application/json");
 }
 for (const mode of modes)
@@ -684,14 +684,14 @@ async function portableExport() {
     results = [],
     plans = [];
   if (resultScope === "current") {
-    if (!report) throw Error("请先打开一份报�?);
+    if (!report) throw Error("请先打开一份报告");
     results.push({ entryId: "current-report", report });
   } else if (resultScope !== "none") {
     const chosen = resultItems().filter(
       (item) => resultScope === "all" || selectedResults.has(item.id),
     );
     if (resultScope === "selected" && chosen.length !== selectedResults.size)
-      throw Error("勾选的结果已变化，请重新确认导出范�?);
+      throw Error("勾选的结果已变化，请重新确认导出范围");
     for (const item of chosen)
       results.push({
         entryId: item.id,
@@ -708,7 +708,7 @@ async function portableExport() {
     plans.push(...chosen);
   }
   if (!results.length && !plans.length)
-    throw Error("当前选择没有可导出的结果或计�?);
+    throw Error("当前选择没有可导出的结果或计划");
   const name =
     resultScope === "current" && !plans.length
       ? reportName(report)
@@ -737,20 +737,20 @@ $("#import-report").onchange = async (e) => {
   }
   importing = true;
   busy(true);
-  message("正在读取并校�?JSON�?);
+  message("正在读取并校验 JSON…");
   try {
     if (f.size > maxPortableBytes)
       throw Error("JSON 文件超过 256 MiB 导入上限");
     const useResults = $("#import-results").checked,
       usePlans = $("#import-plans").checked;
-    if (!useResults && !usePlans) throw Error("请至少选择一项导入内�?);
+    if (!useResults && !usePlans) throw Error("请至少选择一项导入内容");
     const saved = await f.text();
     if (current) throw Error("分析任务正在运行，请在任务完成后导入");
     const data = parsePortable(saved),
       results = useResults ? data.results : [],
       plans = usePlans ? data.plans : [];
     if (!results.length && !plans.length)
-      throw Error("文件中没有所选的可导入内�?);
+      throw Error("文件中没有所选的可导入内容");
     if (results.length === 1 && !plans.length) {
       const shown = results[0].report,
         previous = reports[modeOf(shown)];
@@ -762,7 +762,7 @@ $("#import-report").onchange = async (e) => {
           document
             .querySelector("#" + modeOf(shown) + "-result")
             .classList.add("hidden");
-        throw Error("报告无法完整显示�? + err.message);
+        throw Error("报告无法完整显示：" + err.message);
       }
     }
     if (plans.length)
@@ -791,7 +791,7 @@ $("#import-report").onchange = async (e) => {
       switchMode(modeOf(results[0].report));
     await poll();
     message(
-      `已导�?${f.name}�?{results.length} 份结果�?{plans.length} 项计划。结果使用保存的原始数据，不重新计算。`,
+      `已导入 ${f.name}：${results.length} 份结果、${plans.length} 项计划。结果使用保存的原始数据，不重新计算。`,
     );
   } catch (err) {
     message(err.message, true);
@@ -855,7 +855,7 @@ function render(r, activate = true) {
       r.type === "compare"
         ? "质量对比报告"
         : r.type === "trial"
-          ? "片段率失真实�?
+          ? "片段率失真实验"
           : "媒体分析报告";
     if (r.type === "compare") renderComparison(r);
     else if (r.type === "trial") renderTrial(r);
@@ -873,7 +873,7 @@ function metadataHTML(r) {
   if (!data)
     return raw(
       { frameSample: r.frameSample, scope: r.frameSampleScope },
-      "旧版报告附加数据（重新分析可获得去重摘要�?,
+      "旧版报告附加数据（重新分析可获得去重摘要）",
     );
   return (
     `<p class="hint">${esc(data.note)} ${esc(data.scope)}</p>` +
@@ -881,10 +881,10 @@ function metadataHTML(r) {
       ? data.items
           .map(
             (item) =>
-              `<div class="evidence"><strong>${esc(item.name)}</strong><span>${esc(item.sources.join("�?))} · ${item.occurrences} 次相同记�?/span>${raw(item.value, "查看此项数据")}</div>`,
+              `<div class="evidence"><strong>${esc(item.name)}</strong><span>${esc(item.sources.join("、"))} · ${item.occurrences} 次相同记录</span>${raw(item.value, "查看此项数据")}</div>`,
           )
           .join("")
-      : '<p class="hint">本次探测范围未报告附加数据；不能据此认定全片不存在�?/p>')
+      : '<p class="hint">本次探测范围未报告附加数据；不能据此认定全片不存在。</p>')
   );
 }
 function renderMedia(r) {
@@ -913,9 +913,9 @@ function renderMedia(r) {
       "容器时长",
       r.raw.format.duration
         ? `${fmt(Number(r.raw.format.duration))} s`
-        : "未报�?,
+        : "未报告",
     ],
-    ["轨道�?, streams.length],
+    ["轨道数", streams.length],
     ["容器", r.raw.format.format_name],
   ]);
   let html = `<p class="path">${esc(r.file)}</p>`;
@@ -925,8 +925,8 @@ function renderMedia(r) {
       [
         "索引 / 类型",
         "编码 / 标记",
-        "视频 / 音频属�?,
-        "时长 / 起始�?,
+        "视频 / 音频属性",
+        "时长 / 起始秒",
         "语言 / 默认",
       ],
       streams.map((s) => [
@@ -935,10 +935,10 @@ function renderMedia(r) {
         s.codec_type === "video"
           ? `${s.width}×${s.height} · ${s.pix_fmt} · fps ${s.avg_frame_rate}`
           : s.codec_type === "audio"
-            ? `${s.sample_rate} Hz · ${s.channels} ch · ${s.channel_layout ?? "布局未报�?} · ${s.sample_fmt}`
+            ? `${s.sample_rate} Hz · ${s.channels} ch · ${s.channel_layout ?? "布局未报告"} · ${s.sample_fmt}`
             : "详见原始数据",
         `${s.duration ?? "?"} / ${s.start_time ?? "?"}`,
-        `${s.tags?.language ?? "未标�?} / ${s.disposition?.default ? "�? : "�?}`,
+        `${s.tags?.language ?? "未标记"} / ${s.disposition?.default ? "是" : "否"}`,
       ]),
     ),
   );
@@ -946,57 +946,57 @@ function renderMedia(r) {
     html += section(
       `视频 #${s.index} · 色彩与编码声明`,
       table(
-        ["属�?, "文件报告�?],
+        ["属性", "文件报告值"],
         [
           [
-            "Profile / 原始 Level �?,
+            "Profile / 原始 Level 值",
             `${s.profile ?? "?"} / ${s.level ?? "?"}`,
           ],
           [
             "像素格式 / 有效位深",
-            `${s.pix_fmt ?? "?"} / ${s.bits_per_raw_sample ?? "参考像素格�?}`,
+            `${s.pix_fmt ?? "?"} / ${s.bits_per_raw_sample ?? "参考像素格式"}`,
           ],
           [
-            "色原�?/ 传递函�?,
-            `${s.color_primaries ?? "未报�?} / ${s.color_transfer ?? "未报�?}`,
+            "色原色 / 传递函数",
+            `${s.color_primaries ?? "未报告"} / ${s.color_transfer ?? "未报告"}`,
           ],
           [
             "矩阵 / 范围 / 色度位置",
-            `${s.color_space ?? "未报�?} / ${s.color_range ?? "未报�?} / ${s.chroma_location ?? "未报�?}`,
+            `${s.color_space ?? "未报告"} / ${s.color_range ?? "未报告"} / ${s.chroma_location ?? "未报告"}`,
           ],
           [
-            "时间�?/ 声明帧率 / 平均帧率",
+            "时间基 / 声明帧率 / 平均帧率",
             `${s.time_base} / ${s.r_frame_rate} / ${s.avg_frame_rate}`,
           ],
         ],
       ) +
-        `<p class="hint">以上为声明值，不能证实实际画面色彩正确。附加数据已统一去重，见“元数据证据”�?/p>`,
+        `<p class="hint">以上为声明值，不能证实实际画面色彩正确。附加数据已统一去重，见“元数据证据”。</p>`,
     );
   if (r.frames) {
     const gops = r.coding?.gops || legacyGops(r.frames);
     cards([
       ["显示帧数", r.frames.length],
       ["视频包数据量", size(r.packets.bytes)],
-      ["GOP / 关键帧区�?, gops.length],
-      ["非递增时间�?, r.summary.nonIncreasing],
+      ["GOP / 关键帧区间", gops.length],
+      ["非递增时间戳", r.summary.nonIncreasing],
     ]);
     html += section(
       "帧结构与 GOP",
-      `<p class="hint">显示顺序视图。I / P / B 是预测类型；IDR / CRA / BLA 是码流访问类型，二者不混用。GOP 以随机访�?关键帧区间呈现，不据此猜测开放或闭合�?/p><div id="gop-overview"></div><div class="pager"><button id="gop-prev" class="secondary">上一 GOP</button><label>GOP #<input id="gop-index" type="number" min="0" max="${gops.length - 1}" value="0"></label><button id="gop-next" class="secondary">下一 GOP</button><span id="gop-info"></span></div><div id="frame-plot"></div><div id="frame-detail" class="frame-detail"></div><details><summary>逐帧列表 / CSV</summary><div class="pager"><button id="prev" class="secondary">上一�?/button><span id="page"></span><button id="next" class="secondary">下一�?/button><button id="csv" class="secondary">导出�?CSV</button></div><div id="frames"></div></details>`,
+      `<p class="hint">显示顺序视图。I / P / B 是预测类型；IDR / CRA / BLA 是码流访问类型，二者不混用。GOP 以随机访问/关键帧区间呈现，不据此猜测开放或闭合。</p><div id="gop-overview"></div><div class="pager"><button id="gop-prev" class="secondary">上一 GOP</button><label>GOP #<input id="gop-index" type="number" min="0" max="${gops.length - 1}" value="0"></label><button id="gop-next" class="secondary">下一 GOP</button><span id="gop-info"></span></div><div id="frame-plot"></div><div id="frame-detail" class="frame-detail"></div><details><summary>逐帧列表 / CSV</summary><div class="pager"><button id="prev" class="secondary">上一页</button><span id="page"></span><button id="next" class="secondary">下一页</button><button id="csv" class="secondary">导出帧 CSV</button></div><div id="frames"></div></details>`,
     );
     if (r.coding?.codec === "av1")
       html += section(
-        "AV1 编码�?/ 显示事件",
-        `<p>新编码帧 ${r.coding.counts.encoded} · 隐藏�?${r.coding.counts.hidden} · SHOW_EXISTING ${r.coding.counts.showExisting} · 显示事件 ${r.coding.counts.shown}</p><p class="hint">按码流编码顺序列出所有帧头事件，包含 KEY / INTER / INTRA_ONLY / SWITCH、隐藏帧�?SHOW_EXISTING。H=隐藏、S=显示已有帧、V=新帧直接显示。点击色带查看结构字段、刷新掩码与参考槽。OBU 负载字节不一定等于完整图像大小�?/p><div id="av1-plot"></div><label>编码事件 #<input id="av1-index" type="number" min="0" max="${r.coding.events.length - 1}" value="0"></label><div id="av1-detail"></div>${raw(r.coding.sequences, "AV1 序列头（去重�?)}`,
+        "AV1 编码帧 / 显示事件",
+        `<p>新编码帧 ${r.coding.counts.encoded} · 隐藏帧 ${r.coding.counts.hidden} · SHOW_EXISTING ${r.coding.counts.showExisting} · 显示事件 ${r.coding.counts.shown}</p><p class="hint">按码流编码顺序列出所有帧头事件，包含 KEY / INTER / INTRA_ONLY / SWITCH、隐藏帧和 SHOW_EXISTING。H=隐藏、S=显示已有帧、V=新帧直接显示。点击色带查看结构字段、刷新掩码与参考槽。OBU 负载字节不一定等于完整图像大小。</p><div id="av1-plot"></div><label>编码事件 #<input id="av1-index" type="number" min="0" max="${r.coding.events.length - 1}" value="0"></label><div id="av1-detail"></div>${raw(r.coding.sequences, "AV1 序列头（去重）")}`,
       );
     html += section(
-      "视频码率 · 1 秒窗�?,
-      `<div id="bitrate"></div><p class="hint">平均 ${fmt(r.packets.averageMbps)} Mbps · 缺少时间�?${r.packets.missing} 包。放大显示不会将 1 秒窗口改成更细的测量�?/p>`,
+      "视频码率 · 1 秒窗口",
+      `<div id="bitrate"></div><p class="hint">平均 ${fmt(r.packets.averageMbps)} Mbps · 缺少时间戳 ${r.packets.missing} 包。放大显示不会将 1 秒窗口改成更细的测量。</p>`,
     );
     const audio = (r.tracks || []).filter((t) => t.type === "audio");
     if (audio.length)
       html += section(
-        "音轨码率 · 1 秒窗�?,
+        "音轨码率 · 1 秒窗口",
         audio
           .map(
             (t) =>
@@ -1008,7 +1008,7 @@ function renderMedia(r) {
       html += section(
         "体积构成",
         table(
-          ["轨道", "压缩包数据量", "占文件比�?, "包数"],
+          ["轨道", "压缩包数据量", "占文件比例", "包数"],
           r.tracks
             .map((t) => [
               `#${t.index} ${t.type} / ${t.codec}`,
@@ -1016,20 +1016,20 @@ function renderMedia(r) {
               `${fmt((t.bytes / r.size) * 100)}%`,
               t.count,
             ])
-            .concat([["容器及未归属差额", size(r.overheadBytes), "�?, "�?]]),
+            .concat([["容器及未归属差额", size(r.overheadBytes), "—", "—"]]),
         ) +
-          '<p class="hint">差额按文件大小减去所有轨道包大小计算；特殊容器的重复引用可能使其为负，不等同于精�?box 大小。PCM 多音轨的体积不能算作视频可压缩空间�?/p>',
+          '<p class="hint">差额按文件大小减去所有轨道包大小计算；特殊容器的重复引用可能使其为负，不等同于精确 box 大小。PCM 多音轨的体积不能算作视频可压缩空间。</p>',
       );
     if (r.content?.available) {
       const e = r.content.execution,
         execution = e
-          ? `<p class="hint">SI/TI 执行�?{e.mode === "frame-parallel" ? `${e.workers} 路帧级并行` : "串行"}；设�?${e.setting === "auto" ? `自动（请求上�?${e.requestedWorkers} 路）` : `上限 ${e.requestedWorkers} 路`}${e.fallbackReason ? `；已回退�?{esc(e.fallbackReason)}` : ""}�?/p>`
+          ? `<p class="hint">SI/TI 执行：${e.mode === "frame-parallel" ? `${e.workers} 路帧级并行` : "串行"}；设置 ${e.setting === "auto" ? `自动（请求上限 ${e.requestedWorkers} 路）` : `上限 ${e.requestedWorkers} 路`}${e.fallbackReason ? `；已回退：${esc(e.fallbackReason)}` : ""}。</p>`
           : "";
       html += section(
-        "SI/TI 内容复杂�?,
+        "SI/TI 内容复杂度",
         execution +
           table(
-            ["指标", "均�?, "P95", "最大�?],
+            ["指标", "均值", "P95", "最大值"],
             [
               [
                 "SI / 空间细节",
@@ -1051,9 +1051,9 @@ function renderMedia(r) {
     } else if (r.content) html += notices([r.content.reason]);
     html += notices(r.warnings);
   }
-  html += section("元数据证�?· 去重与来�?, metadataHTML(r));
+  html += section("元数据证据 · 去重与来源", metadataHTML(r));
   html += section(
-    "原始探测与复现记�?,
+    "原始探测与复现记录",
     raw({ file: r.file, tools: r.tools, commands: r.commands, raw: r.raw }),
   );
   $("#details").innerHTML = html;
@@ -1105,27 +1105,27 @@ function initFrames(r) {
       packet = r.coding?.packets?.[f.packetIndex];
     $("#frame-detail").innerHTML =
       table(
-        ["显示�?, "时间", "预测类型", "访问类型", "关键帧标�?, "包字�?],
+        ["显示帧", "时间", "预测类型", "访问类型", "关键帧标记", "包字节"],
         [
           [
             p[0],
             `${fmt(f.t, 6)} s`,
             f.type,
-            f.special ?? "旧版未解�?,
-            f.key ? "�? : "�?,
-            f.bytes ?? "未报�?,
+            f.special ?? "旧版未解析",
+            f.key ? "是" : "否",
+            f.bytes ?? "未报告",
           ],
         ],
-      ) + raw(packet ?? f, "码流�?/ 单帧证据");
+      ) + raw(packet ?? f, "码流包 / 单帧证据");
   };
   const ribbon = draw("frame-plot", fdata, {
-    unit: "包字�?,
-    axis: "显示�?,
+    unit: "包字节",
+    axis: "显示帧",
     frames: true,
     initial: [0, gops[0].end + 1],
     onPick: detail,
     describe: (p) =>
-      `�?${p[0]} · ${fmt(p[2].t, 6)} s · ${p[2].type} / ${p[2].special ?? "未解�?} · ${size(p[2].bytes)}`,
+      `帧 ${p[0]} · ${fmt(p[2].t, 6)} s · ${p[2].type} / ${p[2].special ?? "未解析"} · ${size(p[2].bytes)}`,
   });
   let selected = 0;
   const overview = gopOverview($("#gop-overview"), gops, r.frames.length, (i) =>
@@ -1137,7 +1137,7 @@ function initFrames(r) {
     const g = gops[selected];
     $("#gop-index").value = selected;
     $("#gop-info").textContent =
-      `${g.label} · �?${g.start}�?{g.end} · ${g.count} �?{g.boundary ? " · " + g.boundary : ""}`;
+      `${g.label} · 帧 ${g.start}–${g.end} · ${g.count} 帧${g.boundary ? " · " + g.boundary : ""}`;
     $("#gop-prev").disabled = selected === 0;
     $("#gop-next").disabled = selected === gops.length - 1;
     ribbon.setRange(g.start, g.end + 1);
@@ -1155,15 +1155,15 @@ function initFrames(r) {
     $("#prev").disabled = page === 0;
     $("#next").disabled = (page + 1) * 100 >= r.frames.length;
     $("#frames").innerHTML = table(
-      ["�?, "时间 s", "预测类型", "码流访问类型", "关键�?, "包字�?],
+      ["帧", "时间 s", "预测类型", "码流访问类型", "关键帧", "包字节"],
       r.frames
         .slice(page * 100, page * 100 + 100)
         .map((f, i) => [
           page * 100 + i,
           f.t,
           f.type,
-          f.special ?? "未解�?,
-          f.key ? "�? : "�?,
+          f.special ?? "未解析",
+          f.key ? "是" : "否",
           f.bytes,
         ]),
     );
@@ -1204,30 +1204,30 @@ function initFrames(r) {
       $("#av1-detail").innerHTML =
         table(
           [
-            "事件 / 编码�?,
-            "类型 / 可见�?,
-            "显示�?,
+            "事件 / 编码包",
+            "类型 / 可见性",
+            "显示帧",
             "Order hint",
             "刷新掩码",
-            "引用�?�?编码事件",
+            "引用槽 → 编码事件",
           ],
           [
             [
               `${e.id} / ${e.packet}`,
               `${e.kind} / ${e.hidden ? "隐藏" : "显示"}`,
-              e.displayIndex ?? "不直接输�?,
+              e.displayIndex ?? "不直接输出",
               e.orderHint,
               e.refreshFlags == null
-                ? "未报�?
+                ? "未报告"
                 : "0x" + e.refreshFlags.toString(16),
               e.showExisting
-                ? `显示�?${e.showSlot} �?事件 ${e.sourceEvent ?? "未知"}`
+                ? `显示槽 ${e.showSlot} → 事件 ${e.sourceEvent ?? "未知"}`
                 : (e.referenceSlots || [])
-                    .map((s, i) => `${s}�?{e.referenceEvents?.[i] ?? "未知"}`)
+                    .map((s, i) => `${s}→${e.referenceEvents?.[i] ?? "未知"}`)
                     .join(", "),
             ],
           ],
-        ) + raw(e, "结构相关帧头字段与引用证�?);
+        ) + raw(e, "结构相关帧头字段与引用证据");
     };
     draw(
       "av1-plot",
@@ -1248,7 +1248,7 @@ function initFrames(r) {
         onPick: eventDetail,
         describe: (p) => {
           const e = events[p[0]];
-          return `事件 ${e.id} · �?${e.packet} · ${e.kind} · ${e.hidden ? "隐藏" : "显示"} · order_hint ${e.orderHint ?? "未知"}`;
+          return `事件 ${e.id} · 包 ${e.packet} · ${e.kind} · ${e.hidden ? "隐藏" : "显示"} · order_hint ${e.orderHint ?? "未知"}`;
         },
       },
     );
@@ -1264,11 +1264,11 @@ function initFrames(r) {
 }
 function renderComparison(r) {
   cards([
-    ["参考文�?, size(r.reference.size)],
-    ["候选文�?, size(r.candidate.size)],
+    ["参考文件", size(r.reference.size)],
+    ["候选文件", size(r.candidate.size)],
     ["总文件体积比", `${fmt(r.sizeRatio * 100)}%`],
     [
-      r.alignment.pairing === "playback-sample" ? "采样时刻" : "匹配显示�?,
+      r.alignment.pairing === "playback-sample" ? "采样时刻" : "匹配显示帧",
       r.alignment.frames,
     ],
   ]);
@@ -1283,38 +1283,38 @@ function renderComparison(r) {
           "配对方式",
           "首次超过 0.1 ms 的帧",
           "最大相对时间差",
-          "末帧持续时间�?,
+          "末帧持续时间差",
         ],
         [
           [
-            "解码显示帧序�?,
-            r.alignment.firstTimestampMismatchFrame ?? "未超�?,
+            "解码显示帧序号",
+            r.alignment.firstTimestampMismatchFrame ?? "未超过",
             `${fmt(r.alignment.maxRelativeDifferenceSeconds * 1000, 3)} ms`,
             r.alignment.lastDurationDifferenceSeconds == null
-              ? "未报�?
+              ? "未报告"
               : `${fmt(r.alignment.lastDurationDifferenceSeconds * 1000, 3)} ms`,
           ],
         ],
       ) +
         notices([
-          "时间轴差异已记录；指标按对应帧计算，不代表两路播放时间完全一致�?,
+          "时间轴差异已记录；指标按对应帧计算，不代表两路播放时间完全一致。",
         ]),
     );
   if (r.alignment.pairing === "playback-sample") {
     const a = r.alignment,
       modern = !!a.gridSide;
     html += section(
-      "VFR �?CFR 播放采样 · 实验�?,
+      "VFR ↔ CFR 播放采样 · 实验性",
       table(
         [
-          "CFR 网格所在视�?/ 帧率",
-          "采样视频�?/ 网格�?,
-          "CFR 最大偏�?/ 容差",
+          "CFR 网格所在视频 / 帧率",
+          "采样视频帧 / 网格帧",
+          "CFR 最大偏差 / 容差",
           "采样重复 / 未采样帧（估计）",
         ],
         [
           [
-            `${modern ? (a.gridSide === "reference" ? "参�? : "候�?) : "候�?} / ${modern ? a.gridRate : a.candidateRate} (${fmt(modern ? a.gridRateHz : a.candidateRateHz, 3)} fps)`,
+            `${modern ? (a.gridSide === "reference" ? "参考" : "候选") : "候选"} / ${modern ? a.gridRate : a.candidateRate} (${fmt(modern ? a.gridRateHz : a.candidateRateHz, 3)} fps)`,
             `${fmt(modern ? a.sampledFrames : a.sourceFrames)} / ${fmt(a.frames)}`,
             `${fmt((modern ? a.maxGridErrorSeconds : a.maxCandidateGridErrorSeconds) * 1000, 4)} / ${fmt(a.cfrToleranceSeconds * 1000, 4)} ms`,
             `${fmt(a.estimatedRepeatedSamples)} / ${fmt(modern ? a.estimatedUnrepresentedSampledFrames : a.estimatedUnrepresentedSourceFrames)}`,
@@ -1324,28 +1324,28 @@ function renderComparison(r) {
         notices([
           a.sampling,
           a.note,
-          "两路首帧对应同一播放时刻由用户确认。指标只覆盖 CFR 网格的采样时刻；完整的估计帧索引映射保存在导出的 JSON 中�?,
+          "两路首帧对应同一播放时刻由用户确认。指标只覆盖 CFR 网格的采样时刻；完整的估计帧索引映射保存在导出的 JSON 中。",
         ]),
     );
   }
   if (r.chromaAssumptions?.length)
     html += section(
-      "用户确认的色度位�?,
+      "用户确认的色度位置",
       table(
-        ["视频", "文件报告�?, "本次采用�?, "证据性质"],
+        ["视频", "文件报告值", "本次采用值", "证据性质"],
         r.chromaAssumptions.map((x) => [
-          x.side === "reference" ? "参�? : "候�?,
-          x.declared ?? "未报�?,
+          x.side === "reference" ? "参考" : "候选",
+          x.declared ?? "未报告",
           x.assumed,
           x.source,
         ]),
-      ) + notices(["该位置由用户指定，软件未验证其真实性；指标依赖此假设�?]),
+      ) + notices(["该位置由用户指定，软件未验证其真实性；指标依赖此假设。"]),
     );
   if (r.profile)
     html += section(
       "比较域与格式",
       table(
-        ["像素格式", "位深 / 采样", "信号", "原色 / 传�?/ 矩阵 / 范围"],
+        ["像素格式", "位深 / 采样", "信号", "原色 / 传递 / 矩阵 / 范围"],
         [
           [
             r.profile.pixelFormat,
@@ -1358,9 +1358,9 @@ function renderComparison(r) {
     );
   if (r.normalization?.crossDepth)
     html += section(
-      "跨位深码值映�?,
+      "跨位深码值映射",
       table(
-        ["参考原格式", "候选原格式", "比较格式", "映射 / PSNR 峰�?],
+        ["参考原格式", "候选原格式", "比较格式", "映射 / PSNR 峰值"],
         [
           [
             r.normalization.sourceFormats.reference,
@@ -1373,8 +1373,8 @@ function renderComparison(r) {
         notices([
           r.normalization.basis,
           r.normalization.verification?.passed
-            ? "本机全码值映射校验通过（Y / Cb / Cr�?�?55�?
-            : "未报告映射验�?,
+            ? "本机全码值映射校验通过（Y / Cb / Cr，0–255）"
+            : "未报告映射验证",
         ]) +
         raw(r.normalization),
     );
@@ -1403,7 +1403,7 @@ function renderComparison(r) {
     html += section(
       "仅视频数据量",
       table(
-        ["参考视频包", "候选视频包", "候�?/ 参�?],
+        ["参考视频包", "候选视频包", "候选 / 参考"],
         [
           [
             size(r.videoSize.reference),
@@ -1412,23 +1412,23 @@ function renderComparison(r) {
           ],
         ],
       ) +
-        '<p class="hint">此比例排除了音轨与容器体积，便于评价视频编码的实际节省�?/p>',
+        '<p class="hint">此比例排除了音轨与容器体积，便于评价视频编码的实际节省。</p>',
     );
   for (const [key, m] of Object.entries(r.metrics))
     html += section(
       key.toUpperCase(),
       table(
-        ["整体�?, "P05", "最低帧", "统计方式"],
+        ["整体值", "P05", "最低帧", "统计方式"],
         [
           [
             fmt(m.pooled, 5),
             fmt(m.p05, 5),
             fmt(m.min, 5),
             key === "psnr"
-              ? "MSE 域汇�?/ dB"
+              ? "MSE 域汇总 / dB"
               : key === "vmaf"
                 ? m.model
-                : "逐帧均�?,
+                : "逐帧均值",
           ],
         ],
       ) +
@@ -1436,16 +1436,16 @@ function renderComparison(r) {
         (m.worst
           ? "<h4>最低质量的 1 秒区间（相对参考起点）</h4>" +
             table(
-              ["起点 / �?, "帧范�?, "区间整体�?, "最低帧�?],
+              ["起点 / 秒", "帧范围", "区间整体值", "最低帧值"],
               m.worst.map((w) => [
                 w.start,
-                `${w.first}�?{w.last}`,
+                `${w.first}–${w.last}`,
                 fmt(w.value, 5),
                 fmt(w.min, 5),
               ]),
             )
           : "") +
-        '<p class="hint">最低区间用于定位复查，不自动判定画面不可接受。末尾区间可能不�?1 秒�?/p>',
+        '<p class="hint">最低区间用于定位复查，不自动判定画面不可接受。末尾区间可能不足 1 秒。</p>',
     );
   const alignmentEvidence = { ...r.alignment };
   delete alignmentEvidence.estimatedSourceFrameIndices;
@@ -1465,15 +1465,15 @@ function renderComparison(r) {
     draw(
       "metric-" + k,
       m.values.map((v, i) => [i, v === "Infinity" ? null : v]),
-      { unit: metricLabels[k], axis: "显示帧序号（�?0 开始）" },
+      { unit: metricLabels[k], axis: "显示帧序号（从 0 开始）" },
     );
 }
 function renderTrial(r) {
   cards([
     ["片段起点", `${r.experiment.start} s`],
     ["请求片段长度", `${r.experiment.duration} s`],
-    ["实际显示�?, r.experiment.actualFrames],
-    ["编码�?, r.experiment.encoder],
+    ["实际显示帧", r.experiment.actualFrames],
+    ["编码器", r.experiment.encoder],
   ]);
   const rows = r.rows.map((x) => ({
       ...x,
@@ -1486,7 +1486,7 @@ function renderTrial(r) {
   let html =
     `<p class="path">${esc(r.source.file)}</p>` +
     notices([
-      r.experiment.comparisonDomain ?? "原生位深参�?,
+      r.experiment.comparisonDomain ?? "原生位深参考",
       ...Object.values(r.skippedMetrics ?? {}),
     ]);
   if (r.experiment.preparation?.baseline)
@@ -1499,13 +1499,13 @@ function renderTrial(r) {
             [
               fmt(r.experiment.preparation.baseline.psnr.pooled, 5),
               fmt(r.experiment.preparation.baseline.ssim.pooled, 6),
-              "两种无损输入在统一 10-bit 域的差异；尚未试编码，不与成片分数相减�?,
+              "两种无损输入在统一 10-bit 域的差异；尚未试编码，不与成片分数相减。",
             ],
           ],
         ),
     );
   html += section(
-    "实验采样�?,
+    "实验采样点",
     `<details id="trial-samples" ${rows.length <= 12 ? "open" : ""}><summary>查看 ${rows.length} 个实测点</summary><div class="sample-sort"><label>排序参数<select id="sample-sort-key">${Object.entries(
       trialSortFields,
     )
@@ -1516,41 +1516,41 @@ function renderTrial(r) {
   );
   html += section(
     "CRF 参数扫描 · 固定每条曲线的位深与 preset",
-    '<div class="trial-chart-grid"><div><h4>�?CRF 与质量：PSNR（越高越好）</h4><div id="trial-psnr"></div></div><div><h4>�?CRF 与编码耗时（越低越快）</h4><div id="trial-time"></div></div><div><h4>�?CRF 与视频码率（数据开销�?/h4><div id="trial-rate"></div></div><div><h4>�?CRF 与质量：SSIM（越高越好）</h4><div id="trial-ssim"></div></div></div><p class="hint">每个圆点是一�?CRF 实测结果，每条线固定一个位�?/ preset；连线仅辅助读图，不是拟合或插值预测。横�?CRF 是编码器参数，无量纲；同 CRF 不保证同质量或码率。耗时仅为本机单次测量，无误差条，不宜据微小差异排名�?/p>',
+    '<div class="trial-chart-grid"><div><h4>① CRF 与质量：PSNR（越高越好）</h4><div id="trial-psnr"></div></div><div><h4>② CRF 与编码耗时（越低越快）</h4><div id="trial-time"></div></div><div><h4>③ CRF 与视频码率（数据开销）</h4><div id="trial-rate"></div></div><div><h4>④ CRF 与质量：SSIM（越高越好）</h4><div id="trial-ssim"></div></div></div><p class="hint">每个圆点是一个 CRF 实测结果，每条线固定一个位深 / preset；连线仅辅助读图，不是拟合或插值预测。横轴 CRF 是编码器参数，无量纲；同 CRF 不保证同质量或码率。耗时仅为本机单次测量，无误差条，不宜据微小差异排名。</p>',
   );
   html += section(
     "码率—质量与编码成本",
-    `<div class="two"><label>横轴<select id="rd-axis"><option value="videoMbps">视频平均码率（Mbit/s�?/option><option value="videoKiB">视频包体积（KiB�?/option><option value="encodeSeconds">编码耗时（s�?/option><option value="encodeFps">编码速度（frame/s�?/option></select></label><label>纵轴指标<select id="rd-metric">${metrics.map((m) => `<option value="${m}">${esc(metricLabels[m])}</option>`).join("")}</select></label></div><div id="rd"></div><p class="hint">码率—质量图：同等质量时越靠左越省码率，同等码率时越高越好；需比较同一参考片段及指标域。成本图仅显示散点：相同质量下比较编码时间或速度。Mbit/s = 10�?bit/s；KiB = 1024 B，仅计视频包。PSNR �?MSE 域汇总，SSIM / VMAF 为逐帧均值�?/p>`,
+    `<div class="two"><label>横轴<select id="rd-axis"><option value="videoMbps">视频平均码率（Mbit/s）</option><option value="videoKiB">视频包体积（KiB）</option><option value="encodeSeconds">编码耗时（s）</option><option value="encodeFps">编码速度（frame/s）</option></select></label><label>纵轴指标<select id="rd-metric">${metrics.map((m) => `<option value="${m}">${esc(metricLabels[m])}</option>`).join("")}</select></label></div><div id="rd"></div><p class="hint">码率—质量图：同等质量时越靠左越省码率，同等码率时越高越好；需比较同一参考片段及指标域。成本图仅显示散点：相同质量下比较编码时间或速度。Mbit/s = 10⁶ bit/s；KiB = 1024 B，仅计视频包。PSNR 为 MSE 域汇总，SSIM / VMAF 为逐帧均值。</p>`,
   );
   html += section(
-    "逐帧质量叠加 · 固定位深�?preset，对�?CRF",
-    `<div class="two"><label>固定对比�?select id="trial-group">${groups.map((g, i) => `<option value="${i}">${esc(g)}</option>`).join("")}</select></label><label>纵轴质量指标<select id="trial-frame-metric">${metrics.map((m) => `<option value="${m}">${esc(metricLabels[m])}</option>`).join("")}</select></label></div><div id="trial-crf-select" class="checks"></div><p id="trial-frame-note" class="hint"></p><div id="trial-frames"></div>`,
+    "逐帧质量叠加 · 固定位深与 preset，对比 CRF",
+    `<div class="two"><label>固定对比组<select id="trial-group">${groups.map((g, i) => `<option value="${i}">${esc(g)}</option>`).join("")}</select></label><label>纵轴质量指标<select id="trial-frame-metric">${metrics.map((m) => `<option value="${m}">${esc(metricLabels[m])}</option>`).join("")}</select></label></div><div id="trial-crf-select" class="checks"></div><p id="trial-frame-note" class="hint"></p><div id="trial-frames"></div>`,
   );
   html +=
     notices(r.warnings) +
     section(
-      "实验文件与复现记�?,
-      `<p class="hint">${r.experiment.retainedFiles.length ? "已保留实验文件：" + esc(r.experiment.retainedFiles.join("�?)) : "实验视频已自动清理；报告保留数据与运行参数�?}</p>` +
+      "实验文件与复现记录",
+      `<p class="hint">${r.experiment.retainedFiles.length ? "已保留实验文件：" + esc(r.experiment.retainedFiles.join("；")) : "实验视频已自动清理；报告保留数据与运行参数。"}</p>` +
         raw({ experiment: r.experiment, tools: r.tools, commands: r.commands }),
     );
   $("#details").innerHTML = html;
   const labels = {
     ...metricLabels,
-    videoKiB: "视频包体积（KiB�?,
-    videoMbps: "视频平均码率（Mbit/s�?,
+    videoKiB: "视频包体积（KiB）",
+    videoMbps: "视频平均码率（Mbit/s）",
     encodeSeconds: "编码耗时（s）↓",
     encodeFps: "编码速度（frame/s）↑",
-    crf: "CRF（无量纲�?,
+    crf: "CRF（无量纲）",
   };
   const drawSamples = () => {
     $("#trial-sample-table").innerHTML = table(
       [
         "位深 / preset",
         "CRF",
-        "视频包体�?,
+        "视频包体积",
         "视频码率 / Mbit/s",
         "PSNR / dB",
-        "SSIM / 无量�?,
+        "SSIM / 无量纲",
         "VMAF / 模型分数",
         "编码耗时 s / 速度 frame/s",
       ],
@@ -1604,16 +1604,16 @@ function renderTrial(r) {
     );
     $("#trial-frame-note").textContent =
       (result.timed
-        ? "横轴：相对片段首帧的时间（s），使用保存的参考帧时间戳�?
-        : "横轴：片段显示帧序号（从 0 开始）；报告未保存可用时间戳，不估算秒数�?) +
-      " 同一参考片段、位深与 preset；仅改变 CRF。悬停可并列读取各曲线；无限值和缺失值留空，不跨空缺连线�? +
+        ? "横轴：相对片段首帧的时间（s），使用保存的参考帧时间戳。"
+        : "横轴：片段显示帧序号（从 0 开始）；报告未保存可用时间戳，不估算秒数。") +
+      " 同一参考片段、位深与 preset；仅改变 CRF。悬停可并列读取各曲线；无限值和缺失值留空，不跨空缺连线。" +
       (result.missing.length
-        ? " 未保存逐帧数据�?CRF�? + result.missing.join("�?)
+        ? " 未保存逐帧数据的 CRF：" + result.missing.join("、")
         : "");
     if (!result.data.length) {
       $("#trial-frames").textContent = selectedCrfs.length
-        ? "该报告未保存所选指标的逐帧数据�?
-        : "请至少选择一�?CRF�?;
+        ? "该报告未保存所选指标的逐帧数据。"
+        : "请至少选择一个 CRF。";
       return;
     }
     framePlot = draw("trial-frames", result.data, {
@@ -1621,19 +1621,19 @@ function renderTrial(r) {
       markers: false,
       height: 440,
       axis: result.timed
-        ? "相对片段首帧时间（s�?
-        : "片段显示帧序号（�?0 开始）",
+        ? "相对片段首帧时间（s）"
+        : "片段显示帧序号（从 0 开始）",
       unit: labels[metric],
       describe: (p) =>
         "CRF " +
         p[2].crf +
-        " · �?" +
+        " · 帧 " +
         p[2].frame +
         " · " +
         labels[metric] +
         " " +
         (p[2].value === "Infinity"
-          ? "�?
+          ? "∞"
           : p[2].value == null
             ? "缺失"
             : fmt(p[2].value, 6)),
@@ -1709,7 +1709,7 @@ function updateNav() {
       const a = document.createElement("a");
       a.href = "#" + panel.id;
       a.className = "nav-dot";
-      a.innerHTML = "<span>" + titleEl.textContent + "</span>";
+      a.innerHTML = "<span>" + titleEl.innerText + "</span>";
       nav.appendChild(a);
       hasItems = true;
     });
@@ -1734,7 +1734,7 @@ if (taskEl) {
   header.innerHTML = `
           <div class="island-brief">
             <div class="pulse-dot"></div>
-            <span id="island-brief-text">当前无任�?/span>
+            <span id="island-brief-text">当前无任务</span>
           </div>
           <div class="island-queue">排队: <span id="island-q-count">0</span></div>
         `;
@@ -1755,7 +1755,7 @@ if (taskEl) {
         taskEl.classList.add("island");
         toggleBtn.innerHTML =
           '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"></polyline><polyline points="9 21 3 21 3 15"></polyline><line x1="21" y1="3" x2="14" y2="10"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>';
-        toggleBtn.title = "还原为顶部视�?;
+        toggleBtn.title = "还原为顶部视图";
       } else {
         taskEl.classList.remove("island");
         taskEl.classList.remove("expanded");
@@ -1781,12 +1781,12 @@ if (taskEl) {
 
     if (briefText) {
       if (taskEl.classList.contains("hidden")) {
-        briefText.textContent = "当前无任�?;
+        briefText.textContent = "当前无任务";
       } else {
         let text = "";
         if (labelEl && labelEl.textContent) text += labelEl.textContent + " ";
         if (phaseEl && phaseEl.textContent) text += phaseEl.textContent;
-        briefText.textContent = text.trim() || "运行�?..";
+        briefText.textContent = text.trim() || "运行中...";
       }
     }
   }, 300);
