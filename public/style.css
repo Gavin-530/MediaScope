@@ -305,6 +305,15 @@ button:disabled {
   gap: 20px;
 }
 
+.bottom-panels {
+  margin-bottom: 24px;
+}
+
+.bottom-panels .panel {
+  margin-bottom: 0;
+  height: 100%;
+}
+
 .checks {
   display: flex;
   gap: 24px;
