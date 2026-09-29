@@ -19,6 +19,8 @@
   --accent-text: #ffffff;
 
   --chart-height: 230px;
+  --scrollbar-thumb: rgba(0, 0, 0, 0.2);
+  --scrollbar-thumb-hover: rgba(0, 0, 0, 0.4);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -40,8 +42,32 @@
     --button-bg: rgba(255, 255, 255, 0.1);
     --button-hover: rgba(255, 255, 255, 0.2);
     --accent-text: #11251f;
+    --scrollbar-thumb: rgba(255, 255, 255, 0.2);
+    --scrollbar-thumb-hover: rgba(255, 255, 255, 0.4);
   }
 }
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+  border-radius: 5px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover);
+}
+
 
 * {
   box-sizing: border-box;
