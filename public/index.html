@@ -11,35 +11,17 @@
 
   <body>
     <header>
-      <a class="brand" href="/">◧ MediaScope <span>LOCAL ANALYSIS</span></a
-      ><span class="local">● 本机处理 · 原文件只读</span>
+      <div class="header-left">
+        <a class="brand" href="/">◧ MediaScope <span>LOCAL ANALYSIS</span></a>
+        <span class="local">● 本机处理 · 原文件只读</span>
+      </div>
+      <nav aria-label="工作模式" class="header-nav">
+        <button class="tab selected" data-mode="inspect">01 / 文件分析</button>
+        <button class="tab" data-mode="compare">02 / 质量对比</button>
+        <button class="tab" data-mode="trial">03 / 片段实验</button>
+      </nav>
     </header>
     <main>
-      <section class="intro">
-        <div class="intro-decorations">
-          <div class="decor-blob blob-1"></div>
-          <div class="decor-blob blob-2"></div>
-          <div class="decor-glass-card">
-            <div class="decor-line"></div>
-            <div class="decor-line short"></div>
-            <div class="decor-chart">
-              <div class="bar" style="height: 40%"></div>
-              <div class="bar" style="height: 70%"></div>
-              <div class="bar" style="height: 50%"></div>
-              <div class="bar" style="height: 90%"></div>
-              <div class="bar" style="height: 60%"></div>
-            </div>
-          </div>
-        </div>
-        <div class="eyebrow">MEDIA INSPECTION / QUALITY MEASUREMENT</div>
-        <h1>看清每一条轨道，<br />衡量每一帧差异。</h1>
-        <p>从容器、编码结构到质量曲线。保留原始数据，让结论有据可查。</p>
-      </section>
-      <nav aria-label="工作模式">
-        <button class="tab selected" data-mode="inspect">01 / 文件分析</button
-        ><button class="tab" data-mode="compare">02 / 质量对比</button
-        ><button class="tab" data-mode="trial">03 / 片段实验</button>
-      </nav>
       <div class="portable-controls">
         <label
           ><input id="import-results" type="checkbox" checked />导入结果</label
