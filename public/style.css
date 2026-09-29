@@ -1330,7 +1330,7 @@ button#import-button:hover {
   right: 14px;
   background: transparent;
   border: none;
-  color: var(--muted);
+  color: var(--accent); /* Make arrow prominent */
   padding: 6px;
   cursor: pointer;
   border-radius: 4px;
@@ -1345,11 +1345,26 @@ button#import-button:hover {
   color: var(--text);
 }
 .task.task-banner {
+  background: #f4fbff !important;
   border: 1px solid var(--accent);
-  box-shadow: 0 4px 24px rgba(74, 144, 226, 0.2);
+  box-shadow: 0 8px 32px rgba(74, 144, 226, 0.15);
+  padding-right: 48px; /* Avoid overlap with toggle button */
 }
 @media (prefers-color-scheme: dark) {
   .task.task-banner {
-    box-shadow: 0 4px 24px rgba(128, 225, 196, 0.15);
+    background: #0d1a16 !important;
+    border-color: rgba(128, 225, 196, 0.3);
+    box-shadow: 0 8px 32px rgba(128, 225, 196, 0.15);
   }
+}
+.island-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-right: 36px; /* Avoid overlap with toggle button in island */
+  width: 100%;
+  cursor: pointer;
+  height: 36px;
+  gap: 16px;
+  user-select: none;
 }
