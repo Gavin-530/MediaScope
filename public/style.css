@@ -1184,7 +1184,7 @@ button#import-button:hover {
   }
 }
 
-/* Floating Task Queue Override (Dynamic Island) */
+/* 任务队列紧凑悬浮视图 */
 .task.island {
   position: fixed !important;
   right: 24px;
@@ -1257,7 +1257,7 @@ button#import-button:hover {
   border-radius: 12px;
 }
 
-/* Dynamic Island Expanded State */
+/* 紧凑视图展开态 */
 .task.island.expanded {
   max-height: 500px;
   width: 450px;

@@ -1727,7 +1727,7 @@ document.body.addEventListener("click", () => {
   setTimeout(updateNav, 100);
 });
 
-// 2. Dynamic Island Task Queue
+// 2. 任务队列（通栏 / 紧凑悬浮视图）
 const taskEl = document.getElementById("task");
 if (taskEl) {
   taskEl.removeAttribute("onclick"); // Clean old attribute
@@ -1765,7 +1765,7 @@ if (taskEl) {
         taskEl.classList.add("task-banner");
         toggleBtn.innerHTML =
           '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 14 10 14 10 20"></polyline><polyline points="20 10 14 10 14 4"></polyline><line x1="14" y1="10" x2="21" y2="3"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>';
-        toggleBtn.title = "切换到灵动岛视图";
+        toggleBtn.title = "切换到紧凑视图";
       }
     };
   }
