@@ -6,16 +6,19 @@ param(
   [string]$Label,
   [ValidateRange(1,256)][int]$MaxLogMiB=16,
   [ValidateRange(1,1048576)][int]$WarnTotalMiB=1024,
-  [switch]$RequireClean
+  [switch]$RequireClean,
+  [switch]$Release
 )
 
 $ErrorActionPreference='Stop'
 $project=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+if($Release -and $Kind -ne 'App'){throw '-Release is only valid for App; package/deployment checks use -RequireClean'}
 if($Kind -eq 'App'){
   if($Archive -or $Executable -or $Arguments.Count -or $Label){throw 'App uses scripts/test.mjs; custom commands must use -Kind Custom'}
   $node=if($env:MEDIASCOPE_NODE_PATH){$env:MEDIASCOPE_NODE_PATH}else{'node'}
   $testArgs=@((Join-Path $PSScriptRoot 'test.mjs'),'--max-log-mib',"$MaxLogMiB",'--warn-total-mib',"$WarnTotalMiB")
   if($RequireClean){$testArgs+='--require-clean'}
+  if($Release){$testArgs+='--release'}
   & $node @testArgs
   exit $LASTEXITCODE
 }
@@ -67,6 +70,20 @@ switch($Kind){
 }
 
 New-Item -ItemType Directory -Force -Path $staging | Out-Null
+$harness=$null
+if($Kind -in @('Package','OnlineDeployment')){
+  # Preserve the exact verifier sources even for a dirty checkout.
+  $harnessRoot=Join-Path $staging 'harness'
+  New-Item -ItemType Directory -Path $harnessRoot | Out-Null
+  Copy-Item -LiteralPath (Join-Path $project 'scripts') -Destination $harnessRoot -Recurse
+  Copy-Item -LiteralPath (Join-Path $project 'runtime-lock.json') -Destination $harnessRoot
+  $harnessFiles=@(Get-EvidenceFiles $harnessRoot | ForEach-Object {@{path=$_.path;bytes=$_.bytes;sha256=(Get-FileHash -LiteralPath $_.full -Algorithm SHA256).Hash}})
+  [IO.File]::WriteAllText((Join-Path $staging 'harness-manifest.json'),($harnessFiles | ConvertTo-Json -Depth 5),(New-Object Text.UTF8Encoding($false)))
+  [IO.Compression.ZipFile]::CreateFromDirectory($harnessRoot,(Join-Path $staging 'harness.zip'),[IO.Compression.CompressionLevel]::Optimal,$false)
+  Remove-Item -LiteralPath $harnessRoot -Recurse -Force
+  $harness=@{archive='harness.zip';files='harness-manifest.json';commit=$gitCommit;workingTree=$gitStatus}
+  $Arguments+=@('-ResultPath',(Join-Path $staging 'deployment-results.json'))
+}
 $buildRoot=[IO.Path]::GetFullPath((Join-Path $project '.build')).TrimEnd('\')
 $buildBefore=@(Get-ChildItem -LiteralPath $buildRoot -Directory -Force | ForEach-Object {$_.FullName})
 $originalLocation=Get-Location;$previousPreference=$ErrorActionPreference
@@ -83,6 +100,11 @@ try {
   Set-Location -LiteralPath $originalLocation
 }
 $finish=(Get-Date).ToUniversalTime()
+if($harness){
+  foreach($file in $harnessFiles){
+    if((Get-FileHash -LiteralPath (Join-Path $project $file.path) -Algorithm SHA256).Hash -ne $file.sha256){throw 'Test harness changed during execution; staging and sandboxes preserved'}
+  }
+}
 $sandboxEvidence=@()
 if($Kind -in @('Package','OnlineDeployment')){
   foreach($dir in Get-ChildItem -LiteralPath $buildRoot -Directory -Force | Where-Object {$_.FullName -notin $buildBefore -and $_.Name -match '^(deployment-test|verify)-[a-f0-9]{32}$'}){
@@ -115,7 +137,17 @@ if($rawBytes -gt $MaxLogMiB*1MB){
   $logName='output.log.gz';$compression='gzip'
 }
 $summary=$null
-if($Kind -in @('Package','OnlineDeployment') -and $logText){
+if($Kind -in @('Package','OnlineDeployment')){
+  $resultPath=Join-Path $staging 'deployment-results.json'
+  if(Test-Path -LiteralPath $resultPath){
+    $deployment=Get-Content -LiteralPath $resultPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $passed=@($deployment.checks | Where-Object {$_.status -eq 'passed'}).Count
+    $failed=@($deployment.checks | Where-Object {$_.status -eq 'failed'}).Count
+    if($deployment.schema -ne 1 -or ($exitCode -eq 0 -and ($deployment.outcome -ne 'passed' -or $passed -le 0 -or $failed))){throw 'Invalid structured deployment results; evidence staging preserved'}
+    $summary=@{method='structured deployment checks';passed=$passed;failed=$failed;file='deployment-results.json'}
+  }elseif($exitCode -eq 0){throw 'No structured deployment results; successful exit cannot pass'}
+}
+if(!$summary -and $Kind -in @('Package','OnlineDeployment') -and $logText){
   $totals=[regex]::Matches($logText,'(?m)^Deployment verification:\s+(\d+) passed')
   if($totals.Count){
     $summary=@{method='deployment verifier summary';passed=[int]$totals[$totals.Count-1].Groups[1].Value;failed=$(if($exitCode -eq 0){0}else{$null});passLogLines=[regex]::Matches($logText,'(?m)^PASS:').Count}
@@ -132,18 +164,14 @@ $manifest=[ordered]@{
   command=@{executable=$Executable;arguments=$Arguments;workingDirectory=$project}
   host=@{os=[Environment]::OSVersion.VersionString;processorArchitecture=$env:PROCESSOR_ARCHITECTURE;process64Bit=[Environment]::Is64BitProcess;powershell=$PSVersionTable.PSVersion.ToString()}
   runtime=$runtime;runtimeLockSha256=(Get-FileHash -LiteralPath (Join-Path $project 'runtime-lock.json') -Algorithm SHA256).Hash;package=$package
+  evidenceRevision=$(if($harness){1}else{0});harness=$harness
   summary=$summary
   sandboxes=$sandboxEvidence
   log=@{file=$logName;compression=$compression;originalBytes=$rawBytes;storedBytes=(Get-Item -LiteralPath (Join-Path $staging $logName)).Length;sha256=(Get-FileHash -LiteralPath (Join-Path $staging $logName) -Algorithm SHA256).Hash;maximumStoredMiB=$MaxLogMiB}
   retention='permanent-local-evidence; no automatic deletion'
 }
 [IO.File]::WriteAllText((Join-Path $staging 'manifest.json'),($manifest | ConvertTo-Json -Depth 12), (New-Object Text.UTF8Encoding($false)))
-Write-EvidenceChecksums $staging
-$null=Test-EvidenceRecord $staging "runs/$version/$runId"
-New-Item -ItemType Directory -Force -Path (Split-Path -Parent $localRun) | Out-Null
-[IO.Directory]::Move($staging,$localRun)
-Add-EvidenceCatalogRecord $root @{source=$localRun;relative="runs/$version/$runId"}
-$null=Test-EvidenceCatalog $root
+& (Join-Path $PSScriptRoot 'test-storage.ps1') -Action Commit -Source $staging -Destination $localRun
 foreach($sandbox in $sandboxEvidence){
   $target=[IO.Path]::GetFullPath($sandbox.path)
   if((Split-Path -Parent $target) -ne $buildRoot -or (Split-Path -Leaf $target) -notmatch '^(deployment-test|verify)-[a-f0-9]{32}$'){throw 'Invalid sandbox cleanup target'}

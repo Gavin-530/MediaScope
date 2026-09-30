@@ -41,8 +41,9 @@ switch($Action){
     Move-Item -LiteralPath $src -Destination $dest
     try {Add-EvidenceCatalogRecord $root @{source=$dest;relative=$relative}}
     catch {
-      $catalog=Get-Content -LiteralPath (Join-Path $root 'catalog.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-      if(@($catalog.records | Where-Object {$_.path -eq $relative}).Count -eq 0){Move-Item -LiteralPath $dest -Destination $src}
+      $catalogPath=Join-Path $root 'catalog.json'
+      $catalog=if(Test-Path -LiteralPath $catalogPath){Get-Content -LiteralPath $catalogPath -Raw -Encoding UTF8 | ConvertFrom-Json}else{$null}
+      if(!$catalog -or @($catalog.records | Where-Object {$_.path -eq $relative}).Count -eq 0){Move-Item -LiteralPath $dest -Destination $src}
       throw
     }
     $count=Test-EvidenceCatalog $root

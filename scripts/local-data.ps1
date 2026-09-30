@@ -173,33 +173,39 @@ function Get-Candidates([string]$Kind) {
 
 function Assert-TestGeneratedArchived($Candidates) {
   $root=$rules['test-work'].path.TrimEnd('\')+'\'
-  $names=@($Candidates | ForEach-Object {[IO.Path]::GetFileName($_.path)} | Sort-Object)
   $snapshots=@(Get-ChildItem -LiteralPath $rules['local-test-archive'].path -Directory -Filter 'generated-fixtures-*' | Where-Object {$_.Name -notmatch '\.partial-[a-f0-9]{32}$'} | Sort-Object Name -Descending)
+  $records=@()
   foreach($snapshot in $snapshots){
     $manifestPath=Join-Path $snapshot.FullName 'manifest.json'
     if(!(Test-Path -LiteralPath $manifestPath)){continue}
     $manifest=Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if($manifest.kind -ne 'generated-fixture-snapshot' -or $manifest.schema -ne 1){continue}
-    $archivedNames=if($manifest.items){@($manifest.items | Sort-Object)}else{@($manifest.directories | Sort-Object)}
-    if($names.Count -ne $archivedNames.Count -or (($names -join '|') -ne ($archivedNames -join '|'))){continue}
-    $expected=@{}
-    foreach($file in $manifest.files){$expected[$file.path]=$file}
-    $match=$true;$count=0
-    foreach($candidate in $Candidates){
-      foreach($file in Get-SafeFiles $candidate.path){
-        $relative=$file.FullName.Substring($root.Length).Replace('\','/')
-        if(!$expected.ContainsKey($relative) -or $expected[$relative].bytes -ne $file.Length -or
-           $expected[$relative].sha256 -ne (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash){$match=$false;break}
-        $count++
-      }
-      if(!$match){break}
-    }
-    if($match -and $count -eq $expected.Count){
-      Write-Output "Generated fixtures matched verified snapshot: $($snapshot.Name)"
-      return
-    }
+    $records+=@{name=$snapshot.Name;manifest=$manifest}
   }
-  throw 'Generated test directories are not covered by an identical verified snapshot. Run scripts/archive-test-generated.ps1 first.'
+  # Old directory and top-level-file snapshots can jointly cover cleanup.
+  # Each individual candidate must still match one complete snapshot exactly.
+  foreach($candidate in $Candidates){
+    $name=[IO.Path]::GetFileName($candidate.path)
+    $current=@(Get-SafeFiles $candidate.path | ForEach-Object {@{path=$_.FullName.Substring($root.Length).Replace('\','/');bytes=$_.Length;sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash}})
+    $matched=$false
+    foreach($record in $records){
+      $manifest=$record.manifest
+      $names=if($manifest.items){@($manifest.items)}else{@($manifest.directories)}
+      if($name -notin $names){continue}
+      $expected=@{}
+      foreach($file in $manifest.files | Where-Object {$_.path -eq $name -or $_.path.StartsWith($name+'/',[StringComparison]::Ordinal)}){
+        if($expected.ContainsKey($file.path)){throw 'Duplicate fixture snapshot path'}
+        $expected[$file.path]=$file
+      }
+      if($current.Count -ne $expected.Count){continue}
+      $match=$true
+      foreach($file in $current){
+        if(!$expected.ContainsKey($file.path) -or $expected[$file.path].bytes -ne $file.bytes -or $expected[$file.path].sha256 -ne $file.sha256){$match=$false;break}
+      }
+      if($match){$matched=$true;Write-Output "Generated candidate $name matched verified snapshot: $($record.name)";break}
+    }
+    if(!$matched){throw "Generated candidate $name is not covered by an identical verified snapshot. Run scripts/archive-test-generated.ps1 first."}
+  }
 }
 
 if($Action -eq 'Status'){
@@ -215,7 +221,7 @@ if($Action -eq 'Status'){
     if(!(Test-Path -LiteralPath $root)){continue}
     $unknown=@(Get-ChildItem -LiteralPath $root -Force | Where-Object {
       if($rootName -eq 'test-work'){$_.Name -ne 'acceptance-20260921' -and !($_.PSIsContainer -and (Test-GeneratedName $_.Name)) -and !(!$_.PSIsContainer -and (Test-GeneratedFileName $_.Name))}
-      else {$_.Name -notin @('downloads','evidence-staging','evidence-recording.lock') -and $_.Name -notmatch '^deployment-test-[a-f0-9]{32}$' -and $_.Name -notmatch '^MediaScope-\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)(?:\.\d+)?)?-win-x64$'}
+      else {$_.Name -notin @('downloads','evidence-staging','test-runs','test-run.lock','evidence-recording.lock') -and $_.Name -notmatch '^deployment-test-[a-f0-9]{32}$' -and $_.Name -notmatch '^MediaScope-\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)(?:\.\d+)?)?-win-x64$'}
     })
     Write-Output "$rootName unclassified entries: $($unknown.Count) (preserved)"
     $unknown | Select-Object -First 10 -ExpandProperty Name

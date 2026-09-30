@@ -1,0 +1,60 @@
+param([Parameter(Mandatory=$true)][string]$Work)
+$ErrorActionPreference='Stop'
+$sourceProject=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
+. (Join-Path $sourceProject 'scripts/evidence-lib.ps1')
+. (Join-Path $sourceProject 'scripts/github-evidence-lib.ps1')
+$project=Assert-GitHubEvidencePath $sourceProject $Work
+if(!$project.StartsWith((Join-Path $sourceProject 'test-work')+'\',[StringComparison]::OrdinalIgnoreCase)){throw 'Protocol fixture outside test sandbox'}
+New-Item -ItemType Directory -Force -Path $project | Out-Null
+function Write-ProtocolJson($Path,$Value){[IO.File]::WriteAllText($Path,($Value | ConvertTo-Json -Depth 12),(New-Object Text.UTF8Encoding($false)))}
+function Assert-Rejected($Body,$Pattern){
+  $message=$null;try {& $Body | Out-Null}catch{$message=$_.Exception.Message}
+  if(!$message -or $message -notmatch $Pattern){throw "Expected $Pattern; received $message"}
+}
+
+# Filesystem protocol inputs only: no fake media, product measurements or passes.
+$bundle=Join-Path $project 'bundle'
+$records=Join-Path $bundle 'records'
+$relative='runs/0.2.1/20260930T000000000Z-1234abcd'
+$record=Join-Path $records $relative
+New-Item -ItemType Directory -Force -Path $record | Out-Null
+$identity=@{repository='protocol/example';runId='123';runAttempt='1';sha=('a'*40)}
+$log=Join-Path $record 'output.log';[IO.File]::WriteAllText($log,'Filesystem protocol: deliberately blocked before media execution.')
+$app=@{schema=3;evidenceRevision=1;kind='App';runId='20260930T000000000Z-1234abcd';version='0.2.1';scope='full';outcome='blocked';exitCode=2;github=$identity;harness=@{commit=$identity.sha};source=@{commit=$identity.sha};log=@{file='output.log';storedBytes=(Get-Item $log).Length;sha256=(Get-FileHash $log).Hash}}
+Write-ProtocolJson (Join-Path $record 'manifest.json') $app
+Write-EvidenceChecksums $record
+Add-EvidenceCatalogRecord $records @{source=$record;relative=$relative}
+$manifest=@{schema=1;kind='github-actions-evidence';bundleId='20260930T000000000Z-abcdef12';github=$identity;testStepOutcome='failure';retention=@{remoteDays=90;local='permanent after verified import'}}
+Write-ProtocolJson (Join-Path $bundle 'manifest.json') $manifest
+Write-EvidenceChecksums $bundle
+$null=Test-GitHubEvidenceBundle $bundle
+$zip=Join-Path $project 'evidence.zip'
+[IO.Compression.ZipFile]::CreateFromDirectory($bundle,$zip)
+$saved=Import-GitHubEvidence $project $zip 'protocol/example' '123' '1'
+$hash=(Get-FileHash (Join-Path $saved 'SHA256SUMS.txt')).Hash
+$null=Test-EvidenceCatalog (Get-EvidenceRoot $project)
+Write-Output 'PASS: blocked remote evidence imports with catalog and inner record validation'
+$again=Import-GitHubEvidence $project $zip 'protocol/example' '123' '1'
+if($again -ne $saved -or @(Get-EvidenceRecords (Get-EvidenceRoot $project)).Count -ne 1){throw 'Repeated import duplicated the record'}
+Write-Output 'PASS: repeated identical imports are idempotent'
+Assert-Rejected {Import-GitHubEvidence $project $zip 'protocol/other' '123' '1'} 'does not match'
+Write-Output 'PASS: repository mismatches cannot enter the archive'
+$manifest.testStepOutcome='success';Write-ProtocolJson (Join-Path $bundle 'manifest.json') $manifest;Write-EvidenceChecksums $bundle
+Assert-Rejected {Test-GitHubEvidenceBundle $bundle} 'strict release evidence'
+Write-Output 'PASS: a green step cannot promote blocked evidence to success'
+$manifest.testStepOutcome='failure';Write-ProtocolJson (Join-Path $bundle 'manifest.json') $manifest;Write-EvidenceChecksums $bundle
+[IO.File]::AppendAllText($log,' changed')
+Assert-Rejected {Test-GitHubEvidenceBundle $bundle} 'Checksum mismatch'
+Write-Output 'PASS: altered evidence is rejected'
+[IO.File]::WriteAllText($log,'Filesystem protocol: deliberately blocked before media execution.')
+$manifest.github.ref='changed identity';Write-ProtocolJson (Join-Path $bundle 'manifest.json') $manifest;Write-EvidenceChecksums $bundle
+$changed=Join-Path $project 'changed.zip';[IO.Compression.ZipFile]::CreateFromDirectory($bundle,$changed)
+Assert-Rejected {Import-GitHubEvidence $project $changed 'protocol/example' '123' '1'} 'overwrite refused'
+if((Get-FileHash (Join-Path $saved 'SHA256SUMS.txt')).Hash -ne $hash){throw 'Original archive was changed'}
+Write-Output 'PASS: different content for an existing run cannot overwrite history'
+$unsafe=Join-Path $project 'unsafe.zip'
+$bad=[IO.Compression.ZipFile]::Open($unsafe,[IO.Compression.ZipArchiveMode]::Create)
+try {$null=$bad.CreateEntry('../outside.txt')}finally{$bad.Dispose()}
+Assert-Rejected {Expand-GitHubEvidenceZip $unsafe (Join-Path $project 'unsafe-extract')} 'Unsafe ZIP entry'
+if(Test-Path -LiteralPath (Join-Path $project 'outside.txt')){throw 'ZIP escaped extraction root'}
+Write-Output 'PASS: ZIP path traversal is rejected before extraction'

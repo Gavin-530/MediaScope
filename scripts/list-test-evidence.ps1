@@ -4,11 +4,21 @@ $ErrorActionPreference='Stop'
 $project=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 . (Join-Path $PSScriptRoot 'evidence-lib.ps1')
 $root=Get-EvidenceRoot $project
-$rows=foreach($record in Get-EvidenceRecords $root){
+function Get-ListedEvidenceRecords($Root){
+  foreach($record in Get-EvidenceRecords $Root){
+    $record
+    if($record.relative -match '^github-actions-'){
+      foreach($inner in Get-EvidenceRecords (Join-Path $record.source 'records')){
+        @{source=$inner.source;relative=($record.relative+'/records/'+$inner.relative)}
+      }
+    }
+  }
+}
+$rows=foreach($record in Get-ListedEvidenceRecords $root){
   $manifestPath=Join-Path $record.source 'manifest.json'
   $manifest=if(Test-Path -LiteralPath $manifestPath){Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json}else{$null}
   $fixtureSnapshot=($manifest -and $manifest.kind -eq 'generated-fixture-snapshot')
-  $maintenance=($fixtureSnapshot -or ($manifest -and $manifest.kind -eq 'build-maintenance'))
+  $maintenance=($fixtureSnapshot -or ($manifest -and $manifest.kind -in @('build-maintenance','pull-request-merge-audit','test-system-audit','github-actions-evidence')))
   $legacyVersion=if($record.relative -match '-v(\d+\.\d+\.\d+(?:-[A-Za-z0-9.]+)?)$'){$Matches[1]}else{'unknown'}
   $passCount=$null;$failCount=$null
   if($manifest -and $manifest.summary){
@@ -31,6 +41,9 @@ $rows=foreach($record in Get-EvidenceRecords $root){
     Failed=$failCount
     Skipped=if($manifest -and $manifest.schema -eq 3 -and $manifest.testSummary){$manifest.testSummary.skipped}else{$null}
     Scope=if($manifest -and $manifest.schema -eq 3){$manifest.scope}else{$null}
+    Release=if($manifest -and $manifest.releaseCheck -and $manifest.releaseCheck.requested){$manifest.releaseCheck.ready}else{$null}
+    Source=if($manifest.github){'GitHub'}else{'Local'}
+    GitHubRun=if($manifest.github){$manifest.github.runId+'/'+$manifest.github.runAttempt}else{$null}
     KiB=[math]::Round($bytes/1KB,1)
   }
 }

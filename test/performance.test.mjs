@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdir,mkdtemp,rm,utimes} from 'node:fs/promises';
+import {mkdir,mkdtemp,readdir,unlink,writeFile,utimes} from 'node:fs/promises';
 import path from 'node:path';
 import {FF,run,probe,scan,compare,createComparisonSession} from '../engine.mjs';
 import {allPackets,structure,traceStructure,mapStructure} from '../analysis.mjs';
@@ -9,7 +9,9 @@ const testRoot=path.resolve('test-work');
 async function discardSuccessfulFixture(dir){
   const target=path.resolve(dir);
   assert.ok(target.startsWith(testRoot+path.sep),'fixture must stay inside test-work');
-  await rm(target,{recursive:true,force:true});
+  // Preserve successful measurements and raw logs until the runner archives them.
+  async function mediaOnly(directory){for(const entry of await readdir(directory,{withFileTypes:true})){assert.ok(!entry.isSymbolicLink());const file=path.join(directory,entry.name);if(entry.isDirectory())await mediaOnly(file);else if(/\.(mkv|mp4|mov|nut|yuv)$/.test(entry.name))await unlink(file)}}
+  await mediaOnly(target);
 }
 
 test('shared decoding exactly matches separate metrics, including raw component logs',async()=>{
@@ -25,6 +27,7 @@ test('shared decoding exactly matches separate metrics, including raw component 
     const metrics=['psnr','ssim','vmaf'];
     const baseline=await compare(ref,candidate,0,0,metrics,{...context,separateMetrics:true});
     const combined=await compare(ref,candidate,0,0,metrics,context);
+    await writeFile(path.join(dir,'measured-equivalence.json'),JSON.stringify({baseline,combined,commands:context.commands},null,2));
     for(const metric of Object.keys(baseline.metrics)){
       const a={...baseline.metrics[metric]},b={...combined.metrics[metric]};
       // libvmaf JSON also contains throughput, which is not a measurement result.
@@ -45,6 +48,7 @@ test('task reference cache preserves results, still checks candidates, rejects c
   const a=await compare(ref,ref,0,0,['psnr','ssim'],ctx);
   const count=ctx.commands.length;
   const b=await compare(ref,ref,0,0,['psnr','ssim'],ctx);
+  await writeFile(path.join(dir,'measured-cache.json'),JSON.stringify({first:a,second:b,commands:ctx.commands},null,2));
   assert.deepEqual(b,a);
   const second=ctx.commands.slice(count);
   assert.equal(second.filter(c=>c.args.includes('-show_frames')&&!c.args.includes('-read_intervals')).length,1,'candidate must still be scanned');
@@ -67,6 +71,7 @@ test('VFR cross-depth shared metrics match separate decoding and keep progressiv
   const combined=await compare(ten,eight,0,0,['psnr','ssim'],ctx,'bt709-limited-8-10');
   assert.equal(ctx.commands.slice(count).filter(c=>c.args.includes('-show_frames')&&!c.args.includes('-read_intervals')).length,2,'native validation cannot substitute for progressive validation');
   const separate=await compare(ten,eight,0,0,['psnr','ssim'],{...ctx,separateMetrics:true},'bt709-limited-8-10');
+  await writeFile(path.join(dir,'measured-vfr.json'),JSON.stringify({combined,separate,commands:ctx.commands},null,2));
   assert.deepEqual(combined.metrics,separate.metrics);
   assert.deepEqual(combined.alignment,separate.alignment);
   await discardSuccessfulFixture(dir);
@@ -88,6 +93,7 @@ test('concurrent frame, packet and header passes exactly match sequential struct
     const info=await probe(file),stream=info.raw.streams[0],sequentialFrames=await scan(file,0,{decodeThreads:1}),sequentialTracks=await allPackets(file,info.raw.streams,{}),sequentialCoding=await structure(file,stream,sequentialFrames,{});
     const frames=await scan(file,0),[tracks,trace]=await Promise.all([allPackets(file,info.raw.streams,{}),traceStructure(file,stream,{})]);
     const coding=mapStructure(trace,stream,frames);
+    await writeFile(path.join(root,path.basename(file)+'.json'),JSON.stringify({sequential:{frames:sequentialFrames,tracks:sequentialTracks,coding:sequentialCoding},parallel:{frames,tracks,coding}},null,2));
     assert.deepEqual(frames,sequentialFrames,path.basename(file)+' frames');
     assert.deepEqual(tracks,sequentialTracks,path.basename(file)+' packets');
     assert.deepEqual(coding,sequentialCoding,path.basename(file)+' structure');

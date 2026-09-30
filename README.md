@@ -80,58 +80,23 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/manage.ps1 -Action E
 - 队列一次运行一个任务，可暂停后续任务、取消当前任务或重新排队失败任务。显示帧/压缩包上限 500,000，AV1 编码事件上限 750,000。完整头解析可能较慢。多层 AV1 保留各层事件；涉及无法唯一映射的显示帧或缺少前置状态时明确标记，不伪造依赖。
 - 运行卡片显示当前阶段、阶段序号、已运行时间和实时处理量；帧数、包数、编码点等只采用进程实际产出的计数。只有总量已经由前序扫描确定时才显示本阶段百分比，否则明确标为“总量待核验”。百分比不用于推算剩余时间；并行的包统计与码流头解析分别列出，不合并成虚假的单一完成率。
 - GOP 是显示帧区间视图，不能仅凭关键帧间隔判断是否存在跨 GOP 引用；不把 CRA 自动认定为闭合 GOP。未完整验证解码依赖图。
-- 首版仍不提供精确剩余压缩率、设备兼容性保证、运动矢量/编码块深度解析、HDR 显示校准或通用播放器。
+- 不提供精确剩余压缩率、设备兼容性保证、运动矢量/编码块深度解析、HDR 显示校准或通用播放器。
 - 分享报告前检查其中的文件路径。私有报告不打入便携包。清理只针对工具生成的合成测试与打包暂存文件，保留用户报告。
 
-## 开发与验证
+## 开发与维护
 
-开发测试先运行 `npm ci --ignore-scripts`，并安装 Microsoft Edge。`npm test` 在 `.build/test-runs/<本次编号>/` 的独立源码快照内生成真实编码素材，执行计算/API 和真实浏览器检查，自动保存证据并校验后回收沙箱。覆盖功能、前提和未验收边界见 [TESTING.md](TESTING.md)；测试素材不使用用户媒体。
+源码开发先运行 `npm ci --ignore-scripts`，使用已安装的 Microsoft Edge 执行 `npm test`。测试在独立快照中运行，自动归档后回收沙箱；素材不使用用户媒体。
 
-`npm test` 和兼容入口 `scripts/record-test.ps1 -Kind App` 都将每次运行自动归档到项目内唯一的 `local-test-archive/`。发布包与联网部署分别使用 `-Kind Package -Archive <zip>`、`-Kind OnlineDeployment -Archive <zip>`。`scripts/verify-test-evidence.ps1` 复查记录及总目录清单；[TESTING.md](TESTING.md) 说明真实报告、源码、日志、失败截图、范围和环境阻塞的记录方式。
+| 文档 | 内容 |
+| --- | --- |
+| [测试规范](docs/testing.md) | 日常/发布测试入口、覆盖、结果和恢复 |
+| [GitHub 自动测试](docs/github-actions.md) | 自动执行时机、远端运行、证据范围与本地长期归档 |
+| [本地数据规范](docs/local-data.md) | 命名、永久保留、Git 范围和清理 |
+| [发布规范](docs/releasing.md) | 版本、附件、验收和 Release 正文 |
 
-本地文件由 [LOCAL_DATA.md](LOCAL_DATA.md) 和 `local-data-policy.json` 分类管理。`scripts/local-data.ps1 -Action Status` 列出占用与未分类项，`-Action Verify` 校验证据；`-Action Clean -Category BuildStages` 等命令默认只预览，明确加 `-Apply` 才执行。Git 忽略的报告、验收资料、测试证据与发布 ZIP 都不是缓存。
+以上是随源码维护的长期规则；本地测试和审查记录保存在 Git 忽略的 `local-test-archive/`，不会自动上传。项目内的资料需另行备份。
 
-`scripts/package.ps1 -Version <package.json 中的版本>` 在本地生成一个 Windows x64 安装 ZIP，不覆盖已有文件。发布前按 [RELEASING.md](RELEASING.md) 记录应用、最终 ZIP 离线部署及真实联网部署测试。离线测试使用 `.build/downloads` 中与锁文件一致的真实上游归档。记录入口保存必要状态、报告和日志，登记及校验归档后自动回收本次大型沙箱；归档失败和中断留下的目录须先审查证据。
-
-历史上的 `0.1.11-beta` 本地验证包已废弃并从本机 `releases/` 移除。发布 ZIP 由本机单独保管，不自动同步到 GitHub Release。重复生成的测试素材可先用 `scripts/archive-test-generated.ps1` 建立可校验快照，再按 [LOCAL_DATA.md](LOCAL_DATA.md) 清理散目录；历史验收资料不参与清理。
-
-发布前按 [RELEASING.md](RELEASING.md) 执行测试、归档校验和正文审查，并使用统一的 Release 模板。
-
-依据：
-
-- [FFprobe](https://ffmpeg.org/ffprobe.html)
-- [FFmpeg trace_headers](https://ffmpeg.org/ffmpeg-bitstream-filters.html#trace_005fheaders)
-- [FFmpeg 分析滤镜](https://ffmpeg.org/ffmpeg-filters.html)
-- [AV1 规范](https://aomediacodec.github.io/av1-spec/)
-
-图表通用操作说明集中在每页报告顶部的折叠说明中，不再逐图重复。
-
-### JSON 格式与旧报告
-
-- 单份报告、队列结果表、任务计划表及组合内容统一使用外层 `MediaScope/0.3` JSON；导出分别选择结果和计划范围，导入分别选择使用结果和计划及各自的处理方式。
-- 早期版本使用 `MediaScopeResults/1`、`MediaScopePlan/1`、`MediaScopeBundle/1`；开发版也曾使用 `MediaScopePortable/1`。当前版本可读取这些旧文件，报告测量数据和任务参数保持原样。
-
-### 结果与计划导入导出
-
-- 单份报告按任务类型、素材名与本地时间命名；队列结果表保存多份完整报告，可逐份查看或选择性导出。
-- 待运行任务计划可单独导入导出，也可与结果表分别存于同一 JSON 文件；导入前校验全部任务，不改动计算算法或原报告数据。
-
-### 队列操作
-
-- 文件分析、质量比较与片段实验可混合排队，按顺序运行；暂停后仍能添加任务，取消或失败后可重新排队。
-- “读取信息”成为不占队列位置的预览；完整分析只占一项，运行阶段在进度区显示。完成记录折叠，队列按文件名、任务类型和参数区分。
-
-### 质量比较模式
-
-- 新增用户确认的未知色度位置假设，并在报告中标明来源与限制。
-- 新增按显示帧序号配对，以及实验性的 VFR ↔ CFR 播放采样；采样网格可位于参考或候选侧，参考与候选角色不交换。
-- 两种显式模式均保留格式、色彩与逐帧校验；播放采样报告记录时间网格、估计帧映射及适用范围。
-
-### 精确任务进度
-
-- 运行卡片新增当前阶段、阶段序号、已运行时间、实际处理量和本阶段进度条；逐帧扫描、质量指标、SI/TI、包统计、码流头解析与片段编码均持续上报进度。
-- 只有前序扫描已确定总量时才显示百分比；总量未知时明确显示“总量待核验”，不根据文件时长或历史速度伪造完成率和剩余时间。
-- 并行的包统计与码流头解析分别显示实际计数。任务完成、取消和失败继续保留明确状态，API 同步返回结构化进度数据。
+## 计算与图表说明
 
 ### 图表读法
 
@@ -146,9 +111,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/manage.ps1 -Action E
 
 - PSNR / SSIM / VMAF 在同一进程共享两路解码，保留原有逐帧校验、位深映射、时间戳配对、模型和汇总口径。不会抽帧、缩放或更换编码器。
 - 实验内仅复用任务自己生成的固定参考的探测与逐帧校验；检查文件标识、大小与修改时间等信息，变化时拒绝继续。候选仍逐个完整检查，编码仍串行计时。
-- 报告新增 timing（计算耗时及分析阶段耗时）和 commands 中每个子进程的 elapsedSeconds / exitCode，不含报告保存与浏览器渲染时间。报告 schema 保持 MediaScope/0.2，旧报告仍可读取。
+- 报告记录 timing（计算耗时及分析阶段耗时）和 commands 中每个子进程的 elapsedSeconds / exitCode，不含报告保存与浏览器渲染时间。报告 schema 保持 MediaScope/0.2，旧报告仍可读取。
 - 兼容诊断时可在启动服务前设置 MEDIASCOPE_SEPARATE_METRICS=1，使用逐指标独立解码路径；默认共享解码。不自动重试失败的评分。
-- GOP 头解析、VMAF 线程数与映射自检保持原路径；本次主要减少质量比较及实验的重复计算，不承诺全片分析已有显著加速。
+- GOP 头解析、VMAF 线程数与映射自检保持原路径；共享解码主要减少质量比较及实验的重复计算，不承诺全片分析已有显著加速。
 
 ### SI/TI 帧级并行
 
@@ -167,3 +132,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/manage.ps1 -Action E
 文件分析、参考质量比较、片段率失真实验支持混合排队。在各功能中选择文件并设置参数后点击“加入队列”，重复添加，再点击“开始 / 继续队列”。完整分析可直接加入队列；未读取轨道信息时自动选择第一个视频轨道，需指定其他轨道时先读取信息。每项任务保存添加时的参数，后续修改表单不影响已排队任务。
 
 队列顺序执行，运行或暂停期间均可继续添加。“读取信息”只做文件预览，不占队列项；完整分析在队列中只占一项，内部阶段在进度区显示。暂停后续任务不会中断当前任务；取消当前项或某项失败后会继续下一项，已取消或失败的任务可从折叠的“已结束任务”中重新排队，从头运行。每项完成后均可从队列查看报告并导出 JSON。结果列表可导出全部或勾选的已完成报告；队列内等待的任务可勾选导出为计划表。原运行按钮会提交任务并开始队列。刷新网页可恢复队列；当前队列仅在服务运行期间保留，重启服务后可导入已保存的计划表，已生成的报告保存在前述独立的数据目录。
+
+## 参考
+
+- [FFprobe](https://ffmpeg.org/ffprobe.html)
+- [FFmpeg trace_headers](https://ffmpeg.org/ffmpeg-bitstream-filters.html#trace_005fheaders)
+- [FFmpeg 分析滤镜](https://ffmpeg.org/ffmpeg-filters.html)
+- [AV1 规范](https://aomediacodec.github.io/av1-spec/)

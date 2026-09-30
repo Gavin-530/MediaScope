@@ -1,11 +1,16 @@
-param([string]$Archive,[switch]$Online)
+param([string]$Archive,[switch]$Online,[string]$ResultPath)
 . (Join-Path $PSScriptRoot 'deployment.ps1')
+$script:checks=@()
+function Save-DeploymentResult([string]$Outcome,[string]$Failure) {
+  if($ResultPath){Write-Json $ResultPath @{schema=1;outcome=$Outcome;online=[bool]$Online;checks=@($script:checks);failure=$Failure;finishedAtUtc=(Get-Date).ToUniversalTime().ToString('o')}}
+}
+trap {Save-DeploymentResult 'failed' $_.Exception.Message;throw $_}
 $project=Split-Path $PSScriptRoot
 $work=Join-Path $project ('.build/deployment-test-'+[guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force $work | Out-Null
 $homeDir=Join-Path $work 'home with spaces'
 $script:passed=0
-function Assert($Value,$Message){if(!$Value){throw "FAIL: $Message"};$script:passed++;Write-Host "PASS: $Message"}
+function Assert($Value,$Message){$script:checks+=@{name=$Message;status=$(if($Value){'passed'}else{'failed'})};if(!$Value){throw "FAIL: $Message"};$script:passed++;Write-Host "PASS: $Message"}
 function Manifest($App,$Version){
   $pkg=Read-Json (Join-Path $App 'package.json');$pkg.version=$Version;Write-Json (Join-Path $App 'package.json') $pkg
   $existing=Join-Path $App 'MANIFEST.json';if(Test-Path $existing){Remove-Item -LiteralPath $existing}
@@ -163,3 +168,4 @@ Invoke-Manager $app Check
  & $node (Join-Path $PSScriptRoot 'test-launch.mjs') $app $homeDir $media
  Assert ($LASTEXITCODE -eq 0) 'packaged launcher HTTP and separate report storage'
 Write-Host "Deployment verification: $script:passed passed. Evidence preserved: $work"
+Save-DeploymentResult 'passed' $null

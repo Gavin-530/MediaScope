@@ -79,9 +79,16 @@ function Test-EvidenceChecksums($Root) {
 
 function Test-EvidenceRecord($Root,$Relative) {
   $null=Test-EvidenceChecksums $Root
-  if(!$Relative.StartsWith('runs/',[StringComparison]::OrdinalIgnoreCase)){return $true}
+  if(!$Relative.StartsWith('runs/',[StringComparison]::OrdinalIgnoreCase)){
+    if($Relative -match '^github-actions-'){
+      . (Join-Path $PSScriptRoot 'github-evidence-lib.ps1')
+      $cloud=Test-GitHubEvidenceBundle $Root
+      if($Relative -ne 'github-actions-'+$cloud.bundleId){throw 'Cloud bundle directory identity mismatch'}
+    }
+    return $true
+  }
   $parts=$Relative.Split('/')
-  if($parts.Count -ne 3){throw "Invalid run directory layout: $Relative"}
+  if($parts.Count -ne 3 -or $parts[1] -notmatch '^\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)(?:\.\d+)?)?$' -or $parts[2] -notmatch '^\d{8}T\d{9}Z-[a-f0-9]{8}$'){throw "Invalid run directory layout: $Relative"}
   $manifestPath=Join-Path $Root 'manifest.json'
   if(!(Test-Path -LiteralPath $manifestPath -PathType Leaf)){throw "Run manifest missing: $Relative"}
   $manifest=Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -93,7 +100,25 @@ function Test-EvidenceRecord($Root,$Relative) {
     if($manifest.outcome -eq 'blocked' -and $manifest.exitCode -ne 2){throw "Invalid blocked outcome: $Relative"}
     if($manifest.outcome -ne 'blocked' -and (!$manifest.testSummary -or $manifest.testSummary.tests -le 0)){throw "Missing structured test results: $Relative"}
     if($manifest.outcome -eq 'passed' -and ($manifest.testSummary.failed -ne 0 -or $manifest.testSummary.cancelled -ne 0 -or $manifest.testSummary.passed -le 0)){throw "Passed run contains failures or no executed passes: $Relative"}
-    if($manifest.outcome -ne 'blocked'){foreach($required in @('results.json','source.zip','source-manifest.json')){if(!(Test-Path -LiteralPath (Join-Path $Root $required) -PathType Leaf)){throw "Missing run evidence $required : $Relative"}}}
+    if($manifest.outcome -ne 'blocked'){
+      $requiredFiles=@('results.json','source.zip','source-manifest.json')
+      if($manifest.evidenceRevision -eq 1){$requiredFiles+=@('features.json','events.jsonl.gz','artifact-manifest.json')}
+      foreach($required in $requiredFiles){if(!(Test-Path -LiteralPath (Join-Path $Root $required) -PathType Leaf)){throw "Missing run evidence $required : $Relative"}}
+      $results=Get-Content -LiteralPath (Join-Path $Root 'results.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+      foreach($field in @('tests','passed','failed','cancelled','skipped','todo')){if($results.counts.$field -ne $manifest.testSummary.$field){throw "Structured count mismatch ($field): $Relative"}}
+      if($manifest.releaseCheck.requested -and $manifest.outcome -eq 'passed'){
+        $features=Get-Content -LiteralPath (Join-Path $Root 'features.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+        if(!$manifest.releaseCheck.ready -or $manifest.scope -ne 'full' -or $manifest.testSummary.skipped -or $manifest.testSummary.todo -or !$features.features -or @($features.features | Where-Object {$_.status -ne 'passed'}).Count -or @($manifest.harness.workingTree).Count -or $manifest.source.kind -ne 'working-tree' -or @($manifest.source.workingTree).Count){throw "Incomplete release checks: $Relative"}
+      }
+    }
+  }
+  if($manifest.evidenceRevision -eq 1 -and $manifest.kind -in @('Package','OnlineDeployment')){
+    foreach($required in @('harness.zip','harness-manifest.json')){if(!(Test-Path -LiteralPath (Join-Path $Root $required) -PathType Leaf)){throw "Missing verifier snapshot $required : $Relative"}}
+    if($manifest.outcome -eq 'passed'){
+      $deployment=Get-Content -LiteralPath (Join-Path $Root 'deployment-results.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+      $passed=@($deployment.checks | Where-Object {$_.status -eq 'passed'}).Count
+      if($deployment.schema -ne 1 -or $deployment.outcome -ne 'passed' -or $passed -le 0 -or @($deployment.checks | Where-Object {$_.status -ne 'passed'}).Count -or $passed -ne $manifest.summary.passed -or [bool]$deployment.online -ne ($manifest.kind -eq 'OnlineDeployment')){throw "Invalid deployment checks: $Relative"}
+    }
   }
   if($manifest.log.file -notin @('output.log','output.log.gz')){throw "Invalid run log path: $Relative"}
   $logPath=Join-Path $Root $manifest.log.file

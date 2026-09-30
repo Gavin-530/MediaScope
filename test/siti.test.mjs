@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdir,mkdtemp,rm} from 'node:fs/promises';
+import {mkdir,mkdtemp,writeFile,unlink} from 'node:fs/promises';
 import path from 'node:path';
 import {FF,run,scan} from '../engine.mjs';
 import {complexity} from '../analysis.mjs';
@@ -22,6 +22,7 @@ test('frame parallel SI/TI exactly preserves every sample and aggregate',async()
     const stream={index:0,width:96,height:64,pix_fmt:pix},frames=await scan(file,0);
     const serial=await complexity(file,stream,{sitiWorkers:1},frames);
     const parallel=await complexity(file,stream,{sitiWorkers:3},frames);
+    await writeFile(path.join(dir,name+'.json'),JSON.stringify({serial,parallel},null,2));
     assert.deepEqual({requestedWorkers:serial.execution.requestedWorkers,setting:serial.execution.setting},{requestedWorkers:1,setting:'manual'});
     assert.deepEqual({requestedWorkers:parallel.execution.requestedWorkers,setting:parallel.execution.setting},{requestedWorkers:3,setting:'manual'});
     assert.equal(parallel.execution.workers,sitiWorkerCount(stream,frames.length,3));
@@ -44,7 +45,7 @@ test('frame parallel SI/TI exactly preserves every sample and aggregate',async()
     }
   }
   assert.ok(path.resolve(dir).startsWith(path.resolve('test-work')+path.sep),'fixture must stay inside test-work');
-  await rm(dir,{recursive:true,force:true});
+  for(const name of ['eight','ten-vfr','av1','hevc','full-range'])await unlink(path.join(dir,name+'.mkv'));
 });
 
 test('unknown counts, tiny clips and explicit serial mode remain serial',()=>{

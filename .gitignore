@@ -4,4 +4,6 @@ test-work/
 .build/
 node_modules/
 /local-test-archive/
+# One-off audit reports stay local; permanent rules live in docs/.
+/TEST_SYSTEM_AUDIT.md
 releases/**/*.zip

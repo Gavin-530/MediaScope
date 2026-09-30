@@ -1,0 +1,33 @@
+name: MediaScope tests
+
+on:
+  push:
+  pull_request:
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mediascope-tests-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+
+jobs:
+  full-regression:
+    name: Windows full regression
+    runs-on: windows-2022
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - name: Check out the exact tested commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Prepare locked runtime and execute strict full regression
+        timeout-minutes: 75
+        run: ./scripts/run-ci-tests.ps1
+      # Artifact export/upload awaits explicit approval of the evidence scope.
+      # No upload-artifact action and no local archive transfer are enabled.
