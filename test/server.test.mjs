@@ -1,21 +1,19 @@
 import {parseReport} from '../public/report.js';
 import {test,before,after} from 'node:test';
 import assert from 'node:assert/strict';
-import {spawn} from 'node:child_process';
+import {startServer} from './helpers/server.mjs';
 import {mkdir,readdir} from 'node:fs/promises';
 import path from 'node:path';
 import {FF,run} from '../engine.mjs';
-const port=0,source=path.resolve('test-work/http-fixture.mp4'),reportRoot=path.resolve('test-work/server-reports');
+const source=path.resolve('test-work/http-fixture.mp4'),reportRoot=path.resolve('test-work/server-reports');
 let base;
-let server,token,output='';
+let app,token;
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 before(async()=>{
  await mkdir(path.dirname(source),{recursive:true});await run(FF,['-v','error','-y','-f','lavfi','-i','testsrc2=size=128x96:rate=12:duration=1','-c:v','libx264','-color_range','tv','-colorspace','bt709','-color_primaries','bt709','-color_trc','bt709','-chroma_sample_location','left',source]);
- server=spawn(process.execPath,['server.mjs'],{cwd:process.cwd(),env:{...process.env,PORT:String(port),MEDIASCOPE_DATA_DIR:reportRoot},windowsHide:true});server.stdout.on('data',b=>output+=b);server.stderr.on('data',b=>output+=b);
- for(let i=0;i<100;i++){if(output.includes('EADDRINUSE'))throw Error('Test port already occupied');if(output.includes('已启动'))break;await delay(100)}
- assert.match(output,/已启动/);base=output.match(/http:\/\/127\.0\.0\.1:\d+/)[0];const html=await(await fetch(base)).text();token=html.match(/name="token" content="([^"]+)"/)[1];
+ app=await startServer(reportRoot);base=app.base;token=app.token;
 });
-after(async()=>{if(server){server.kill();await new Promise(resolve=>server.exitCode!==null?resolve():server.once('exit',resolve))}});
+after(async()=>{await app?.stop()});
 const request=(url,method='GET',data)=>fetch(base+'/api/'+url,{method,headers:{'x-mediascope-token':token,'content-type':'application/json'},body:data?JSON.stringify(data):undefined});
 async function finished(id){for(let i=0;i<200;i++){const j=await(await request('jobs/'+id)).json();if(!['running','queued'].includes(j.status))return j;await delay(100)}throw Error('Timed out')}
 test('API protects local data and streams a reproducible completed report',async()=>{

@@ -2,6 +2,7 @@ import {execFileSync, spawn} from 'node:child_process';
 import {mkdtempSync, rmSync, readFileSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
+import {get} from 'node:http';
 
 // Invoked by the bootstrap only after archive/file integrity verification.
 const [app, ffmpeg, ffprobe, output] = process.argv.slice(2);
@@ -44,7 +45,17 @@ try {
       child.on('exit',code=>{clearTimeout(timer);reject(Error('Application exited: '+code))});
       child.stdout.on('data',async b=>{
         text+=b;const match=text.match(/http:\/\/127\.0\.0\.1:(\d+)/);if(!match)return;
-        try{const response=await fetch(match[0]);if(!response.ok || !(await response.text()).includes('MediaScope'))throw Error('Application HTTP smoke failed');clearTimeout(timer);resolve()}catch(e){clearTimeout(timer);reject(e)}
+        // This probes HTTP startup, including OS-selected ports that browser Fetch may block.
+        try{
+          await new Promise((done,fail)=>{
+            const request=get(match[0],response=>{
+              let html='';response.setEncoding('utf8');response.on('data',chunk=>html+=chunk);response.on('error',fail);
+              response.on('end',()=>response.statusCode===200&&html.includes('MediaScope')?done():fail(Error('Application HTTP smoke failed')));
+            });
+            request.setTimeout(10000,()=>request.destroy(Error('Application HTTP smoke timed out')));request.on('error',fail);
+          });
+          clearTimeout(timer);resolve();
+        }catch(e){clearTimeout(timer);reject(e)}
       });
     });
   } finally { child.kill(); await new Promise(resolve=>child.exitCode!==null?resolve():child.once('exit',resolve)); }

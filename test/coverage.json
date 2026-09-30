@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "features": [
-    {"id":"startup-security","purpose":"实际 HTTP 启动、会话令牌、本机访问保护","files":["test/server.test.mjs","test/browser.test.mjs"],"names":"API protects|\\[startup\\]"},
+    {"id":"startup-security","purpose":"实际 HTTP 启动、会话令牌、本机访问保护，以及真实被禁端口的启动恢复","files":["test/server.test.mjs","test/browser.test.mjs","test/http-startup.test.mjs"],"names":"API protects|\\[startup\\]|\\[startup-infrastructure\\]"},
     {"id":"media-analysis","purpose":"真实多音轨媒体、显示帧/包体积、H.264/HEVC/AV1 头与 GOP","files":["test/engine.test.mjs","test/browser.test.mjs"],"names":"Unicode path|packet accounting|NAL headers|open GOP|AV1 trace|\\[analysis\\]"},
     {"id":"metrics-colors","purpose":"同文件恒等、有损误差、PSNR/SSIM/VMAF、8/10/12-bit 与颜色解释","files":["test/engine.test.mjs","test/bitdepth.test.mjs","test/browser.test.mjs"],"names":"PSNR|SSIM|YUV matrix|VMAF|exact 8/10|interlaced|\\[comparison\\]"},
     {"id":"alignment-assumptions","purpose":"时间轴、用户确认、色度位置与来源记录","files":["test/engine.test.mjs","test/chroma-assumption.test.mjs","test/browser.test.mjs"],"names":"timestamps|assumption|\\[alignment\\]"},
