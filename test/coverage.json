@@ -13,6 +13,6 @@
     {"id":"performance-correctness","purpose":"共享/分离解码、参考缓存与并行分析结果一致；不推断目标机器吞吐率","files":["test/performance.test.mjs"],"names":"."},
     {"id":"sidebar","purpose":"异步报告侧边栏目标真实存在；无此功能的旧版本明确跳过","files":["test/browser.test.mjs"],"names":"\\[sidebar\\]"},
     {"id":"compact-task","purpose":"实际失败状态不得显示上一任务阶段；旧版本明确跳过","files":["test/browser.test.mjs"],"names":"\\[compact-task\\]"},
-    {"id":"themes","purpose":"浏览器实际主题切换、CSS 过渡完成后的次级按钮文字可读性","files":["test/browser.test.mjs"],"names":"\\[theme\\]"}
+    {"id":"themes","purpose":"真实报告的原始文字/说明/逐帧详情，以及主题切换后的可用按钮对比度","files":["test/browser.test.mjs"],"names":"\\[theme\\]"}
   ]
 }

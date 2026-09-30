@@ -196,6 +196,9 @@ scenario('[sidebar] asynchronous report completion leaves every visible sidebar 
   const links=await page.locator('.floating-nav a').evaluateAll(links=>links.map(a=>({label:a.textContent,hash:a.hash,targetExists:!!document.getElementById(a.hash.slice(1))})));
   await writeFile(path.join(dir,'sidebar-links.json'),JSON.stringify(links,null,2));
   assert.ok(links.some(a=>a.label.includes('帧结构'))&&links.every(a=>a.targetExists),JSON.stringify(links));
+  const chapter=links.find(a=>a.label.includes('帧结构'));
+  await page.locator('.floating-nav a').filter({hasText:'帧结构与 GOP'}).click();
+  assert.equal(new URL(page.url()).hash,chapter.hash,'the first sidebar click navigates to the actual rendered heading');
 });
 
 scenario('[compact-task] an actual missing-file failure never reuses a hidden phase from the previous task',async({t,page,app})=>{
@@ -207,24 +210,34 @@ scenario('[compact-task] an actual missing-file failure never reuses a hidden ph
   assert.doesNotMatch(await page.locator('#island-brief-text').textContent(),/阶段\s*\d/);
 });
 
-scenario('[theme] enabled secondary actions have readable text in each advertised theme',async({t,page,dir})=>{
+scenario('[theme] actual report text and enabled actions remain readable in each advertised theme',async({t,page,app,dir})=>{
   const supported=await page.locator('html').evaluate(el=>getComputedStyle(el).colorScheme);
   if(!supported.includes('light')){t.skip('This application revision advertises only its dark theme');return}
+  await analyze(page,app);
   for(const colorScheme of ['light','dark']){
     await page.emulateMedia({colorScheme});
     // Wait for actual CSS transitions, otherwise a light-theme check may read the preceding dark colors.
     await page.evaluate(async()=>{
       await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-      const controls=[...document.querySelectorAll('#inspect-panel button.secondary')];
+      const controls=[...document.querySelectorAll('#inspect-panel button, #frame-detail, #inspect-details pre, #inspect-details .notice')];
       controls.forEach(el=>getComputedStyle(el).color);
       await Promise.all(controls.flatMap(el=>el.getAnimations().map(animation=>animation.finished.catch(()=>{}))));
     });
-    const colors=await page.locator('#inspect-panel button.secondary:enabled').evaluateAll(elements=>elements.map(el=>{
+    const colors=await page.locator('#inspect-panel button:enabled').evaluateAll(elements=>elements.map(el=>{
       const css=getComputedStyle(el);return {label:el.textContent.trim(),foreground:css.color,background:css.backgroundColor};
     }));
+    const reportColors=await page.evaluate(()=>{
+      const body=getComputedStyle(document.body),pre=getComputedStyle(document.querySelector('#inspect-details pre')),notice=getComputedStyle(document.querySelector('#inspect-details .notice')),frame=getComputedStyle(document.querySelector('#frame-detail'));
+      return {body:body.color,evidence:pre.color,notice:notice.color,frame:{label:'逐帧详情',foreground:frame.color,background:frame.backgroundColor}};
+    });
+    colors.push(reportColors.frame);
     assert.ok(colors.length>0);
-    await writeFile(path.join(dir,'theme-'+colorScheme+'.json'),JSON.stringify(colors,null,2));
+    await writeFile(path.join(dir,'theme-'+colorScheme+'.json'),JSON.stringify({controls:colors,report:reportColors},null,2));
     const lum=s=>s.match(/[\d.]+/g).slice(0,3).map(Number).map(x=>x/255).map(x=>x<=.04045?x/12.92:((x+.055)/1.055)**2.4).reduce((s,x,i)=>s+x*[.2126,.7152,.0722][i],0);
     for(const c of colors){const a=lum(c.foreground),b=lum(c.background),ratio=(Math.max(a,b)+.05)/(Math.min(a,b)+.05);assert.ok(ratio>=4.5,`${colorScheme} ${c.label}: foreground ${c.foreground}, background ${c.background}, contrast ${ratio.toFixed(2)}`)}
+    if(colorScheme==='light'){
+      assert.equal(reportColors.evidence,reportColors.body,'light-theme evidence uses the readable report foreground');
+      assert.equal(reportColors.notice,reportColors.body,'light-theme warnings use the readable report foreground');
+    }
   }
 });

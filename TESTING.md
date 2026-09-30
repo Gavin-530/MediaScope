@@ -35,7 +35,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/list-test-evidence.p
 | 队列 | 暂停/继续/取消、失败后继续、重排队、计划顺序和原子导入 | server、browser queue-plans |
 | 报告 | 实际 API/GUI 数据精确往返、旧封装兼容、损坏拒绝、保留当前报告 | report、portable、browser portable |
 | 优化正确性 | 共享/分离解码、缓存、并行分析结果及原始日志一致 | performance |
-| PR 新 UI | 异步侧边栏目标、紧凑失败状态、主题转换后的可读性 | browser sidebar/compact-task/theme |
+| PR 新 UI | 异步侧边栏真实点击、紧凑失败状态、主题转换后按钮及实际报告文字的可读性 | browser sidebar/compact-task/theme |
 
 素材由真实 FFmpeg 编码；精确位深测试从已知原始像素编码成无损媒体。测量结果必须来自生产代码和真实 FFmpeg，生成的视频不等于虚构报告。不得伪造 FFprobe 返回、指标、任务成功状态、DOM，也不得改写应用源码后执行“测试”。旧 VM 假 DOM 测试已替换为真实浏览器和实际报告测试。
 

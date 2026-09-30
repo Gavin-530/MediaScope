@@ -10,7 +10,7 @@
   --line: rgba(0, 0, 0, 0.08);
   --text: #2c3e50;
   --muted: #596b7d;
-  --accent: #4a90e2;
+  --accent: #2163a8;
 
   --input-bg: rgba(255, 255, 255, 0.5);
   --input-border: rgba(255, 255, 255, 0.8);
@@ -19,6 +19,9 @@
   --accent-text: #ffffff;
   --secondary-bg: #e3ebf5;
   --secondary-border: #b6c5d6;
+  --evidence-text: var(--text);
+  --notice-text: var(--text);
+  --frame-detail-bg: #e3ebf5;
 
   --chart-height: 230px;
   --scrollbar-thumb: rgba(0, 0, 0, 0.2);
@@ -46,6 +49,9 @@
     --accent-text: #11251f;
     --secondary-bg: #232e3a;
     --secondary-border: #3a4757;
+    --evidence-text: #bdcbdd;
+    --notice-text: #c4baa7;
+    --frame-detail-bg: #10161e;
     --scrollbar-thumb: rgba(255, 255, 255, 0.2);
     --scrollbar-thumb-hover: rgba(255, 255, 255, 0.4);
   }
@@ -290,7 +296,7 @@ button {
   border: 0;
   border-radius: 5px;
   background: var(--accent);
-  color: #11251f;
+  color: var(--accent-text);
   padding: 10px 18px;
   font-weight: 600;
   cursor: pointer;
@@ -466,7 +472,7 @@ pre {
   font-size: 11px;
   max-height: 480px;
   overflow: auto;
-  color: #bdcbdd;
+  color: var(--evidence-text);
 }
 
 details {
@@ -493,7 +499,7 @@ canvas {
 .notice {
   border-left: 2px solid #b59d69;
   padding-left: 14px;
-  color: #c4baa7;
+  color: var(--notice-text);
   font-size: 12px;
   margin: 14px 0;
 }
@@ -627,7 +633,7 @@ canvas {
 
 .frame-detail {
   margin: 14px 0;
-  background: #10161e;
+  background: var(--frame-detail-bg);
   padding: 12px;
   border-radius: 6px;
 }
