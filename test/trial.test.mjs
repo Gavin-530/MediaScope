@@ -60,14 +60,15 @@ test('dual-depth rejects HDR before creating references and cleans up cancellati
  const cancelled=await context('cancel'),controller=new AbortController();cancelled.signal=controller.signal;cancelled.update=progress=>{if(progress?.stage?.startsWith('编码点 '))controller.abort()};
  await assert.rejects(()=>trial({...input,file:sources[8]},cancelled),/取消/);assert.ok(!(await readdir(cancelled.cwd)).some(f=>f.endsWith('.mkv')));
 });
-test('chart data separates bit depths and presets, and preserves unavailable metrics as gaps',()=>{
- const rows=[{crf:25,preset:'fast',bitDepth:8,videoBytes:200,metrics:{psnr:{pooled:'Infinity'}}},{crf:20,preset:'slow',bitDepth:10,videoBytes:400,metrics:{psnr:{pooled:40}}},{crf:20,preset:'fast',bitDepth:8,videoBytes:300,metrics:{psnr:{pooled:38}}}];
- const chart=trialPlotData(rows,'crf','psnr');assert.equal(chart.series.length,2);assert.deepEqual(chart.data.map(p=>p[0]),[20,20,25]);assert.equal(chart.data.at(-1)[1],null);assert.equal(chart.data[1][3],chart.data[2][3]);assert.notEqual(chart.data[0][3],chart.data[1][3]);
- assert.equal(trialPlotData(rows,'videoKiB','vmaf').data[0][1],null);
- const repeated=[...chart.data,...chart.data].sort((a,b)=>a[0]-b[0]);
- assert.equal(visiblePoints(repeated,20,25).length,6);
- assert.equal(visiblePoints(repeated,20,20).length,4);
- assert.equal(visiblePoints(repeated,20,25,true).length,4);
+test('chart data preserves actual dual-depth trial rows and unavailable metrics as gaps',async()=>{
+ const ctx=await context('chart'),report=await trial({...input,file:sources[10],presets:['ultrafast','fast']},ctx),rows=report.rows;
+ await writeFile(path.join(ctx.cwd,'measured-trial.json'),JSON.stringify({report,commands:ctx.commands},null,2));
+ const chart=trialPlotData(rows,'crf','psnr');assert.equal(chart.series.length,4);assert.equal(chart.data.length,rows.length);
+ assert.ok(chart.data.every(p=>p[0]===25));
+ assert.deepEqual(new Set(chart.data.map(p=>p[1])),new Set(rows.map(r=>r.metrics.psnr.pooled)));
+ assert.ok(trialPlotData(rows,'videoKiB','vmaf').data.every(p=>p[1]===null));
+ const repeated=[...chart.data,...chart.data];
+ assert.equal(visiblePoints(repeated,25,25).length,rows.length*2);
 });
 
 test('dual-depth x264 uses both requested output depths',async()=>{

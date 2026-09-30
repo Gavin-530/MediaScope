@@ -1,10 +1,18 @@
-import {test} from 'node:test';
+import {test,before,after} from 'node:test';
 import assert from 'node:assert/strict';
 import {makePortable,parsePortable,portableSchema,legacyPortableSchemas} from '../public/portable.js';
+import path from 'node:path';
+import {makeMedia} from './helpers/real-media.mjs';
+import {startServer} from './helpers/server.mjs';
 
-const report={schema:'MediaScope/0.1',type:'inspect',file:'D:\\素材\\源.mp4',raw:{format:{duration:'1'},streams:[{index:0,codec_type:'video'}]},unknownEvidence:{precise:0.12345678901234568}};
-const input={type:'analyze',file:'D:\\素材\\源.mp4',stream:null,complexity:true,sitiWorkers:'auto'};
-const results=[{entryId:'result-1',report}],plans=[{entryId:'plan-1',input}];
+let report,results,plans,app;
+before(async()=>{
+ const root=path.resolve('test-work/portable'),media=await makeMedia(path.join(root,'media'));
+ app=await startServer(path.join(root,'reports'));
+ report=await app.request('probe','POST',{file:media.source});
+ results=[{entryId:'result-1',report}];plans=[{entryId:'plan-1',input:{type:'analyze',file:media.source,stream:null,complexity:true,sitiWorkers:'auto'}}];
+});
+after(async()=>{await app?.stop()});
 
 test('single report, result table, plan and combined content share one schema and round trip exactly',()=>{
  for(const content of [{results},{plans},{results,plans}]){
