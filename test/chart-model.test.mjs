@@ -1,42 +1,49 @@
-import {test} from 'node:test';
+import {test,before} from 'node:test';
 import assert from 'node:assert/strict';
+import path from 'node:path';
+import {writeFile} from 'node:fs/promises';
 import {trialFramePlotData,rowLabel,sortTrialRows} from '../public/trial-model.js';
 import {finiteSegments,extent,visiblePoints} from '../public/charts.js';
-const row=(preset,bitDepth,crf,values)=>({preset,bitDepth,crf,metrics:{psnr:{values}}});
-const rows=[row('fast',8,20,[40,41,42]),row('fast',8,30,[35,'Infinity',null]),row('slow',8,20,[43,44,45]),row('fast',10,20,[46,47,48])];
-test('CRF overlay fixes preset and depth, honors selected CRFs, and preserves variable timestamps',()=>{
- const result=trialFramePlotData(rows,'psnr',rowLabel(rows[0]),[20,30],[0,.041,.12]);
- assert.equal(result.timed,true);assert.equal(result.series.length,2);
- assert.deepEqual(result.data.map(p=>p[0]),[0,0,.041,.041,.12,.12]);
- assert.deepEqual(result.data.map(p=>p[1]),[40,35,41,null,42,null]);
- assert.equal(result.data[3][2].value,'Infinity');assert.equal(result.data[5][2].value,null);
- const single=trialFramePlotData(rows,'psnr',rowLabel(rows[0]),[30],[0,.041,.12]);
- assert.equal(single.series[0].color,result.series[1].color);assert.equal(single.data.length,3);
- assert.equal(trialFramePlotData(rows,'psnr',rowLabel(rows[0]),[],[]).data.length,0);
+import {makeMedia} from './helpers/real-media.mjs';
+import {trial} from '../analysis.mjs';
+let rows,times;
+before(async()=>{
+ const root=path.resolve('test-work/chart-model'),media=await makeMedia(root),commands=[];
+ const report=await trial({file:media.source,stream:0,start:0,duration:1,encoder:'libx264',depthMode:'native',presets:['ultrafast','fast'],crfs:[20,38],metrics:['psnr','ssim']},{cwd:root,commands,update:()=>{}});
+ await writeFile(path.join(root,'measured-trial.json'),JSON.stringify({report,commands},null,2));
+ rows=report.rows;times=report.experiment.frameTimes;
+});
+test('CRF chart retains every real trial timestamp and measured value within the selected group',()=>{
+ const group=rowLabel(rows[0]),selected=rows.filter(r=>rowLabel(r)===group),result=trialFramePlotData(rows,'psnr',group,[20,38],times);
+ assert.equal(result.timed,true);assert.equal(result.series.length,2);assert.equal(result.data.length,times.length*2);
+ for(const [time,value,metadata] of result.data){
+  const row=selected.find(r=>r.crf===metadata.crf);
+  assert.equal(time,times[metadata.frame]);assert.equal(metadata.value,row.metrics.psnr.values[metadata.frame]);assert.equal(value,metadata.value);
+ }
+ const single=trialFramePlotData(rows,'psnr',group,[38],times);
+ assert.equal(single.series[0].color,result.series[1].color);assert.equal(single.data.length,times.length);
+ assert.equal(trialFramePlotData(rows,'psnr',group,[],times).data.length,0);
 });
 test('old reports use frame indices; absent metrics are reported without generated values',()=>{
- for(const times of [undefined,[],[0,.1],[0,.1,.1]]){
-  const result=trialFramePlotData(rows,'psnr',rowLabel(rows[0]),[20],times);
-  assert.equal(result.timed,false);assert.deepEqual(result.data.map(p=>p[0]),[0,1,2]);
+ for(const damagedTimes of [undefined,[],times.slice(1),times.map(()=>0)]){
+  const result=trialFramePlotData(rows,'psnr',rowLabel(rows[0]),[20],damagedTimes);
+  assert.equal(result.timed,false);assert.deepEqual(result.data.map(p=>p[0]),times.map((_,i)=>i));
  }
- const missing=trialFramePlotData(rows,'vmaf',rowLabel(rows[0]),[20,30],[0,.041,.12]);assert.deepEqual(missing.missing,[20,30]);assert.deepEqual(missing.data,[]);
+ const missing=trialFramePlotData(rows,'vmaf',rowLabel(rows[0]),[20,38],times);assert.deepEqual(missing.missing,[20,38]);assert.deepEqual(missing.data,[]);
 });
-test('line segments never bridge unavailable or infinite measurements',()=>{
+test('[contract] geometry never bridges missing or infinite inputs',()=>{
+ // Mathematical boundary inputs, not fabricated media measurements.
  const points=[[0,1],[1,null],[2,3],[3,Infinity],[4,5],[5,6]];
  assert.deepEqual(finiteSegments(points),[[[0,1]],[[2,3]],[[4,5],[5,6]]]);
  assert.deepEqual(extent(points),[1,6]);assert.deepEqual(extent([[0,null]]),[0,1]);
  assert.deepEqual(visiblePoints([[0,1],[1,2],[1,3],[2,4]],1,1),[[1,2],[1,3]]);
 });
-test('sample rows sort without mutation and keep missing metrics last',()=>{
- const samples=[
-  {...row('slow',10,26,[1]),videoBytes:300,encodeSeconds:2,metrics:{psnr:{pooled:40},vmaf:{pooled:undefined}}},
-  {...row('fast',8,20,[1]),videoBytes:500,encodeSeconds:1,metrics:{psnr:{pooled:'Infinity'},vmaf:{pooled:95}}},
-  {...row('fast',8,32,[1]),videoBytes:200,encodeSeconds:3,metrics:{psnr:{pooled:35},vmaf:{pooled:80}}}
- ];
- const original=[...samples];
- assert.deepEqual(sortTrialRows(samples,'videoBytes','asc').map(x=>x.videoBytes),[200,300,500]);
- assert.deepEqual(sortTrialRows(samples,'psnr','desc').map(x=>x.metrics.psnr.pooled),['Infinity',40,35]);
- assert.deepEqual(sortTrialRows(samples,'vmaf','desc').map(x=>x.metrics.vmaf.pooled),[95,80,undefined]);
- assert.deepEqual(sortTrialRows(samples,'group','asc').map(rowLabel),['8-bit / fast','8-bit / fast','10-bit / slow']);
- assert.deepEqual(samples,original);
+test('sorts real trial bytes and scores without mutating the source report',()=>{
+ const original=structuredClone(rows),bytes=sortTrialRows(rows,'videoBytes','asc'),psnr=sortTrialRows(rows,'psnr','desc');
+ assert.equal(bytes.length,rows.length);assert.equal(bytes[0].videoBytes,Math.min(...rows.map(r=>r.videoBytes)));
+ assert.equal(bytes.at(-1).videoBytes,Math.max(...rows.map(r=>r.videoBytes)));
+ assert.equal(psnr[0].metrics.psnr.pooled,Math.max(...rows.map(r=>r.metrics.psnr.pooled)));
+ for(let i=1;i<bytes.length;i++)assert.ok(bytes[i].videoBytes>=bytes[i-1].videoBytes);
+ for(let i=1;i<psnr.length;i++)assert.ok(psnr[i].metrics.psnr.pooled<=psnr[i-1].metrics.psnr.pooled);
+ assert.deepEqual(rows,original);
 });

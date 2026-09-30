@@ -11,6 +11,14 @@ param(
 
 $ErrorActionPreference='Stop'
 $project=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+if($Kind -eq 'App'){
+  if($Archive -or $Executable -or $Arguments.Count -or $Label){throw 'App uses scripts/test.mjs; custom commands must use -Kind Custom'}
+  $node=if($env:MEDIASCOPE_NODE_PATH){$env:MEDIASCOPE_NODE_PATH}else{'node'}
+  $testArgs=@((Join-Path $PSScriptRoot 'test.mjs'),'--max-log-mib',"$MaxLogMiB",'--warn-total-mib',"$WarnTotalMiB")
+  if($RequireClean){$testArgs+='--require-clean'}
+  & $node @testArgs
+  exit $LASTEXITCODE
+}
 . (Join-Path $PSScriptRoot 'evidence-lib.ps1')
 $root=Get-EvidenceRoot $project
 New-Item -ItemType Directory -Force -Path (Join-Path $project '.build') | Out-Null
@@ -48,31 +56,6 @@ $log=Join-Path $staging 'output.log'
 $runtime=$null
 $start=(Get-Date).ToUniversalTime()
 switch($Kind){
-  'App' {
-    . (Join-Path $PSScriptRoot 'deployment.ps1')
-    try {
-      $paths=@{node=(Resolve-Program $env:MEDIASCOPE_NODE_PATH 'node');ffmpeg=(Resolve-Program $env:FFMPEG_PATH 'ffmpeg');ffprobe=(Resolve-Program $env:FFPROBE_PATH 'ffprobe')}
-      foreach($name in @('node','ffmpeg','ffprobe')){
-        $versionArg=if($name -eq 'node'){'--version'}else{'-version'}
-        & $paths[$name] $versionArg *> $null
-        if($LASTEXITCODE -ne 0){throw "Unusable $name"}
-      }
-      Write-Host 'Using local programs for the test run.'
-    } catch {
-      $installRoot=if($env:MEDIASCOPE_HOME){$env:MEDIASCOPE_HOME}else{Join-Path $env:LOCALAPPDATA 'MediaScope'}
-      foreach($dir in @('runtimes','staging')){New-Item -ItemType Directory -Force -Path (Join-Path $installRoot $dir) | Out-Null}
-      $paths=Get-PrivateRuntime $project $installRoot
-      Write-Host 'Using verified private programs for the test run.'
-    }
-    $runtime=@{}
-    foreach($name in @('node','ffmpeg','ffprobe')){
-      $versionArg=if($name -eq 'node'){'--version'}else{'-version'}
-      $runtime[$name]=@{path=$paths[$name];sha256=(Get-FileHash -LiteralPath $paths[$name] -Algorithm SHA256).Hash;version=((& $paths[$name] $versionArg | Select-Object -First 1) -join '')}
-    }
-    $env:FFMPEG_PATH=$paths.ffmpeg;$env:FFPROBE_PATH=$paths.ffprobe
-    $Executable=$paths.node
-    $Arguments=@('--test')+@(Get-ChildItem -LiteralPath (Join-Path $project 'test') -Filter '*.test.mjs' -File | Sort-Object Name | ForEach-Object {$_.FullName})
-  }
   'Package' {$Executable=(Get-Command powershell.exe -CommandType Application).Source;$Arguments=@('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $project 'scripts/verify-release.ps1'),'-Archive',$archivePath,'-Deployment')}
   'OnlineDeployment' {$Executable=(Get-Command powershell.exe -CommandType Application).Source;$Arguments=@('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $project 'scripts/test-deployment.ps1'),'-Archive',$archivePath,'-Online')}
   'Custom' {
@@ -84,6 +67,8 @@ switch($Kind){
 }
 
 New-Item -ItemType Directory -Force -Path $staging | Out-Null
+$buildRoot=[IO.Path]::GetFullPath((Join-Path $project '.build')).TrimEnd('\')
+$buildBefore=@(Get-ChildItem -LiteralPath $buildRoot -Directory -Force | ForEach-Object {$_.FullName})
 $originalLocation=Get-Location;$previousPreference=$ErrorActionPreference
 $exitCode=1
 try {
@@ -98,6 +83,26 @@ try {
   Set-Location -LiteralPath $originalLocation
 }
 $finish=(Get-Date).ToUniversalTime()
+$sandboxEvidence=@()
+if($Kind -in @('Package','OnlineDeployment')){
+  foreach($dir in Get-ChildItem -LiteralPath $buildRoot -Directory -Force | Where-Object {$_.FullName -notin $buildBefore -and $_.Name -match '^(deployment-test|verify)-[a-f0-9]{32}$'}){
+    $full=[IO.Path]::GetFullPath($dir.FullName)
+    if((Split-Path -Parent $full) -ne $buildRoot){throw 'Sandbox outside build root'}
+    $all=@(Get-EvidenceFiles $full) # Rejects links, including every descendant.
+    $kept=@()
+    foreach($file in $all){
+      if($file.path -match '(^|/)(runtimes|node_modules|licenses)(/|$)'){continue}
+      if([IO.Path]::GetExtension($file.path) -ne '.log' -and [IO.Path]::GetFileName($file.path) -notin @('MANIFEST.json','current.json','report.json','failure.json','job-input.json','selected-environment.json')){continue}
+      $dest=Join-Path $staging ('sandbox-diagnostics/'+$dir.Name+'/'+$file.path)
+      New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dest) | Out-Null
+      Copy-Item -LiteralPath $file.full -Destination $dest
+      $hash=(Get-FileHash -LiteralPath $file.full -Algorithm SHA256).Hash
+      if((Get-FileHash -LiteralPath $dest -Algorithm SHA256).Hash -ne $hash){throw 'Sandbox diagnostic copy mismatch'}
+      $kept+=@{path=$file.path;sha256=$hash;bytes=$file.bytes}
+    }
+    $sandboxEvidence+=@{path=$full;originalFiles=$all.Count;originalBytes=($all | ForEach-Object {$_.bytes} | Measure-Object -Sum).Sum;retained=$kept}
+  }
+}
 $rawBytes=(Get-Item -LiteralPath $log).Length
 $logText=(Get-Content -LiteralPath $log -Tail 100 -Encoding UTF8) -join "`n"
 $logName='output.log';$compression='none'
@@ -110,13 +115,7 @@ if($rawBytes -gt $MaxLogMiB*1MB){
   $logName='output.log.gz';$compression='gzip'
 }
 $summary=$null
-if($Kind -eq 'App' -and $logText){
-  $summary=@{method='Node test summary'}
-  foreach($key in @('tests','pass','fail','skipped','cancelled')){
-    $matches=[regex]::Matches($logText,"(?m)^[^A-Za-z0-9\r\n]*$key[ \t]+(\d+)[ \t\r]*$")
-    if($matches.Count){$summary[$key]=[int]$matches[$matches.Count-1].Groups[1].Value}
-  }
-} elseif($Kind -in @('Package','OnlineDeployment') -and $logText){
+if($Kind -in @('Package','OnlineDeployment') -and $logText){
   $totals=[regex]::Matches($logText,'(?m)^Deployment verification:\s+(\d+) passed')
   if($totals.Count){
     $summary=@{method='deployment verifier summary';passed=[int]$totals[$totals.Count-1].Groups[1].Value;failed=$(if($exitCode -eq 0){0}else{$null});passLogLines=[regex]::Matches($logText,'(?m)^PASS:').Count}
@@ -134,6 +133,7 @@ $manifest=[ordered]@{
   host=@{os=[Environment]::OSVersion.VersionString;processorArchitecture=$env:PROCESSOR_ARCHITECTURE;process64Bit=[Environment]::Is64BitProcess;powershell=$PSVersionTable.PSVersion.ToString()}
   runtime=$runtime;runtimeLockSha256=(Get-FileHash -LiteralPath (Join-Path $project 'runtime-lock.json') -Algorithm SHA256).Hash;package=$package
   summary=$summary
+  sandboxes=$sandboxEvidence
   log=@{file=$logName;compression=$compression;originalBytes=$rawBytes;storedBytes=(Get-Item -LiteralPath (Join-Path $staging $logName)).Length;sha256=(Get-FileHash -LiteralPath (Join-Path $staging $logName) -Algorithm SHA256).Hash;maximumStoredMiB=$MaxLogMiB}
   retention='permanent-local-evidence; no automatic deletion'
 }
@@ -143,6 +143,15 @@ $null=Test-EvidenceRecord $staging "runs/$version/$runId"
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $localRun) | Out-Null
 [IO.Directory]::Move($staging,$localRun)
 Add-EvidenceCatalogRecord $root @{source=$localRun;relative="runs/$version/$runId"}
+$null=Test-EvidenceCatalog $root
+foreach($sandbox in $sandboxEvidence){
+  $target=[IO.Path]::GetFullPath($sandbox.path)
+  if((Split-Path -Parent $target) -ne $buildRoot -or (Split-Path -Leaf $target) -notmatch '^(deployment-test|verify)-[a-f0-9]{32}$'){throw 'Invalid sandbox cleanup target'}
+  $current=@(Get-EvidenceFiles $target)
+  if($current.Count -ne $sandbox.originalFiles -or ($current | ForEach-Object {$_.bytes} | Measure-Object -Sum).Sum -ne $sandbox.originalBytes){throw 'Sandbox changed after archival; preserved'}
+  foreach($file in $sandbox.retained){if((Get-FileHash -LiteralPath (Join-Path $target $file.path) -Algorithm SHA256).Hash -ne $file.sha256){throw 'Sandbox diagnostic changed; preserved'}}
+  Remove-Item -LiteralPath $target -Recurse -Force
+}
 Write-Host "Test outcome: $($manifest.outcome); exit=$exitCode"
 Write-Host "Evidence: $localRun"
 $totalBytes=(Get-ChildItem -LiteralPath $root -File -Recurse | Measure-Object Length -Sum).Sum

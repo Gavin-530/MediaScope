@@ -2,5 +2,6 @@
 .mediascope/
 test-work/
 .build/
+node_modules/
 /local-test-archive/
 releases/**/*.zip

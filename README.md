@@ -85,13 +85,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/manage.ps1 -Action E
 
 ## 开发与验证
 
-`npm test` 会在 `test-work` 生成合成素材。测试覆盖中文路径、多音轨、H.264/HEVC/AV1、HDR、错位拒绝、IDR/CRA、AV1 隐藏/show-existing/参考槽、SI/TI、包字节汇总以及三种编码器的片段实验。测试用素材不是用户媒体。
+开发测试先运行 `npm ci --ignore-scripts`，并安装 Microsoft Edge。`npm test` 在 `.build/test-runs/<本次编号>/` 的独立源码快照内生成真实编码素材，执行计算/API 和真实浏览器检查，自动保存证据并校验后回收沙箱。覆盖功能、前提和未验收边界见 [TESTING.md](TESTING.md)；测试素材不使用用户媒体。
 
-需要长期保留测试证据时，使用 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/record-test.ps1 -Kind App` 运行应用测试；发布包与联网部署分别使用 `-Kind Package -Archive <zip>`、`-Kind OnlineDeployment -Archive <zip>`。每次运行独立归档到项目内唯一的 `local-test-archive/`；运行 `scripts/verify-test-evidence.ps1` 可复查每份记录及总目录清单。目录结构、体积限制和清理保护见 [RELEASING.md](RELEASING.md)。
+`npm test` 和兼容入口 `scripts/record-test.ps1 -Kind App` 都将每次运行自动归档到项目内唯一的 `local-test-archive/`。发布包与联网部署分别使用 `-Kind Package -Archive <zip>`、`-Kind OnlineDeployment -Archive <zip>`。`scripts/verify-test-evidence.ps1` 复查记录及总目录清单；[TESTING.md](TESTING.md) 说明真实报告、源码、日志、失败截图、范围和环境阻塞的记录方式。
 
 本地文件由 [LOCAL_DATA.md](LOCAL_DATA.md) 和 `local-data-policy.json` 分类管理。`scripts/local-data.ps1 -Action Status` 列出占用与未分类项，`-Action Verify` 校验证据；`-Action Clean -Category BuildStages` 等命令默认只预览，明确加 `-Apply` 才执行。Git 忽略的报告、验收资料、测试证据与发布 ZIP 都不是缓存。
 
-`scripts/package.ps1 -Version <package.json 中的版本>` 在本地生成一个 Windows x64 安装 ZIP，不覆盖已有文件。发布前按 [RELEASING.md](RELEASING.md) 使用 `scripts/record-test.ps1` 记录应用、最终 ZIP 离线部署及真实联网部署测试。离线测试使用 `.build/downloads` 中与锁文件一致的上游归档。逐次日志、结果清单和校验值自动存入 Git 忽略的 `local-test-archive/` 并校验项目内副本；大型部署沙箱仍留在 `.build`，审查归档后可按清理脚本的预览结果删除。
+`scripts/package.ps1 -Version <package.json 中的版本>` 在本地生成一个 Windows x64 安装 ZIP，不覆盖已有文件。发布前按 [RELEASING.md](RELEASING.md) 记录应用、最终 ZIP 离线部署及真实联网部署测试。离线测试使用 `.build/downloads` 中与锁文件一致的真实上游归档。记录入口保存必要状态、报告和日志，登记及校验归档后自动回收本次大型沙箱；归档失败和中断留下的目录须先审查证据。
 
 历史上的 `0.1.11-beta` 本地验证包已废弃并从本机 `releases/` 移除。发布 ZIP 由本机单独保管，不自动同步到 GitHub Release。重复生成的测试素材可先用 `scripts/archive-test-generated.ps1` 建立可校验快照，再按 [LOCAL_DATA.md](LOCAL_DATA.md) 清理散目录；历史验收资料不参与清理。
 

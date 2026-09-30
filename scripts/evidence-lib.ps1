@@ -85,12 +85,20 @@ function Test-EvidenceRecord($Root,$Relative) {
   $manifestPath=Join-Path $Root 'manifest.json'
   if(!(Test-Path -LiteralPath $manifestPath -PathType Leaf)){throw "Run manifest missing: $Relative"}
   $manifest=Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-  if($manifest.schema -notin @(1,2) -or $manifest.version -ne $parts[1] -or $manifest.runId -ne $parts[2]){throw "Run identity mismatch: $Relative"}
-  if($manifest.outcome -notin @('passed','failed') -or ($manifest.outcome -eq 'passed') -ne ($manifest.exitCode -eq 0)){throw "Run outcome mismatch: $Relative"}
+  if($manifest.schema -notin @(1,2,3) -or $manifest.version -ne $parts[1] -or $manifest.runId -ne $parts[2]){throw "Run identity mismatch: $Relative"}
+  $outcomes=if($manifest.schema -eq 3){@('passed','failed','blocked')}else{@('passed','failed')}
+  if($manifest.outcome -notin $outcomes -or ($manifest.outcome -eq 'passed') -ne ($manifest.exitCode -eq 0)){throw "Run outcome mismatch: $Relative"}
+  if($manifest.schema -eq 3){
+    if($manifest.scope -notin @('full','core','browser')){throw "Invalid test scope: $Relative"}
+    if($manifest.outcome -eq 'blocked' -and $manifest.exitCode -ne 2){throw "Invalid blocked outcome: $Relative"}
+    if($manifest.outcome -ne 'blocked' -and (!$manifest.testSummary -or $manifest.testSummary.tests -le 0)){throw "Missing structured test results: $Relative"}
+    if($manifest.outcome -eq 'passed' -and ($manifest.testSummary.failed -ne 0 -or $manifest.testSummary.cancelled -ne 0 -or $manifest.testSummary.passed -le 0)){throw "Passed run contains failures or no executed passes: $Relative"}
+    if($manifest.outcome -ne 'blocked'){foreach($required in @('results.json','source.zip','source-manifest.json')){if(!(Test-Path -LiteralPath (Join-Path $Root $required) -PathType Leaf)){throw "Missing run evidence $required : $Relative"}}}
+  }
   if($manifest.log.file -notin @('output.log','output.log.gz')){throw "Invalid run log path: $Relative"}
   $logPath=Join-Path $Root $manifest.log.file
   if(!(Test-Path -LiteralPath $logPath -PathType Leaf)){throw "Run log missing: $Relative"}
-  if($manifest.schema -eq 2 -and (!$manifest.log.sha256 -or $null -eq $manifest.log.storedBytes)){throw "Run log metadata missing: $Relative"}
+  if($manifest.schema -ge 2 -and (!$manifest.log.sha256 -or $null -eq $manifest.log.storedBytes)){throw "Run log metadata missing: $Relative"}
   if(($null -ne $manifest.log.storedBytes -and (Get-Item -LiteralPath $logPath).Length -ne $manifest.log.storedBytes) -or
      ($manifest.log.sha256 -and (Get-FileHash -LiteralPath $logPath -Algorithm SHA256).Hash -ne $manifest.log.sha256)){throw "Run log metadata mismatch: $Relative"}
   if($manifest.package -and $manifest.package.manifestVersion -and $manifest.package.manifestVersion -ne $manifest.version){throw "Package version mismatch: $Relative"}
@@ -151,5 +159,16 @@ function Add-EvidenceCatalogRecord($Root,$Record) {
   $updated=[ordered]@{schema=1;records=@($known)+@($newEntry)}
   $temp="$catalogPath.$([guid]::NewGuid().ToString('N')).tmp"
   [IO.File]::WriteAllText($temp,($updated | ConvertTo-Json -Depth 5),(New-Object Text.UTF8Encoding($false)))
-  if(Test-Path -LiteralPath $catalogPath){[IO.File]::Replace($temp,$catalogPath,[NullString]::Value)}else{[IO.File]::Move($temp,$catalogPath)}
+  try {
+    if(Test-Path -LiteralPath $catalogPath){
+      # Keep the atomic replacement; scanners can briefly hold a Windows file.
+      for($attempt=0;$attempt -lt 4;$attempt++){
+        try {[IO.File]::Replace($temp,$catalogPath,[NullString]::Value);break}
+        catch {if($attempt -eq 3){throw};Start-Sleep -Milliseconds (150*($attempt+1))}
+      }
+    }else{[IO.File]::Move($temp,$catalogPath)}
+  } finally {
+    # This is only our uncommitted catalog candidate, never an original record.
+    if(Test-Path -LiteralPath $temp){Remove-Item -LiteralPath $temp -Force}
+  }
 }

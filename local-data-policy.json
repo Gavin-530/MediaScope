@@ -8,6 +8,7 @@
     { "path": "test-work", "class": "mixed", "reason": "Generated fixtures and protected acceptance data share this root" },
     { "path": ".build", "class": "mixed", "reason": "Cache, build stages, diagnostics and unfinished evidence" },
     { "path": ".build/downloads", "class": "cache", "reason": "Upstream runtime downloads; costly to fetch again" },
-    { "path": ".build/evidence-staging", "class": "pending", "reason": "May contain a test log that failed to archive" }
+    { "path": ".build/evidence-staging", "class": "pending", "reason": "May contain a test log that failed to archive" },
+    { "path": ".build/test-runs", "class": "pending", "reason": "Isolated application snapshots and generated media; test runner removes only its own sandbox after evidence is committed and verified, interrupted runs require inspection" }
   ]
 }

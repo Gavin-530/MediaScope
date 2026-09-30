@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "features": [
+    {"id":"startup-security","purpose":"实际 HTTP 启动、会话令牌、本机访问保护，以及真实被禁端口的启动恢复","files":["test/server.test.mjs","test/browser.test.mjs","test/http-startup.test.mjs"],"names":"API protects|\\[startup\\]|\\[startup-infrastructure\\]"},
+    {"id":"media-analysis","purpose":"真实多音轨媒体、显示帧/包体积、H.264/HEVC/AV1 头与 GOP","files":["test/engine.test.mjs","test/browser.test.mjs"],"names":"Unicode path|packet accounting|NAL headers|open GOP|AV1 trace|\\[analysis\\]"},
+    {"id":"metrics-colors","purpose":"同文件恒等、有损误差、PSNR/SSIM/VMAF、8/10/12-bit 与颜色解释","files":["test/engine.test.mjs","test/bitdepth.test.mjs","test/browser.test.mjs"],"names":"PSNR|SSIM|YUV matrix|VMAF|exact 8/10|interlaced|\\[comparison\\]"},
+    {"id":"alignment-assumptions","purpose":"时间轴、用户确认、色度位置与来源记录","files":["test/engine.test.mjs","test/chroma-assumption.test.mjs","test/browser.test.mjs"],"names":"timestamps|assumption|\\[alignment\\]"},
+    {"id":"siti","purpose":"逐帧 SI/TI、工作线程与串行/并行一致性","files":["test/siti.test.mjs","test/server.test.mjs","test/engine.test.mjs","test/browser.test.mjs"],"names":"SI/TI|frame parallel|serial mode|\\[analysis\\]"},
+    {"id":"trials","purpose":"真实编码矩阵、位深转换、CRF/preset、临时媒体生命周期","files":["test/trial.test.mjs","test/engine.test.mjs","test/browser.test.mjs"],"names":"trial|depth|\\[trial\\]"},
+    {"id":"queue","purpose":"暂停、继续、取消、失败后执行、重排队与实际计划导入导出","files":["test/server.test.mjs","test/browser.test.mjs"],"names":"queue|cancellation|pausing|requeued|plan export|\\[queue-plans\\]"},
+    {"id":"portable-reports","purpose":"实际报告精确往返、旧封装兼容、损坏内容拒绝","files":["test/report.test.mjs","test/portable.test.mjs","test/browser.test.mjs"],"names":"^all four actual|^real report parser|^truncating real|^future nonmeasurement|^single report|^old bare|^earlier unified|^rejects unknown|\\[portable"},
+    {"id":"charts","purpose":"真实测量值/时间轴、GOP 与缩放/CSV 操作、图表状态保存","files":["test/chart-model.test.mjs","test/trial.test.mjs","test/browser.test.mjs"],"names":"chart|sorts real|geometry|\\[analysis\\]|\\[tab-retention\\]"},
+    {"id":"performance-correctness","purpose":"共享/分离解码、参考缓存与并行分析结果一致；不推断目标机器吞吐率","files":["test/performance.test.mjs"],"names":"."},
+    {"id":"sidebar","purpose":"异步报告侧边栏目标真实存在；无此功能的旧版本明确跳过","files":["test/browser.test.mjs"],"names":"\\[sidebar\\]"},
+    {"id":"compact-task","purpose":"实际失败状态不得显示上一任务阶段；旧版本明确跳过","files":["test/browser.test.mjs"],"names":"\\[compact-task\\]"},
+    {"id":"themes","purpose":"真实报告的原始文字/说明/逐帧详情，以及主题切换后的可用按钮对比度","files":["test/browser.test.mjs"],"names":"\\[theme\\]"}
+  ]
+}
