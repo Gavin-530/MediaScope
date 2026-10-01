@@ -1,62 +1,110 @@
 :root {
   color-scheme: light dark;
-  --bg-color1: #dfe1e5;
-  --bg-color2: #d5d7db;
-  --bg-color3: #caccd1;
+  --bg-color1: #f3f4f6;
+  --bg-color2: #e5e7eb;
+  --bg-color3: #d1d5db;
 
-  --panel: rgba(245, 246, 248, 0.85);
+  --panel: rgba(255, 255, 255, 0.85);
   --panel-border: rgba(0, 0, 0, 0.1);
   --panel-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.08);
   --line: rgba(0, 0, 0, 0.08);
-  --text: #333333;
-  --muted: #767676;
+  --text: #1f2937;
+  --muted: #6b7280;
   --accent: #2563eb;
 
   --input-bg: rgba(255, 255, 255, 0.6);
   --input-border: rgba(0, 0, 0, 0.15);
-  --button-bg: #dcdcdc;
-  --button-hover: #cccccc;
+  --button-bg: #e0e7ff;
+  --button-hover: #c7d2fe;
   --accent-text: #ffffff;
-  --secondary-bg: #e6e6e6;
-  --secondary-border: #bfbfbf;
+  --secondary-bg: #f3f4f6;
+  --secondary-border: #d1d5db;
   --evidence-text: var(--text);
   --notice-text: var(--text);
-  --frame-detail-bg: #d4d4d4;
+  --frame-detail-bg: #e5e7eb;
 
-  --progress-track: #cfcfcf;
-  --progress-fill: #2563eb;
-  --banner-bg: #e0e0e0;
-  --banner-border: #bfbfbf;
+  --progress-track: #e5e7eb;
+  --progress-fill: #1d4ed8;
+  --progress-glow: 0 0 10px rgba(29, 78, 216, 0.7), 0 0 20px rgba(29, 78, 216, 0.5), 0 0 30px rgba(29, 78, 216, 0.3);
+  --banner-bg: #f8fafc;
+  --banner-border: #cbd5e1;
 
   --chart-height: 230px;
   --scrollbar-thumb: rgba(0, 0, 0, 0.2);
   --scrollbar-thumb-hover: rgba(0, 0, 0, 0.35);
 }
 
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg-color1: #1f2937;
+  --bg-color2: #374151;
+  --bg-color3: #4b5563;
+
+  --panel: rgba(31, 41, 55, 0.85);
+  --panel-border: rgba(255, 255, 255, 0.1);
+  --panel-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.4);
+  --line: rgba(255, 255, 255, 0.1);
+  --text: #f9fafb;
+  --muted: #9ca3af;
+  --accent: #2563eb;
+
+  --input-bg: rgba(0, 0, 0, 0.2);
+  --input-border: rgba(255, 255, 255, 0.15);
+  --button-bg: #374151;
+  --button-hover: #4b5563;
+  --accent-text: #ffffff;
+  --secondary-bg: #1f2937;
+  --secondary-border: #374151;
+  --evidence-text: var(--text);
+  --notice-text: var(--text);
+  --frame-detail-bg: #111827;
+
+  --progress-track: #374151;
+  --progress-fill: #60a5fa;
+  --progress-glow: 0 0 12px rgba(96, 165, 250, 0.8), 0 0 24px rgba(96, 165, 250, 0.6), 0 0 36px rgba(96, 165, 250, 0.4);
+  --banner-bg: #1f2937;
+  --banner-border: #374151;
+
+  --scrollbar-thumb: rgba(255, 255, 255, 0.2);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.4);
+}
+
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg-color1: #0f2027;
-    --bg-color2: #203a43;
-    --bg-color3: #2c5364;
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg-color1: #1f2937;
+    --bg-color2: #374151;
+    --bg-color3: #4b5563;
 
-    --panel: rgba(21, 27, 35, 0.45);
+    --panel: rgba(31, 41, 55, 0.85);
     --panel-border: rgba(255, 255, 255, 0.1);
-    --panel-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+    --panel-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.4);
     --line: rgba(255, 255, 255, 0.1);
-    --text: #e7edf5;
-    --muted: #98a7ba;
-    --accent: #80e1c4;
+    --text: #f9fafb;
+    --muted: #9ca3af;
+    --accent: #2563eb;
 
-    --input-bg: rgba(13, 19, 27, 0.4);
+    --input-bg: rgba(0, 0, 0, 0.2);
     --input-border: rgba(255, 255, 255, 0.15);
-    --button-bg: rgba(255, 255, 255, 0.1);
-    --button-hover: rgba(255, 255, 255, 0.2);
-    --accent-text: #11251f;
-    --secondary-bg: #232e3a;
-    --secondary-border: #3a4757;
-    --evidence-text: #bdcbdd;
+    --button-bg: #374151;
+    --button-hover: #4b5563;
+    --accent-text: #ffffff;
+    --secondary-bg: #1f2937;
+    --secondary-border: #374151;
+    --evidence-text: var(--text);
     --notice-text: var(--text);
-    --frame-detail-bg: #10161e;
+    --frame-detail-bg: #111827;
+
+    --progress-track: #374151;
+    --progress-fill: #60a5fa;
+    --progress-glow: 0 0 12px rgba(96, 165, 250, 0.8), 0 0 24px rgba(96, 165, 250, 0.6), 0 0 36px rgba(96, 165, 250, 0.4);
+    --banner-bg: #1f2937;
+    --banner-border: #374151;
+
     --scrollbar-thumb: rgba(255, 255, 255, 0.2);
     --scrollbar-thumb-hover: rgba(255, 255, 255, 0.4);
   }
@@ -90,12 +138,7 @@
 
 body {
   margin: 0;
-  background: linear-gradient(
-    135deg,
-    var(--bg-color1),
-    var(--bg-color2),
-    var(--bg-color3)
-  );
+  background: var(--bg-color1);
   background-attachment: fixed;
   color: var(--text);
   font:
@@ -941,7 +984,7 @@ canvas.frames-canvas {
   height: 100%;
   border-radius: 999px;
   background: var(--progress-fill);
-  box-shadow: 0 0 10px var(--progress-fill), 0 0 5px var(--progress-fill);
+  box-shadow: var(--progress-glow);
   transition: width 0.25s ease;
 }
 
@@ -1248,7 +1291,7 @@ button#import-button:hover {
   height: 4px;
   background: transparent;
   pointer-events: none;
-  overflow: hidden;
+  overflow: visible; /* Changed to visible to show glow */
   border-radius: 0 0 40px 40px;
 }
 
@@ -1260,6 +1303,8 @@ button#import-button:hover {
   height: 100%;
   width: 0%;
   background: var(--progress-fill);
+  box-shadow: var(--progress-glow);
+  border-radius: 40px; /* Optional: rounding the glowing bar */
   transition: width 0.3s ease-out;
 }
 
