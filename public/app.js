@@ -1820,7 +1820,120 @@ if (taskEl) {
           '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 14 10 14 10 20"></polyline><polyline points="20 10 14 10 14 4"></polyline><line x1="14" y1="10" x2="21" y2="3"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>';
         toggleBtn.title = "切换到紧凑视图";
       }
+      taskEl.classList.remove('tucked');
+      taskEl.style.removeProperty('left');
+      taskEl.style.removeProperty('top');
+      taskEl.style.removeProperty('right');
+      taskEl.style.removeProperty('bottom');
+      taskEl.style.removeProperty('position');
+      taskEl.style.removeProperty('margin');
+      taskEl.style.removeProperty('transition');
     };
+  }
+
+  let isDragging = false;
+  let startX, startY, initialLeft, initialTop;
+  let snapEnabled = true;
+  let hasDragged = false;
+
+  const snapBtn = document.getElementById("toggle-snap");
+  if (snapBtn) {
+    snapBtn.onclick = (e) => {
+      e.stopPropagation();
+      snapEnabled = !snapEnabled;
+      snapBtn.classList.toggle("active", snapEnabled);
+      if (snapEnabled && !isDragging) {
+         snapToEdge();
+      }
+    };
+  }
+
+  function snapToEdge() {
+    if (!snapEnabled) return;
+
+    const rect = taskEl.getBoundingClientRect();
+    const vWidth = document.documentElement.clientWidth;
+    const vHeight = document.documentElement.clientHeight;
+    const centerX = rect.left + rect.width / 2;
+
+    let targetLeft;
+    let targetTop = rect.top;
+    const edgeMargin = 20; // Keep a small margin from the edge
+
+    // Only snap left or right
+    if (centerX < vWidth / 2) {
+      targetLeft = edgeMargin;
+    } else {
+      targetLeft = vWidth - rect.width - edgeMargin;
+    }
+
+    // Keep vertical position within viewport
+    targetTop = Math.max(edgeMargin, Math.min(targetTop, vHeight - rect.height - edgeMargin));
+
+    taskEl.style.position = 'fixed';
+    taskEl.style.setProperty('right', 'auto', 'important');
+    taskEl.style.setProperty('bottom', 'auto', 'important');
+    taskEl.style.margin = '0';
+    taskEl.style.transition = 'left 0.3s ease, top 0.3s ease';
+    
+    // Slide to the target position
+    taskEl.style.setProperty('left', targetLeft + 'px', 'important');
+    taskEl.style.setProperty('top', targetTop + 'px', 'important');
+    
+    setTimeout(() => { taskEl.style.transition = ''; }, 300);
+  }
+
+  taskEl.onmousedown = (e) => {
+    if (e.button !== 0) return;
+    const target = e.target;
+    if (target.closest('button') || target.closest('input') || target.closest('select')) return;
+
+    startX = e.clientX;
+    startY = e.clientY;
+    isDragging = false;
+    hasDragged = false;
+    
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  };
+
+  function onMouseMove(e) {
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+
+    if (!isDragging) {
+      if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
+        isDragging = true;
+        hasDragged = true;
+        const rect = taskEl.getBoundingClientRect();
+        initialLeft = rect.left;
+        initialTop = rect.top;
+
+        taskEl.style.position = 'fixed';
+        taskEl.style.setProperty('left', initialLeft + 'px', 'important');
+        taskEl.style.setProperty('top', initialTop + 'px', 'important');
+        taskEl.style.setProperty('right', 'auto', 'important');
+        taskEl.style.setProperty('bottom', 'auto', 'important');
+        taskEl.style.margin = '0';
+        taskEl.style.transition = 'none';
+      } else {
+        return;
+      }
+    }
+
+    taskEl.style.setProperty('left', (initialLeft + dx) + 'px', 'important');
+    taskEl.style.setProperty('top', (initialTop + dy) + 'px', 'important');
+  }
+
+  function onMouseUp() {
+    document.removeEventListener('mousemove', onMouseMove);
+    document.removeEventListener('mouseup', onMouseUp);
+    
+    if (hasDragged && snapEnabled) {
+      setTimeout(snapToEdge, 50);
+    }
+    isDragging = false;
+    hasDragged = false;
   }
 
   syncTaskBrief();

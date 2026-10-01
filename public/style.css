@@ -1244,7 +1244,7 @@ button#import-button:hover {
   position: fixed !important;
   right: 24px;
   bottom: 24px;
-  top: auto !important;
+  top: auto;
   width: auto;
   min-width: 250px;
   max-width: calc(100vw - 48px);
@@ -1258,8 +1258,12 @@ button#import-button:hover {
   overflow: hidden;
   max-height: 60px;
   display: flex;
+  cursor: grab;
   flex-direction: column;
   transform-origin: bottom right;
+}
+.task.island:active {
+  cursor: grabbing;
 }
 
 .island-header {
@@ -1468,16 +1472,30 @@ button#import-button:hover {
 .task.task-banner {
   background: var(--banner-bg) !important;
   border: 1px solid var(--banner-border);
-  padding-right: 48px; /* Avoid overlap with toggle button */
+  padding: 18px 24px !important;
+  padding-right: 70px !important;
   top: 85px !important;
-  z-index: 90; /* Keep it below header but above content */
+  z-index: 90;
   box-shadow: var(--panel-shadow);
+  cursor: grab;
+}
+.task.task-banner:active {
+  cursor: grabbing;
+}
+
+
+.snap-btn {
+  right: 42px;
+  color: var(--muted);
+}
+.snap-btn.active {
+  color: var(--accent);
 }
 .island-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding-right: 36px; /* Avoid overlap with toggle button in island */
+  padding-right: 72px; /* Avoid overlap with two toggle buttons in island */
   width: 100%;
   cursor: pointer;
   height: 36px;
