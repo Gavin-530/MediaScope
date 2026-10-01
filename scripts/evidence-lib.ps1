@@ -141,6 +141,20 @@ function Test-EvidenceRecord($Root,$Relative) {
       foreach($required in $requiredFiles){if(!(Test-Path -LiteralPath (Join-Path $Root $required) -PathType Leaf)){throw "Missing run evidence $required : $Relative"}}
       $results=Get-Content -LiteralPath (Join-Path $Root 'results.json') -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson
       foreach($field in @('tests','passed','failed','cancelled','skipped','todo')){if($results.counts.$field -ne $manifest.testSummary.$field){throw "Structured count mismatch ($field): $Relative"}}
+      # Older records retain their original interpretation. New records explicitly
+      # distinguish a complete regression from successful checks of a narrower scope.
+      if($manifest.validation){
+        $validation=$manifest.validation
+        $mode=if($manifest.source.kind -eq 'git'){'historical-comparison'}elseif($manifest.scope -eq 'full'){'full-regression'}else{'partial-regression'}
+        $features=Get-Content -LiteralPath (Join-Path $Root 'features.json') -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson
+        $failed=($manifest.testSummary.passed -le 0 -or $manifest.testSummary.failed -gt 0 -or $manifest.testSummary.cancelled -gt 0 -or ($null -ne $validation.processExitCode -and $validation.processExitCode -ne 0))
+        $incomplete=($manifest.testSummary.skipped -gt 0 -or $manifest.testSummary.todo -gt 0)
+        $complete=(!$failed -and !$incomplete -and @($features.features).Count -gt 0 -and @($features.features | Where-Object {$_.status -ne 'passed'}).Count -eq 0)
+        $expectedStatus=if($failed){'failed'}elseif($mode -eq 'full-regression'){if($complete){'complete'}else{'incomplete'}}elseif($incomplete){'incomplete'}else{'partial'}
+        $accepted=(!$failed -and ($mode -ne 'full-regression' -or $complete))
+        if($validation.schema -ne 1 -or $validation.mode -ne $mode -or $validation.status -ne $expectedStatus -or $validation.accepted -isnot [bool] -or $validation.accepted -ne $accepted -or ($manifest.outcome -eq 'passed' -and !$accepted)){throw "Invalid regression assessment: $Relative"}
+        if($mode -ne 'full-regression' -and $manifest.releaseCheck.ready){throw "Narrow scope cannot claim release readiness: $Relative"}
+      }
       if($manifest.releaseCheck.requested -and $manifest.outcome -eq 'passed'){
         $features=Get-Content -LiteralPath (Join-Path $Root 'features.json') -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson
         if(!$manifest.releaseCheck.ready -or $manifest.scope -ne 'full' -or $manifest.testSummary.skipped -or $manifest.testSummary.todo -or !$features.features -or @($features.features | Where-Object {$_.status -ne 'passed'}).Count -or @($manifest.harness.workingTree).Count -or $manifest.source.kind -ne 'working-tree' -or @($manifest.source.workingTree).Count){throw "Incomplete release checks: $Relative"}

@@ -6,6 +6,7 @@ import {chromium} from 'playwright-core';
 import {makeMedia} from './helpers/real-media.mjs';
 import {startServer,waitForJob} from './helpers/server.mjs';
 import {parsePortable} from '../public/portable.js';
+import {requireFeature,supportedThemeModes} from './helpers/feature-policy.mjs';
 
 const root=path.resolve('test-work/browser');
 let browser,media,sequence=0;
@@ -186,7 +187,7 @@ scenario('[tab-retention] actual analysis canvas remains the same DOM node after
 });
 
 scenario('[sidebar] asynchronous report completion leaves every visible sidebar link with an existing target',async({t,page,app,dir})=>{
-  if(await page.locator('.floating-nav').count()===0){t.skip('This application revision has no sidebar feature');return}
+  if(!requireFeature(t,await page.locator('.floating-nav').count()>0,'report sidebar'))return;
   await analyze(page,app);
   // A bounded condition check, independent of the application's timer or generation duration.
   await page.waitForFunction(()=>{
@@ -202,7 +203,7 @@ scenario('[sidebar] asynchronous report completion leaves every visible sidebar 
 });
 
 scenario('[compact-task] an actual missing-file failure never reuses a hidden phase from the previous task',async({t,page,app})=>{
-  if(await page.locator('#toggle-island').count()===0){t.skip('This application revision has no compact task feature');return}
+  if(!requireFeature(t,await page.locator('#toggle-island').count()>0,'compact task status'))return;
   await analyze(page,app);await page.locator('#toggle-island').click();
   await page.locator('#file').fill(path.join(root,'does-not-exist.mp4'));await page.locator('#inspect').click();
   await page.waitForFunction(()=>document.querySelector('#task-label')?.textContent==='任务未完成');
@@ -212,9 +213,10 @@ scenario('[compact-task] an actual missing-file failure never reuses a hidden ph
 
 scenario('[theme] actual report text and enabled actions remain readable in each advertised theme',async({t,page,app,dir})=>{
   const supported=await page.locator('html').evaluate(el=>getComputedStyle(el).colorScheme);
-  if(!supported.includes('light')){t.skip('This application revision advertises only its dark theme');return}
+  const modes=supportedThemeModes(supported);
+  if(!requireFeature(t,modes.length>0&&modes.every(mode=>supported.split(/\s+/).includes(mode)),'declared light and dark themes'))return;
   await analyze(page,app);
-  for(const colorScheme of ['light','dark']){
+  for(const colorScheme of modes){
     await page.emulateMedia({colorScheme});
     // Wait for actual CSS transitions, otherwise a light-theme check may read the preceding dark colors.
     await page.evaluate(async()=>{
@@ -223,21 +225,31 @@ scenario('[theme] actual report text and enabled actions remain readable in each
       controls.forEach(el=>getComputedStyle(el).color);
       await Promise.all(controls.flatMap(el=>el.getAnimations().map(animation=>animation.finished.catch(()=>{}))));
     });
-    const colors=await page.locator('#inspect-panel button:enabled').evaluateAll(elements=>elements.map(el=>{
-      const css=getComputedStyle(el);return {label:el.textContent.trim(),foreground:css.color,background:css.backgroundColor};
+    const colors=await page.locator('#inspect-panel button:enabled, #frame-detail, #inspect-details pre, #inspect-details .notice').evaluateAll(elements=>elements.filter(el=>el.getClientRects().length>0).flatMap(el=>{
+      // Check every gradient stop behind translucent panels, rather than treating
+      // a transparent backgroundColor as the actual background of the text.
+      const rgba=value=>{
+        if(!/^rgba?\(/.test(value))throw Error('Unsupported contrast color: '+value);
+        return value.match(/[\d.]+/g).map(Number);
+      };
+      const over=(color,background)=>background.map((v,i)=>color[i]*(color[3]??1)+v*(1-(color[3]??1)));
+      const chain=[];for(let parent=el;parent;parent=parent.parentElement)chain.push(getComputedStyle(parent));
+      let backgrounds=[[255,255,255]];
+      for(const css of chain.reverse()){
+        backgrounds=backgrounds.map(background=>over(rgba(css.backgroundColor),background));
+        if(css.backgroundImage!=='none'){
+          if(!css.backgroundImage.startsWith('linear-gradient('))throw Error('Unsupported contrast background: '+css.backgroundImage);
+          const stops=css.backgroundImage.match(/rgba?\([^)]*\)/g);
+          if(!stops?.length)throw Error('Gradient has no measurable sRGB stops');
+          backgrounds=backgrounds.flatMap(background=>stops.map(stop=>over(rgba(stop),background)));
+        }
+      }
+      const foreground=rgba(getComputedStyle(el).color);
+      return backgrounds.map((background,i)=>({label:(el.id||el.className||el.textContent.trim())+' / background '+i,foreground:`rgb(${over(foreground,background).join(', ')})`,background:`rgb(${background.join(', ')})`}));
     }));
-    const reportColors=await page.evaluate(()=>{
-      const body=getComputedStyle(document.body),pre=getComputedStyle(document.querySelector('#inspect-details pre')),notice=getComputedStyle(document.querySelector('#inspect-details .notice')),frame=getComputedStyle(document.querySelector('#frame-detail'));
-      return {body:body.color,evidence:pre.color,notice:notice.color,frame:{label:'逐帧详情',foreground:frame.color,background:frame.backgroundColor}};
-    });
-    colors.push(reportColors.frame);
     assert.ok(colors.length>0);
-    await writeFile(path.join(dir,'theme-'+colorScheme+'.json'),JSON.stringify({controls:colors,report:reportColors},null,2));
+    await writeFile(path.join(dir,'theme-'+colorScheme+'.json'),JSON.stringify({samples:colors},null,2));
     const lum=s=>s.match(/[\d.]+/g).slice(0,3).map(Number).map(x=>x/255).map(x=>x<=.04045?x/12.92:((x+.055)/1.055)**2.4).reduce((s,x,i)=>s+x*[.2126,.7152,.0722][i],0);
     for(const c of colors){const a=lum(c.foreground),b=lum(c.background),ratio=(Math.max(a,b)+.05)/(Math.min(a,b)+.05);assert.ok(ratio>=4.5,`${colorScheme} ${c.label}: foreground ${c.foreground}, background ${c.background}, contrast ${ratio.toFixed(2)}`)}
-    if(colorScheme==='light'){
-      assert.equal(reportColors.evidence,reportColors.body,'light-theme evidence uses the readable report foreground');
-      assert.equal(reportColors.notice,reportColors.body,'light-theme warnings use the readable report foreground');
-    }
   }
 });

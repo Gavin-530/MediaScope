@@ -6,7 +6,7 @@
 
 push、Tag、PR、merge_group、workflow_dispatch 执行 Windows Server 2022 x64 完整回归；本地保存文件不触发远端运行。Node.js/FFmpeg 根据 runtime-lock.json 下载并校验，npm ci --ignore-scripts 安装依赖；执行 node scripts/test.mjs --release。Edge 使用 runner 已装版本，并记录其身份。
 
-门槛保持完整套件、干净源码、非零实际检查、零失败/取消/跳过/TODO和全部功能映射通过。必需合并检查需配置分支规则；绿色结果不自动发布 Release，也不替代包验证、首次联网部署和人工安装/卸载验收。
+门槛保持完整套件、干净源码、非零实际检查、零失败/取消/跳过/TODO和全部功能映射通过。本地 `npm run test:release` 使用相同入口和条件；`npm test` 使用相同回归判定但允许未提交修改，部分测试或历史对比不能代替此检查。必需合并检查需配置分支规则；绿色结果不自动发布 Release，也不替代包验证、首次联网部署和人工安装/卸载验收。
 
 本地和远端是独立执行，不能合并成一次结果。同一套用例及证据格式，不保证耗时、路径、截图等字节一致；比较需核对源码及验证器 SHA、实际工具和测试范围。PR 通常执行合并提交。记录仓库、SHA、run_id、run_attempt、job 和触发事件，重跑独立保存。
 

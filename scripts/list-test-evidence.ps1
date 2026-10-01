@@ -23,11 +23,11 @@ $rows=@(foreach($record in Get-EvidenceRecords $root){
     $passed=$null;$failed=$null
     if($product -and $app.testSummary){$passed=$app.testSummary.passed;$failed=$app.testSummary.failed}
     elseif($product -and $app.summary){$passed=if($null -ne $app.summary.passed){$app.summary.passed}else{$app.summary.pass};$failed=if($null -ne $app.summary.failed){$app.summary.failed}else{$app.summary.fail}}
-    [pscustomobject]@{Time=$beijing;IdentifierTime=$envelope.identifierTime;TimePrecision=$precision;TimeSource=$envelope.identifierTimeSource;Origin=$(if($app.github -or $cloud){'github-actions'}else{'local'});Version=$(if($product){$app.version}else{'n/a'});Kind=$(if($app){$app.kind}elseif($envelope){$envelope.kind}else{'legacy'});Outcome=$(if($product -and $app.outcome){$app.outcome}elseif($envelope){$envelope.outcome}else{'archived'});Passed=$passed;Failed=$failed;Scope=$app.scope;Run=$app.runId;GitHubRun=$app.github.runId;Attempt=$app.github.runAttempt;Path=$record.relative;Original=$inner.source}
+    [pscustomobject]@{Time=$beijing;IdentifierTime=$envelope.identifierTime;TimePrecision=$precision;TimeSource=$envelope.identifierTimeSource;Origin=$(if($app.github -or $cloud){'github-actions'}else{'local'});Version=$(if($product){$app.version}else{'n/a'});Kind=$(if($app){$app.kind}elseif($envelope){$envelope.kind}else{'legacy'});Outcome=$(if($product -and $app.outcome){$app.outcome}elseif($envelope){$envelope.outcome}else{'archived'});Passed=$passed;Failed=$failed;Scope=$app.scope;Validation=$app.validation.status;ValidationMode=$app.validation.mode;Run=$app.runId;GitHubRun=$app.github.runId;Attempt=$app.github.runAttempt;Path=$record.relative;Original=$inner.source}
   }
 })
 $rows=@($rows | Where-Object {(!$Origin -or $_.Origin -eq $Origin) -and (!$Version -or $_.Version -eq $Version) -and (!$Outcome -or $_.Outcome -eq $Outcome)} | Sort-Object Time,Path)
 if($Json){ConvertTo-Json -InputObject $rows -Depth 5}else{
-  $rows | Select-Object Time,TimePrecision,Origin,Version,Kind,Outcome,Passed,Failed,Scope,Path | Format-Table -AutoSize | Out-String -Width 300 | Write-Output
+  $rows | Select-Object Time,TimePrecision,Origin,Version,Kind,Outcome,Passed,Failed,Scope,Validation,ValidationMode,Path | Format-Table -AutoSize | Out-String -Width 300 | Write-Output
   Write-Output 'Run npm run evidence:verify to check integrity. pending/ is preserved separately.'
 }

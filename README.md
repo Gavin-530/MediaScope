@@ -85,7 +85,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/manage.ps1 -Action E
 
 ## 开发与维护
 
-源码开发先运行 `npm ci --ignore-scripts`，使用已安装的 Microsoft Edge 执行 `npm test`。测试在独立快照中运行，自动归档后回收沙箱；素材不使用用户媒体。
+源码开发先运行 `npm ci --ignore-scripts`，使用已安装的 Microsoft Edge 执行 `npm test`。当前版本完整回归与 Actions 使用相同通过条件，不允许跳过；`npm run test:release` 另要求干净源码，与 Actions 入口一致。快速检查使用 `test:core` / `test:browser`，结果明确标为部分范围。测试在独立快照中运行，自动归档后回收沙箱；素材不使用用户媒体。
 
 | 文档 | 内容 |
 | --- | --- |

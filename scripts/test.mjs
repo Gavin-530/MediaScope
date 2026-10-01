@@ -5,7 +5,7 @@ import {spawn,execFileSync} from 'node:child_process';
 import {createHash,randomUUID} from 'node:crypto';
 import {gzipSync} from 'node:zlib';
 import os from 'node:os';
-import {featureResults,releaseReadiness} from '../test/helpers/test-results.mjs';
+import {featureResults,releaseReadiness,regressionAssessment} from '../test/helpers/test-results.mjs';
 
 // Application bytes and harness bytes are captured independently. No source rewriting.
 const project=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
@@ -79,7 +79,7 @@ try {
   const privateRoot=path.join(process.env.MEDIASCOPE_HOME||path.join(process.env.LOCALAPPDATA,'MediaScope'),'runtimes',component.sha256);
   const locate=async(name)=>{const override=process.env[name==='ffmpeg'?'FFMPEG_PATH':'FFPROBE_PATH'];if(override)return override;const pinned=path.join(privateRoot,component.executables[name]);try{await fs.access(pinned);return pinned}catch{return execFileSync('where.exe',[name],{encoding:'utf8',windowsHide:true}).trim().split('\r\n')[0]}};
   const ffmpeg=await locate('ffmpeg'),ffprobe=await locate('ffprobe');
-  const env={...process.env,FFMPEG_PATH:ffmpeg,FFPROBE_PATH:ffprobe};
+  const env={...process.env,FFMPEG_PATH:ffmpeg,FFPROBE_PATH:ffprobe,MEDIASCOPE_TEST_SOURCE_KIND:ref?'git':'working-tree'};
   preflight.executables=[];for(const [name,exe] of [['node',process.execPath],['ffmpeg',ffmpeg],['ffprobe',ffprobe]])preflight.executables.push({name,path:exe,sha256:sha(await fs.readFile(exe))});
   console.log('Checking real encoders, metrics, HTTP startup and browser prerequisites…');
   const check=await run(process.execPath,[path.join(source,'scripts','check-environment.mjs'),source,ffmpeg,ffprobe,path.join(evidence,'compatibility.json')],{cwd:source,env});
@@ -108,10 +108,17 @@ try {
   const features=featureResults(coverage,cases,suite);
   await json(path.join(evidence,'features.json'),{schema:2,scope:suite,features});
   manifest.releaseCheck={requested:release,...releaseReadiness(counts,features)};
+  if(ref||suite!=='full'){
+    manifest.releaseCheck.ready=false;
+    manifest.releaseCheck.reasons.push(ref?'Historical comparisons are not current-version acceptance':'Partial suites are not complete regression');
+  }
+  manifest.validation=regressionAssessment(counts,features,{suite,historical:!!ref,processExitCode:result.code});
   manifest.testSummary=counts;manifest.failureClasses=failures.map(x=>({name:x.name,classification:x.classification}));
   if(failures.some(x=>x.classification==='infrastructure')){exitCode=2;manifest.outcome='blocked'}else{exitCode=result.code===0&&counts.failed===0&&counts.cancelled===0&&counts.passed>0?0:1;manifest.outcome=exitCode===0?'passed':'failed'}
-  if(release&&exitCode===0&&!manifest.releaseCheck.ready){exitCode=1;manifest.outcome='failed';console.error('Release gate: '+manifest.releaseCheck.reasons.join('; '))}
-  console.log(JSON.stringify({outcome:manifest.outcome,counts}));
+  if(exitCode===0&&!manifest.validation.accepted){exitCode=1;manifest.outcome='failed'}
+  if(exitCode===0&&manifest.validation.status==='complete')console.log('Complete current-version regression passed.');
+  else console.log('Verification '+manifest.validation.status+' ('+manifest.validation.mode+'): '+manifest.validation.reasons.join('; '));
+  console.log(JSON.stringify({outcome:manifest.outcome,validation:manifest.validation,counts}));
 }catch(e){output+='\n'+e.stack+'\n';manifest.blockedReason=e.message;console.error(e.message)}
 finally {
   try {
