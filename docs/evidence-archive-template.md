@@ -14,6 +14,7 @@
 每份新归档有 README.md、record.json、original/、SHA256SUMS.txt。GitHub 导入还保存原始 bundle.zip；通过 Actions 外层 ZIP 下载时也保存 artifact.zip。
 catalog.json 登记所有封存记录，并校验历史原 catalog 快照的 SHA-256；索引缺失、文件变化及未登记记录都会报错。
 pending 的存在不表示测试通过；运行结果与归档状态分别记录。
+本地与 Actions 分类以原始清单的 GitHub 运行身份为依据，不以整理或导入时的主机环境决定。在 Actions 中整理本地记录仍归入 tests/local，本地导入云端记录仍归入 tests/github-actions。导入、导出、迁移及整理入口省略 Project 时，在脚本初始化后计算其所在项目根目录，与当前工作目录无关。
 
 在项目根目录执行 npm run evidence:list、npm run evidence:verify、npm run evidence:sync。
 维护目录采用 时间部分_事项_8位编号；产品和素材采用 时间部分-8位编号。时间部分按来源精度选择：

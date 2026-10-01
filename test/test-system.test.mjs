@@ -33,6 +33,6 @@ test('[test-system] real filesystem validators reject changed fixtures, malforme
 test('[test-system] cloud evidence import preserves failures, rejects tampering and cannot overwrite history',async()=>{
   await mkdir('test-work',{recursive:true});
   const work=await mkdtemp(path.resolve('test-work/github-evidence-'));
-  const output=execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',path.resolve('test/helpers/github-evidence-protocol.ps1'),'-Work',work],{encoding:'utf8',windowsHide:true,timeout:30000});
-  assert.equal(output.split(/\r?\n/).filter(line=>line.startsWith('PASS:')).length,9,output);
+  const output=execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',path.resolve('test/helpers/github-evidence-protocol.ps1'),'-Work',work],{encoding:'utf8',windowsHide:true,timeout:60000});
+  assert.equal(output.split(/\r?\n/).filter(line=>line.startsWith('PASS:')).length,12,output);
 });

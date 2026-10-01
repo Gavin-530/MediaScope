@@ -1,5 +1,6 @@
-param([switch]$Apply,[string]$Project=(Join-Path $PSScriptRoot '..'),[string]$VerificationDirectory)
+param([switch]$Apply,[string]$Project,[string]$VerificationDirectory)
 $ErrorActionPreference='Stop'
+if(!$Project){$Project=Join-Path $PSScriptRoot '..'}
 . (Join-Path $PSScriptRoot 'evidence-lib.ps1')
 $project=[IO.Path]::GetFullPath($Project).TrimEnd('\')
 $root=Get-EvidenceRoot $project
@@ -21,7 +22,7 @@ try {
       if($m){
         if($m.kind -notin @('App','Package','OnlineDeployment','Custom','generated-fixture-snapshot','build-maintenance','pull-request-merge-audit','test-system-audit')){throw 'Unclassified legacy kind'}
         if(($payload.relative -match '^runs/') -ne ($m.kind -in @('App','Package','OnlineDeployment','Custom'))){throw 'Original type/path conflict'}
-        $dest=Get-EvidenceDestination $project $payload.relative
+        $dest=Get-EvidenceDestination $project $payload.relative $m
       }else{
         # This is a mixed collection, not a fabricated test manifest/run.
         if($payload.relative -ne 'release-verification-2026-09-29-v0.2.0'){throw 'Unknown historical collection; inspect before organization'}

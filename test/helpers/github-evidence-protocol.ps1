@@ -93,3 +93,59 @@ if($LASTEXITCODE -ne 0){throw 'Actual import CLI failed'}
 $cliPath=($cliOutput -join [Environment]::NewLine).Trim()
 if(!(Test-Path (Join-Path $cliPath 'record.json')) -or (Test-EvidenceCatalog (Get-EvidenceRoot $cliReceiver)) -ne 1){throw 'CLI did not create a valid isolated archive'}
 Write-Output 'PASS: actual import command validates arguments and returns its registered archive path'
+
+# Source identity must also survive publishing a cloud record on a local host.
+$localHostProject=Join-Path $project 'cloud-on-local'
+$localStage=Join-Path (Get-EvidencePendingRoot $localHostProject) 'staging/app'
+$null=New-Item -ItemType Directory -Path (Split-Path -Parent $localStage) -Force
+Copy-Item -LiteralPath $record -Destination $localStage -Recurse
+$priorActions=[Environment]::GetEnvironmentVariable('GITHUB_ACTIONS')
+try {
+  [Environment]::SetEnvironmentVariable('GITHUB_ACTIONS',$null)
+  $localCloud=Publish-EvidenceRecord $localHostProject $localStage $relative
+} finally {[Environment]::SetEnvironmentVariable('GITHUB_ACTIONS',$priorActions)}
+if(!$localCloud.StartsWith((Join-Path (Get-EvidenceRoot $localHostProject) 'tests/github-actions')+'\',[StringComparison]::OrdinalIgnoreCase) -or
+   (Test-EvidenceCatalog (Get-EvidenceRoot $localHostProject)) -ne 1){throw 'Local host changed cloud evidence provenance'}
+Write-Output 'PASS: cloud-origin evidence stays cloud when published on a local host'
+
+# Exercise omitted Project through real Windows PowerShell -File processes.
+$defaultProject=Join-Path $project 'default-project'
+$defaultScripts=Join-Path $defaultProject 'scripts'
+$defaultDocs=Join-Path $defaultProject 'docs'
+$null=New-Item -ItemType Directory -Path $defaultScripts,$defaultDocs -Force
+foreach($script in @('evidence-lib.ps1','github-evidence-lib.ps1','import-github-test-evidence.ps1','export-github-test-evidence.ps1','migrate-test-evidence.ps1','organize-test-evidence.ps1')){
+  Copy-Item -LiteralPath (Join-Path $sourceProject ('scripts/'+$script)) -Destination $defaultScripts
+}
+Copy-Item -LiteralPath (Join-Path $sourceProject 'docs/evidence-archive-template.md') -Destination $defaultDocs
+$defaultOutput=& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $defaultScripts 'import-github-test-evidence.ps1') -Archive $outer -Repository $identity.repository -RunId $identity.runId -Attempt $identity.runAttempt -Commit $identity.sha
+if($LASTEXITCODE -ne 0){throw 'Import CLI without Project failed'}
+$defaultPath=($defaultOutput -join [Environment]::NewLine).Trim()
+if(!$defaultPath.StartsWith((Get-EvidenceRoot $defaultProject)+'\',[StringComparison]::OrdinalIgnoreCase) -or (Test-EvidenceCatalog (Get-EvidenceRoot $defaultProject)) -ne 1){throw 'Default CLI used current directory instead of script project'}
+foreach($script in @('migrate-test-evidence.ps1','organize-test-evidence.ps1')){
+  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $defaultScripts $script) | Out-Null
+  if($LASTEXITCODE -ne 0){throw "Default project failed for $script"}
+}
+Write-Output 'PASS: omitted Project resolves the script project in real import, migration and organization CLI processes'
+
+$defaultExport=Join-Path $project 'default-export'
+$null=New-Item -ItemType Directory -Path (Join-Path $defaultExport 'scripts'),(Join-Path $defaultExport 'docs') -Force
+foreach($script in @('evidence-lib.ps1','github-evidence-lib.ps1','export-github-test-evidence.ps1')){
+  Copy-Item -LiteralPath (Join-Path $sourceProject ('scripts/'+$script)) -Destination (Join-Path $defaultExport 'scripts')
+}
+Copy-Item -LiteralPath (Join-Path $sourceProject 'docs/evidence-archive-template.md') -Destination (Join-Path $defaultExport 'docs')
+$defaultStage=Join-Path (Get-EvidencePendingRoot $defaultExport) 'staging/app'
+$null=New-Item -ItemType Directory -Path (Split-Path -Parent $defaultStage) -Force
+Copy-Item -LiteralPath $record -Destination $defaultStage -Recurse
+$null=Publish-EvidenceRecord $defaultExport $defaultStage $relative
+foreach($name in @($prior.Keys)){$prior[$name]=[Environment]::GetEnvironmentVariable($name)}
+try {
+  $env:GITHUB_ACTIONS='true';$env:RUNNER_ENVIRONMENT='github-hosted'
+  $env:GITHUB_REPOSITORY=$identity.repository;$env:GITHUB_RUN_ID=$identity.runId
+  $env:GITHUB_RUN_ATTEMPT=$identity.runAttempt;$env:GITHUB_SHA=$identity.sha;$env:GITHUB_JOB='protocol'
+  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $defaultExport 'scripts/export-github-test-evidence.ps1') -TestStepOutcome failure | Out-Null
+  if($LASTEXITCODE -ne 0){throw 'Export CLI without Project failed'}
+} finally {foreach($name in $prior.Keys){[Environment]::SetEnvironmentVariable($name,$prior[$name])}}
+$exportRoot=Join-Path (Get-EvidencePendingRoot $defaultExport) 'cloud-export'
+$exportDirectory=@(Get-ChildItem -LiteralPath $exportRoot -Directory)
+if($exportDirectory.Count -ne 1 -or !(Test-Path (Join-Path $exportRoot 'bundle.zip')) -or (Test-GitHubEvidenceBundle $exportDirectory[0].FullName).github.sha -ne $identity.sha){throw 'Default export did not retain the expected cloud identity'}
+Write-Output 'PASS: omitted Project works for the real hosted-runner export CLI with strict bundle validation'

@@ -1,5 +1,6 @@
-param([switch]$Apply,[string]$Project=(Join-Path $PSScriptRoot '..'),[switch]$KeepLegacyLayout)
+param([switch]$Apply,[string]$Project,[switch]$KeepLegacyLayout)
 $ErrorActionPreference='Stop'
+if(!$Project){$Project=Join-Path $PSScriptRoot '..'}
 . (Join-Path $PSScriptRoot 'evidence-lib.ps1')
 $project=[IO.Path]::GetFullPath($Project).TrimEnd('\')
 $old=Assert-EvidencePath $project (Join-Path $project 'local-test-archive')

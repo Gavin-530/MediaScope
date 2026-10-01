@@ -1,5 +1,6 @@
-param([Parameter(Mandatory=$true)][ValidateSet('success','failure','cancelled','skipped')][string]$TestStepOutcome,[string]$Project=(Join-Path $PSScriptRoot '..'))
+param([Parameter(Mandatory=$true)][ValidateSet('success','failure','cancelled','skipped')][string]$TestStepOutcome,[string]$Project)
 $ErrorActionPreference='Stop'
+if(!$Project){$Project=Join-Path $PSScriptRoot '..'}
 $project=[IO.Path]::GetFullPath($Project)
 if($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted'){throw 'Export requires an isolated GitHub-hosted runner'}
 . (Join-Path $PSScriptRoot 'evidence-lib.ps1')

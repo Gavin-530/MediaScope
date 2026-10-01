@@ -35,10 +35,16 @@ Write-Output 'PASS: actual migration preserves original bytes, old identity and 
 $staging=Join-Path (Get-EvidencePendingRoot $project) 'staging/custom'
 $null=New-Item -ItemType Directory -Path (Split-Path -Parent $staging) -Force
 Copy-Item -LiteralPath $preserved -Destination $staging -Recurse
-$published=Publish-EvidenceRecord $project $staging $logical
+$priorActions=[Environment]::GetEnvironmentVariable('GITHUB_ACTIONS')
+try {
+  $env:GITHUB_ACTIONS='true'
+  $published=Publish-EvidenceRecord $project $staging $logical
+} finally {[Environment]::SetEnvironmentVariable('GITHUB_ACTIONS',$priorActions)}
+if(!$published.StartsWith((Join-Path $root 'tests/local')+'\',[StringComparison]::OrdinalIgnoreCase)){throw 'Host environment changed local evidence provenance'}
 if(!(Test-Path (Join-Path $published 'README.md')) -or (Get-FileHash (Join-Path $published 'original/SHA256SUMS.txt')).Hash -ne $before){throw 'Envelope modified original data'}
 $null=Test-EvidenceCatalog $root
 Write-Output 'PASS: readable timestamp envelope preserves original data and failed status'
+Write-Output 'PASS: local-origin evidence stays local when published on a GitHub Actions host'
 $r=Get-Content (Join-Path $published 'record.json') -Raw| ConvertFrom-EvidenceJson
 $r.outcome='passed'
 [IO.File]::WriteAllText((Join-Path $published 'record.json'),($r|ConvertTo-Json -Depth 8))

@@ -368,11 +368,12 @@ function Format-EvidenceBeijingTime([string]$Value) {
   try{return [DateTimeOffset]::Parse($Value,[Globalization.CultureInfo]::InvariantCulture).ToOffset([TimeSpan]::FromHours(8)).ToString($format+' zzz')}
   catch{return 'unknown (original value retained)'}
 }
-function Get-EvidenceDestination($Project,$OriginalRelative) {
+function Get-EvidenceDestination($Project,$OriginalRelative,$Manifest) {
   $root=Get-EvidenceRoot $Project
   $category='maintenance'
   if($OriginalRelative -match '^runs/'){
-    $category=if($env:GITHUB_ACTIONS -eq 'true'){'tests/github-actions'}else{'tests/local'}
+    # Classification belongs to the original evidence, not the importing host.
+    $category=if($Manifest.github){'tests/github-actions'}else{'tests/local'}
   }elseif($OriginalRelative -match '^github-actions-'){$category='tests/github-actions'}
   elseif($OriginalRelative -match '^generated-fixtures-'){$category='fixtures'}
   $time=Get-EvidenceOriginalTime $OriginalRelative
@@ -387,7 +388,9 @@ function Get-EvidenceDestination($Project,$OriginalRelative) {
 function Publish-EvidenceRecord($Project,$Source,$OriginalRelative,[string]$TransportArchive,[string]$ArtifactArchive) {
   $root=Initialize-EvidenceArchive $Project
   $src=Assert-EvidencePath $Project $Source
-  $destination=Get-EvidenceDestination $Project $OriginalRelative
+  $manifestPath=Join-Path $src 'manifest.json'
+  $manifest=if(Test-Path -LiteralPath $manifestPath){Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson}else{$null}
+  $destination=Get-EvidenceDestination $Project $OriginalRelative $manifest
   if(Test-Path -LiteralPath $destination){throw "Evidence destination exists: $destination"}
   if(!(Test-Path -LiteralPath (Join-Path $src 'SHA256SUMS.txt'))){Write-EvidenceChecksums $src}
   $null=Test-EvidenceRecord $src $OriginalRelative
