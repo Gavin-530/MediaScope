@@ -1,16 +1,16 @@
 :root {
   color-scheme: light;
-  --bg-color1: #ebebeb;
-  --bg-color2: #e2e2e2;
-  --bg-color3: #d9d9d9;
+  --bg-color1: #dfe1e5;
+  --bg-color2: #d5d7db;
+  --bg-color3: #caccd1;
 
-  --panel: rgba(245, 245, 245, 0.85);
+  --panel: rgba(245, 246, 248, 0.85);
   --panel-border: rgba(0, 0, 0, 0.1);
   --panel-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.08);
   --line: rgba(0, 0, 0, 0.08);
   --text: #333333;
   --muted: #767676;
-  --accent: #444444;
+  --accent: #3b82f6;
 
   --input-bg: rgba(255, 255, 255, 0.6);
   --input-border: rgba(0, 0, 0, 0.15);
@@ -24,7 +24,7 @@
   --frame-detail-bg: #d4d4d4;
 
   --progress-track: #cfcfcf;
-  --progress-fill: #ffaa00;
+  --progress-fill: #3b82f6;
   --banner-bg: #e0e0e0;
   --banner-border: #bfbfbf;
 
@@ -1209,6 +1209,29 @@ button#import-button:hover {
   height: 36px;
   gap: 16px;
   user-select: none;
+}
+
+.island-progress-track {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 4px;
+  background: transparent;
+  pointer-events: none;
+  overflow: hidden;
+  border-radius: 0 0 40px 40px;
+}
+
+.task.island.expanded .island-progress-track {
+  display: none;
+}
+
+#island-progress-bar {
+  height: 100%;
+  width: 0%;
+  background: var(--progress-fill);
+  transition: width 0.3s ease-out;
 }
 
 .island-brief {

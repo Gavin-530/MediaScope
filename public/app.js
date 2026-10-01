@@ -144,10 +144,12 @@ function message(
       ? "总量待核验"
       : `${percent.toFixed(percent < 10 && percent % 1 ? 1 : 0)}%`;
   const track = $("#task-progress-track"),
-    bar = $("#task-progress-bar");
+    bar = $("#task-progress-bar"),
+    islandBar = $("#island-progress-bar");
   track.classList.toggle("indeterminate", !determinate);
   if (!bar.style) bar.style = {};
   bar.style.width = determinate ? percent + "%" : "";
+  if (islandBar) islandBar.style.width = determinate ? percent + "%" : "";
   track.ariaValueNow = determinate ? String(percent) : "";
   track.ariaValueMax = determinate ? "100" : "";
   const subtasks = Object.values(progress.subtasks || {});
@@ -1764,6 +1766,7 @@ if (taskEl) {
             <span id="island-brief-text">当前无任务</span>
           </div>
           <div class="island-queue">排队: <span id="island-q-count">0</span></div>
+          <div class="island-progress-track"><div id="island-progress-bar"></div></div>
         `;
   // Toggle expansion
   header.onclick = () => {
