@@ -1,5 +1,5 @@
 :root {
-  color-scheme: light;
+  color-scheme: light dark;
   --bg-color1: #dfe1e5;
   --bg-color2: #d5d7db;
   --bg-color3: #caccd1;
@@ -10,7 +10,7 @@
   --line: rgba(0, 0, 0, 0.08);
   --text: #333333;
   --muted: #767676;
-  --accent: #3b82f6;
+  --accent: #2563eb;
 
   --input-bg: rgba(255, 255, 255, 0.6);
   --input-border: rgba(0, 0, 0, 0.15);
@@ -20,17 +20,46 @@
   --secondary-bg: #e6e6e6;
   --secondary-border: #bfbfbf;
   --evidence-text: var(--text);
-  --notice-text: #555555;
+  --notice-text: var(--text);
   --frame-detail-bg: #d4d4d4;
 
   --progress-track: #cfcfcf;
-  --progress-fill: #3b82f6;
+  --progress-fill: #2563eb;
   --banner-bg: #e0e0e0;
   --banner-border: #bfbfbf;
 
   --chart-height: 230px;
   --scrollbar-thumb: rgba(0, 0, 0, 0.2);
   --scrollbar-thumb-hover: rgba(0, 0, 0, 0.35);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-color1: #0f2027;
+    --bg-color2: #203a43;
+    --bg-color3: #2c5364;
+
+    --panel: rgba(21, 27, 35, 0.45);
+    --panel-border: rgba(255, 255, 255, 0.1);
+    --panel-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+    --line: rgba(255, 255, 255, 0.1);
+    --text: #e7edf5;
+    --muted: #98a7ba;
+    --accent: #80e1c4;
+
+    --input-bg: rgba(13, 19, 27, 0.4);
+    --input-border: rgba(255, 255, 255, 0.15);
+    --button-bg: rgba(255, 255, 255, 0.1);
+    --button-hover: rgba(255, 255, 255, 0.2);
+    --accent-text: #11251f;
+    --secondary-bg: #232e3a;
+    --secondary-border: #3a4757;
+    --evidence-text: #bdcbdd;
+    --notice-text: var(--text);
+    --frame-detail-bg: #10161e;
+    --scrollbar-thumb: rgba(255, 255, 255, 0.2);
+    --scrollbar-thumb-hover: rgba(255, 255, 255, 0.4);
+  }
 }
 
 /* Custom Scrollbar */
