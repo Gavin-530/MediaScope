@@ -19,3 +19,9 @@ test('[test-system] sync separates reruns and rejects artifact/run identity mism
   assert.equal(artifactIdentity({...a,name:'mediascope-test-evidence-123-2'}).attempt,'2');
   assert.throws(()=>artifactIdentity({...a,workflow_run:{id:124}}),/identity mismatch/);
 });
+test('[test-system] collaborator import preserves provenance, deduplicates and rolls back catalog failures',async()=>{
+  await mkdir('test-work',{recursive:true});
+  const work=await mkdtemp(path.resolve('test-work/local-import-'));
+  const output=execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',path.resolve('test/helpers/local-import-protocol.ps1'),'-Work',work],{encoding:'utf8',windowsHide:true,timeout:60000});
+  assert.equal(output.split(/\r?\n/).filter(x=>x.startsWith('PASS:')).length,9,output);
+});

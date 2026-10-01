@@ -2,6 +2,11 @@
   "schema": 1,
   "rules": [
     {
+      "path": "evidence-inbox",
+      "class": "protected",
+      "reason": "Received collaborator archives and import receipts; never clean automatically"
+    },
+    {
       "path": "evidence-archive",
       "class": "protected",
       "reason": "Original test evidence; keep permanently"

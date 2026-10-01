@@ -7,6 +7,7 @@
 | 路径 | 分类与处理 |
 | --- | --- |
 | `evidence-archive/` | 唯一长期测试/维护证据入口；永久保留，清理工具拒绝删除 |
+| `evidence-inbox/` | 协作者归档的接收原件与导入回执；永久保留，不自动上传或清理 |
 | `evidence-archive/pending/` | 运行中、待导入、中断证据和锁；不自动删除 |
 | `evidence-archive/legacy/local-test-archive/` | 尚未整理的旧档案暂存位置，仍受保护；整理后原文件进入各分类的 original，原 catalog 保存为校验快照 |
 | `local-test-archive/` | 未迁移时仍保护；迁移后不再写入 |
@@ -39,6 +40,40 @@ npm run evidence:list
 npm run evidence:verify
 ```
 
+## 接收协作者归档
+
+接收入口统一为 `evidence-inbox/`；处理入口为 `scripts/import-local-test-evidence.ps1`，也可使用 `npm run evidence:import`。工具不执行收到的脚本，不改变媒体分析、界面或安装流程。接收目录受本地数据策略保护并被 Git 忽略；导入规则与程序随 Git 共享。
+
+首次执行 `npm run evidence:import` 创建接收目录并列出批次。让对方发送完整的已封存记录文件夹（包含 README.md、record.json、SHA256SUMS.txt、original/ 及原有压缩附件）。收到 ZIP 后先自行解压，将一份或多份记录放入同一批次的 records，结构如下：
+
+```text
+evidence-inbox/
+  alice-20261001/
+    records/
+      2026-10-01T10-20-30.220Z-1234abcd/
+        README.md
+        record.json
+        SHA256SUMS.txt
+        original/
+    receipts/   # 程序生成，不要放接收记录
+```
+
+批次名使用 ASCII 字母、数字、点、下划线、连字符，并以字母或数字开头。不要把对方的整个项目或 catalog.json 放进 records，也不要用对方的索引覆盖本机索引。保留对方原文件；不手工补造清单或修改编号来绕过冲突。暂不支持旧版未封装目录、未完成记录和直接读取 ZIP。
+
+```powershell
+# 预览：完整检查本机索引和全部接收记录，但不写入正式归档
+npm run evidence:import -- -Batch alice-20261001
+# 应用：贡献者可填写名称或账号；含空格时加引号
+npm run evidence:import -- -Batch alice-20261001 -Contributor "Alice" -Apply
+npm run evidence:verify
+```
+
+工具按收到的封装身份进入既有 tests/local、tests/github-actions、maintenance 或 fixtures 分类；保留原始文件字节、编号、时间精度、提交、运行范围和失败结果。逐项校验完整性，同编号同内容跳过，同编号不同内容停止整个批次；不把他人的测试改称本机执行或合并成一次通过。贡献者由接收者填写，不能作为经过认证的身份。
+
+应用时使用现有归档记录锁，先校验并暂存所有新记录，再统一更新本机 catalog.json；不会导入对方的索引。来源、提交（原清单已记录时）、接收批次及逐条摘要另存为 maintenance 中的 local-evidence-import 审计记录。接收原件保留在 records，本机索引快照与回执留在 receipts；成功后没有新增未完成 pending，重复运行不会新增记录或审计。
+
+正常捕获的提交前错误会将本批新目录移回 pending 事务目录，保留旧索引和接收原件；不删除已有资料。进程被强行终止或断电时可能留下待恢复事务，工具不会忽略索引异常继续导入。遇到报错保留接收批次和提示中的 pending/local-import-*，先核对 plan.json、catalog-before.json（若已生成）及正式索引，不手工覆盖或删除档案。
+
 ## 检查与清理
 
 ```powershell
@@ -53,4 +88,4 @@ Clean 默认预览，核对后加 -Apply；其他类别为 BuildStages、Downloa
 
 SHA256SUMS.txt 与 catalog.json 检测文件变化、记录缺失及未登记记录。正常校验列出 pending；使用 verify-test-evidence.ps1 -RequireComplete 可拒绝未完成项。失败不能被后来成功覆盖；恢复只处理证据，不增加产品通过数。
 
-永久保留是清理策略，不是备份。另行备份 evidence-archive、用户报告、验收资料和 releases；校验不能恢复磁盘损坏或误删。
+永久保留是清理策略，不是备份。另行备份 evidence-archive、evidence-inbox、用户报告、验收资料和 releases；校验不能恢复磁盘损坏或误删。
