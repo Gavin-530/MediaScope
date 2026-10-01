@@ -31,7 +31,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/import-github-test-e
 
 鉴权优先 GH_TOKEN/GITHUB_TOKEN，随后使用现有 Git credential helper，禁用交互提示；不将凭证写入日志或档案。下载需具备 Actions 读取权限。导入不执行下载包中的程序，校验安全路径、内部清单、仓库/提交/运行身份和实际发布门槛。支持 bundle ZIP 和 upload-artifact 外层 ZIP，保留原始传输字节及内部文件，不重跑测试替代云端记录。
 
-正式记录位于 evidence-archive/tests/github-actions/<原时间精度与编号>/；当前导出器生成毫秒 UTC 编号，历史导入不强制补毫秒，精度规则见[归档说明](evidence-archive-template.md)。新本地封装的时间来源及精度与 GitHub 的仓库/run_id/run_attempt/SHA 身份分别校验，精度兼容不会放宽成功 CI 的完整证据门槛。同次同内容导入不重复，不同内容拒绝覆盖。未完成下载、导入失败诊断保存在 pending。sync-state.json 区分已保存、缺失、过期和同步错误；partial scan 说明分页范围尚未完整，不能据此宣称全部运行已归档。
+正式记录与其他来源一起位于 evidence-archive/records/<原时间精度与编号>/，来源通过清单中的 GitHub 身份区分；目录与编号规则见[归档说明](evidence-archive.md)。新本地封装的时间来源及精度与 GitHub 的仓库/run_id/run_attempt/SHA 身份分别校验，精度兼容不会放宽成功 CI 的完整证据门槛。同次同内容导入不重复，不同内容拒绝覆盖。未完成下载、导入失败诊断保存在 pending。sync-state.json 区分已保存、缺失、过期和同步错误；partial scan 说明分页范围尚未完整，不能据此宣称全部运行已归档。
 
 npm start、npm test、test:core、test:browser 运行前会尝试小范围补同步，失败不阻止原命令；MEDIASCOPE_SKIP_EVIDENCE_SYNC=1 可跳过。本轮不安装后台服务或系统定时任务；需要全量补查时显式运行 evidence:sync。同步不会上传本机资料，电脑离线时延后。
 

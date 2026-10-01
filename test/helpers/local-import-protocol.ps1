@@ -55,11 +55,11 @@ if((Test-EvidenceCatalog $root) -ne 3){throw 'Missing imports or attribution aud
 $identity=Get-Content (Join-Path $received 'record.json') -Raw|ConvertFrom-EvidenceJson
 $destination=Join-Path $root $identity.path
 $importedHashes=@(Get-EvidenceFiles $destination|ForEach-Object {$_.path+':'+(Get-FileHash -LiteralPath $_.full).Hash})
-if(($originalHashes -join "`n") -ne ($importedHashes -join "`n") -or $identity.outcome -ne 'failed' -or !$identity.path.StartsWith('tests/local/')){throw 'Imported bytes, outcome or origin changed'}
+if(($originalHashes -join "`n") -ne ($importedHashes -join "`n") -or $identity.outcome -ne 'failed' -or $identity.origin -ne 'local' -or !$identity.path.StartsWith('records/')){throw 'Imported bytes, outcome or origin changed'}
 if(!(Test-Path $receivedFixture) -or @((Get-ChildItem (Join-Path $root 'pending') -Directory)).Count){throw 'Received originals lost or successful transaction left pending'}
-$audit=@(Get-EvidenceRecords $root|Where-Object {$_.relative -like 'maintenance/*_local-evidence-import_*'})[0]
+$audit=@(Get-EvidenceRecords $root|Where-Object {$_.relative -like 'records/*_local-evidence-import_*'})[0]
 $receipt=Get-Content (Join-Path $audit.source 'original/receipt.json') -Raw|ConvertFrom-EvidenceJson
-$localReceipt=@($receipt.records|Where-Object {$_.path.StartsWith('tests/local/')})[0]
+$localReceipt=@($receipt.records|Where-Object {$_.path -eq $identity.path})[0]
 if($receipt.contributor -ne 'Alice Example' -or @($receipt.records).Count -ne 2 -or $localReceipt.sourceCommit -ne ('a'*40)){throw 'Attribution or source commit lost'}
 Write-Output 'PASS: actual import preserves every byte, failed outcomes and origin, records attribution and never executes received code'
 
@@ -160,7 +160,7 @@ try{
   [IO.Directory]::Delete($loopFull)
 }
 if((Get-FileHash $ownTool).Hash -ne $ownToolHash -or (Test-Path (Join-Path $root 'evidence-archive'))){throw 'Foreign tool overwritten or nested formal archive created'}
-$wholeAudit=@(Get-EvidenceRecords $root|Where-Object {$_.relative -like 'maintenance/*_local-evidence-import_*'} | Where-Object {(Get-Content (Join-Path $_.source 'original/receipt.json') -Raw|ConvertFrom-EvidenceJson).batch -eq 'whole'})[0]
+$wholeAudit=@(Get-EvidenceRecords $root|Where-Object {$_.relative -like 'records/*_local-evidence-import_*'} | Where-Object {(Get-Content (Join-Path $_.source 'original/receipt.json') -Raw|ConvertFrom-EvidenceJson).batch -eq 'whole'})[0]
 $wholeReceipt=Get-Content (Join-Path $wholeAudit.source 'original/receipt.json') -Raw|ConvertFrom-EvidenceJson
 if(!$wholeReceipt.sourceCatalogs -or !$wholeReceipt.skippedSubtrees -or $wholeReceipt.records.Count -ne 4){throw 'Donor catalogs or skipped-tree provenance missing'}
 Write-Output 'PASS: whole archives flatten sealed records while skipping cyclic inboxes, foreign tools and pending data'
@@ -258,3 +258,40 @@ if(!(Test-Path $retryDrop) -or (Test-Path (Join-Path $retryRoot 'received')) -or
 & $importer -Project $retryReceiver -Contributor 'Retry sender' -Apply | Out-Null
 if((Test-Path $retryDrop) -or (Test-EvidenceCatalog $retryRoot) -ne 6){throw 'Direct import retry failed'}
 Write-Output 'PASS: direct import rolls back publication errors and retries without losing the whole received package'
+
+# Old maintenance envelopes may keep a shorter canonical path while their
+# current folder has a readable label. Single-record transfers must deduplicate
+# against the same record received as part of an entire archive.
+$aliasReceiver=Join-Path $workRoot 'alias'
+$aliasRoot=Initialize-EvidenceArchive $aliasReceiver
+$aliasLogical='test-system-audit-20261001T102034Z-1234ab06'
+$aliasOld='maintenance/2026-10-01T10-20-34Z-1234ab06'
+$aliasLabeled='records/2026-10-01T10-20-34Z_test-system-audit_1234ab06'
+$aliasSource=Join-Path $aliasRoot $aliasLabeled
+$aliasRaw=Join-Path $aliasSource 'original'
+$null=New-Item -ItemType Directory -Path $aliasRaw -Force
+[IO.File]::WriteAllText((Join-Path $aliasRaw 'manifest.json'),'{"schema":1,"kind":"test-system-audit","note":"Synthetic old alias"}',$utf8)
+Write-EvidenceChecksums $aliasRaw
+Write-EvidenceEnvelope $aliasSource $aliasOld $aliasLogical
+Add-EvidenceCatalogRecord $aliasRoot @{source=$aliasSource;relative=$aliasLabeled}
+$aliasDrop=Join-Path $aliasRoot 'inbox/single-received-record'
+$null=New-Item -ItemType Directory -Path (Split-Path -Parent $aliasDrop) -Force
+Copy-Item -LiteralPath $aliasSource -Destination $aliasDrop -Recurse
+$aliasHash=(Get-FileHash (Join-Path $aliasRoot 'catalog.json')).Hash
+& $importer -Project $aliasReceiver -Contributor 'Alias sender' -Apply | Out-Null
+if((Test-Path $aliasDrop) -or (Get-FileHash (Join-Path $aliasRoot 'catalog.json')).Hash -ne $aliasHash -or (Test-EvidenceCatalog $aliasRoot) -ne 1){throw 'Historical path alias created duplicate sealed records'}
+$aliasBatch=@(Get-ChildItem (Join-Path $aliasRoot 'received') -Directory)[0]
+$aliasReceiptPath=@(Get-ChildItem (Join-Path $aliasBatch.FullName 'receipts') -Directory)[0].FullName
+$aliasReceipt=Get-Content (Join-Path $aliasReceiptPath 'receipt.json') -Raw|ConvertFrom-EvidenceJson
+if($aliasReceipt.records[0].path -ne $aliasLabeled -or $aliasReceipt.records[0].action -ne 'duplicate'){throw 'Duplicate receipt does not point at current flat location'}
+Write-Output 'PASS: old canonical maintenance paths deduplicate against labeled flat locations and receipts identify the actual current record'
+
+$missingIndexDrop=Join-Path $aliasRoot 'inbox/renamed-archive'
+Copy-Item -LiteralPath (Get-EvidenceRoot $sender) -Destination $missingIndexDrop -Recurse
+$missingIndexFile=Join-Path $missingIndexDrop 'catalog.json'
+$indexSnapshot=Join-Path $workRoot 'renamed-archive-catalog.json'
+foreach($fixturePath in @($missingIndexFile,$indexSnapshot)){if(!([IO.Path]::GetFullPath($fixturePath)).StartsWith($workRoot+'\',[StringComparison]::OrdinalIgnoreCase)){throw 'Index fixture outside sandbox'}}
+Move-Item -LiteralPath $missingIndexFile -Destination $indexSnapshot
+Reject {& $importer -Project $aliasReceiver -Folder renamed-archive -Contributor 'Broken sender' -Apply} 'Received archive catalog missing'
+if((Get-FileHash (Join-Path $aliasRoot 'catalog.json')).Hash -ne $aliasHash -or !(Test-Path $missingIndexDrop)){throw 'Renaming an archive bypassed its required index'}
+Write-Output 'PASS: renamed flat archives still require their catalog and cannot masquerade as manual records wrappers'

@@ -34,6 +34,7 @@ try {
   $inventory=@(Get-EvidenceFiles $old|ForEach-Object {@{path=$_.path;bytes=$_.bytes;sha256=(Get-FileHash -LiteralPath $_.full).Hash}})
   $oldCatalog=Get-Content -LiteralPath (Join-Path $old 'catalog.json') -Raw -Encoding UTF8
   $catalog=Get-Content -LiteralPath (Join-Path $root 'catalog.json') -Raw -Encoding UTF8|ConvertFrom-Json
+  $null=New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force
   [IO.Directory]::Move($old,$destination)
   try {
     $null=Test-EvidenceCatalog $destination

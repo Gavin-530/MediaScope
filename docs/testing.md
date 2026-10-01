@@ -43,7 +43,7 @@ npm run test:release
 ## 证据与维护
 
 每次应用测试从独立源码快照运行，成功、失败和前置阻塞都保留记录。运行沙箱及证据位于 evidence-archive/pending；校验并登记正式归档后才回收本次沙箱。新的统一目录包裹 original 原始记录，不改写原 schema。
-归档封装与产品 manifest 是独立 schema：新封装 schema 3 记录编号时间的来源、精度和时区，并兼容旧封装 schema 1/2。毫秒、秒、日期和未知时间按来源保存，不补造精度；目录编号时间不是产品运行耗时或时钟准确度证明。具体规则见[归档说明](evidence-archive-template.md)。
+归档封装与产品 manifest 是独立 schema：新封装 schema 3 记录编号时间的来源、精度和时区，并兼容旧封装 schema 1/2。毫秒、秒、日期和未知时间按来源保存，不补造精度；目录编号时间不是产品运行耗时或时钟准确度证明。具体规则见[归档说明](evidence-archive.md)。
 
 | 记录 | 保留内容 |
 | --- | --- |
@@ -63,6 +63,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/recover-test-evidenc
 
 恢复前先确认进程已结束并审查 `evidence-archive/pending/test-run.lock`，不能直接删除锁。应用记录提交使用原子清单替换；登记失败保留待处理证据，恢复不增加产品测试通过数。包/部署或其他未完成记录须先审查暂存及日志。
 
-原生安装/卸载弹窗、全部响应式尺寸和媒体组合、真实首次联网下载仍按[发布规范](releasing.md)分别验收。npm run evidence:list 支持 -- -Origin local/github-actions、-Version、-Outcome、-Json 筛选。归档命名、永久保留、Git 范围及清理统一见[本地数据规范](local-data.md)。
+原生安装/卸载弹窗、全部响应式尺寸和媒体组合、真实首次联网下载仍按[发布规范](releasing.md)分别验收。归档结构、查询和校验见[测试归档说明](evidence-archive.md)，整个项目的目录保留与清理见[本地数据规范](local-data.md)。
 
 GitHub 自动执行使用同一完整发布入口，远端运行身份、证据范围及本地长期导入见 [GitHub 自动测试](github-actions.md)。本地证据不会自动上传；云端证据必须下载并校验后才能称为本地永久归档。使用 npm run evidence:sync 同步；npm start/npm test 的包装入口会尝试补同步，网络失败不会改变应用测试结果。直接调用测试脚本不自动同步。

@@ -9,7 +9,7 @@ test('[test-system] archive migration and unified envelopes preserve failed evid
   for(const actions of ['','true']){
     const work=await mkdtemp(path.resolve('test-work/archive-layout-'));
     const output=execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',path.resolve('test/helpers/archive-layout-protocol.ps1'),'-Work',work],{encoding:'utf8',windowsHide:true,timeout:60000,env:{...process.env,GITHUB_ACTIONS:actions}});
-    assert.equal(output.split(/\r?\n/).filter(x=>x.startsWith('PASS:')).length,14,output);
+    assert.equal(output.split(/\r?\n/).filter(x=>x.startsWith('PASS:')).length,16,output);
   }
 });
 test('[test-system] sync separates reruns and rejects artifact/run identity mismatches',()=>{
@@ -23,5 +23,5 @@ test('[test-system] collaborator import preserves provenance, deduplicates and r
   await mkdir('test-work',{recursive:true});
   const work=await mkdtemp(path.resolve('test-work/local-import-'));
   const output=execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',path.resolve('test/helpers/local-import-protocol.ps1'),'-Work',work],{encoding:'utf8',windowsHide:true,timeout:60000});
-  assert.equal(output.split(/\r?\n/).filter(x=>x.startsWith('PASS:')).length,18,output);
+  assert.equal(output.split(/\r?\n/).filter(x=>x.startsWith('PASS:')).length,20,output);
 });

@@ -92,11 +92,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/manage.ps1 -Action E
 | [测试规范](docs/testing.md) | 日常/发布测试入口、覆盖、结果和恢复 |
 | [GitHub 自动测试](docs/github-actions.md) | 自动执行时机、远端运行、证据范围与本地长期归档 |
 | [本地数据规范](docs/local-data.md) | 命名、永久保留、Git 范围和清理 |
+| [测试归档说明](docs/evidence-archive.md) | 归档目录、接收整包、校验、迁移和时间规则 |
 | [发布规范](docs/releasing.md) | 版本、附件、验收和 Release 正文 |
 
-以上是随源码维护的长期规则；测试和审查记录统一保存在 `evidence-archive/`，其中归档数据被 Git 忽略，`tools/import-local-test-evidence.ps1` 随 Git 维护。本机档案不上传；Actions 只上传远端本次证据，本机通过校验后导入。使用 `npm run evidence:list`、`npm run evidence:verify`、`npm run evidence:sync` 查询、校验和同步。协作者整个 `evidence-archive` 文件夹直接放到本机 `evidence-archive/inbox/`；使用 `npm run evidence:import` 自动扫描并预览，再加 `-Contributor <贡献者> -Apply` 正式导入。程序自动将完成的整包原件和回执移至 `evidence-archive/received/`，不需要手动创建批次。规则见[本地数据规范](docs/local-data.md)。项目内的资料需另行备份。
+以上是随源码维护的长期规则。测试和审查记录统一放在 `evidence-archive/records/`；实际档案被 Git 忽略，导入程序随 Git 维护。本机档案不自动上传，项目资料需另行备份。操作入口与目录含义统一见[测试归档说明](docs/evidence-archive.md)。
 
-归档时间编号按来源保留毫秒、秒、日期或未知；不补造小数、零点和时区。新记录保存时间来源与表示精度，旧档案保持原字节；具体见[归档时间规则](docs/evidence-archive-template.md)。
 
 ## 计算与图表说明
 

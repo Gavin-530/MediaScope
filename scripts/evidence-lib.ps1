@@ -37,7 +37,7 @@ function Get-EvidenceRecords($Root) {
   $modern=(Split-Path -Leaf $Root) -eq 'evidence-archive'
   if(Test-Path -LiteralPath $catalogPath){$modern=$modern -or (Get-Content -LiteralPath $catalogPath -Raw -Encoding UTF8| ConvertFrom-EvidenceJson).schema -eq 2}
   if($modern){
-    foreach($path in @('tests/local','tests/github-actions','maintenance','fixtures')){
+    foreach($path in @('records','tests/local','tests/github-actions','maintenance','fixtures')){
       $parent=Join-Path $Root $path
       if(!(Test-Path -LiteralPath $parent)){continue}
       if((Get-Item -LiteralPath $parent -Force).Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Linked record category'}
@@ -191,7 +191,7 @@ function Test-EvidenceLegacyCatalog($Root,$Catalog) {
   if($Catalog.schema -ne 2){return}
   foreach($entry in @($Catalog.historicalCatalogs)){
     if(!$entry){continue}
-    if($entry.path -notmatch '^maintenance/[A-Za-z0-9_.-]+/original/original-legacy-catalog.json$' -or $entry.sha256 -notmatch '^[a-fA-F0-9]{64}$'){throw 'Invalid historical catalog reference'}
+    if($entry.path -notmatch '^(maintenance|records)/[A-Za-z0-9_.-]+/original/original-legacy-catalog.json$' -or $entry.sha256 -notmatch '^[a-fA-F0-9]{64}$'){throw 'Invalid historical catalog reference'}
     $historical=Assert-EvidencePath (Split-Path -Parent $Root) (Join-Path $Root $entry.path)
     if(!(Test-Path -LiteralPath $historical -PathType Leaf) -or (Get-FileHash -LiteralPath $historical).Hash -ne $entry.sha256){throw 'Historical evidence catalog checksum mismatch'}
   }
@@ -222,12 +222,14 @@ function Test-EvidenceCatalogData($Root,$catalog) {
   if($catalog.schema -eq 2){
     foreach($item in Get-ChildItem -LiteralPath $Root -Force){
       if($item.Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Linked archive entry'}
-      if(($item.PSIsContainer -and $item.Name -notin @('tests','maintenance','fixtures','pending','legacy','inbox','received','tools')) -or
+      if(($item.PSIsContainer -and $item.Name -notin @('records','tests','maintenance','fixtures','pending','legacy','inbox','received','tools')) -or
          (!$item.PSIsContainer -and $item.Name -notin @('README.md','catalog.json'))){throw 'Unexpected archive root entry'}
     }
     foreach($parent in @('tests','legacy')){
       $allowed=if($parent -eq 'tests'){@('local','github-actions')}else{@('local-test-archive')}
-      foreach($item in Get-ChildItem -LiteralPath (Join-Path $Root $parent) -Force){
+      $categoryRoot=Join-Path $Root $parent
+      if(!(Test-Path -LiteralPath $categoryRoot)){continue}
+      foreach($item in Get-ChildItem -LiteralPath $categoryRoot -Force){
         if(!$item.PSIsContainer -or $item.Name -notin $allowed -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'Invalid archive category'}
       }
     }
@@ -272,6 +274,7 @@ function Add-EvidenceCatalogRecord($Root,$Record) {
   $newEntry=Get-EvidenceCatalogEntry $Record
   $schema=if($catalog){$catalog.schema}else{1}
   $updated=[ordered]@{schema=$schema;records=@($known)+@($newEntry)}
+  if($catalog.layout){$updated.layout=$catalog.layout}
   if($catalog.legacyCatalogSha256){$updated.legacyCatalogSha256=$catalog.legacyCatalogSha256}
   if($catalog.historicalCatalogs){$updated.historicalCatalogs=@($catalog.historicalCatalogs)}
   $tempParent=if($schema -eq 2){Join-Path $Root 'pending'}else{$Root}
@@ -305,18 +308,16 @@ function Assert-EvidencePath($Project,$Value) {
 }
 function Initialize-EvidenceArchive($Project) {
   $root=Get-EvidenceRoot $Project
-  foreach($directory in @('tests/local','tests/github-actions','maintenance','fixtures','pending','legacy')){
+  $catalog=Join-Path $root 'catalog.json'
+  $existing=if(Test-Path -LiteralPath $catalog){Get-Content -LiteralPath $catalog -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson}else{$null}
+  $directories=if($existing -and $existing.layout -ne 'flat'){@('tests/local','tests/github-actions','maintenance','fixtures','pending','legacy')}else{@('records','pending')}
+  foreach($directory in $directories){
     $path=Assert-EvidencePath $Project (Join-Path $root $directory)
     $null=New-Item -ItemType Directory -Path $path -Force
   }
-  $catalog=Join-Path $root 'catalog.json'
   if(!(Test-Path -LiteralPath $catalog)){
     if(@(Get-EvidenceRecords $root).Count){throw 'Unregistered evidence exists; initialization refused'}
-    [IO.File]::WriteAllText($catalog,'{"schema":2,"records":[]}',(New-Object Text.UTF8Encoding($false)))
-  }
-  $readme=Join-Path $root 'README.md'
-  if(!(Test-Path -LiteralPath $readme)){
-    Copy-Item -LiteralPath (Join-Path $PSScriptRoot '../docs/evidence-archive-template.md') -Destination $readme
+    [IO.File]::WriteAllText($catalog,'{"schema":2,"layout":"flat","records":[]}',(New-Object Text.UTF8Encoding($false)))
   }
   return $root
 }
@@ -382,14 +383,22 @@ function Format-EvidenceBeijingTime([string]$Value) {
   try{return [DateTimeOffset]::Parse($Value,[Globalization.CultureInfo]::InvariantCulture).ToOffset([TimeSpan]::FromHours(8)).ToString($format+' zzz')}
   catch{return 'unknown (original value retained)'}
 }
-function Get-EvidenceDestination($Project,$OriginalRelative,$Manifest) {
-  $root=Get-EvidenceRoot $Project
+function Get-EvidenceCategory($OriginalRelative,$Manifest) {
   $category='maintenance'
   if($OriginalRelative -match '^runs/'){
     # Classification belongs to the original evidence, not the importing host.
     $category=if($Manifest.github){'tests/github-actions'}else{'tests/local'}
   }elseif($OriginalRelative -match '^github-actions-'){$category='tests/github-actions'}
   elseif($OriginalRelative -match '^generated-fixtures-'){$category='fixtures'}
+  return $category
+}
+function Get-EvidenceFlatLocation([string]$Relative) {
+  if($Relative -notmatch '^(records|tests/(local|github-actions)|maintenance|fixtures)/[^/]+$'){throw 'Invalid sealed record location'}
+  return 'records/'+$Relative.Split('/')[-1]
+}
+function Get-EvidenceDestination($Project,$OriginalRelative,$Manifest) {
+  $root=Get-EvidenceRoot $Project
+  $category=Get-EvidenceCategory $OriginalRelative $Manifest
   $time=Get-EvidenceOriginalTime $OriginalRelative
   $name=$time.namePart+'-'+$time.nonce
   if($category -eq 'maintenance'){
@@ -397,7 +406,7 @@ function Get-EvidenceDestination($Project,$OriginalRelative,$Manifest) {
     if($label -notmatch '^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$' -or $label.Length -gt 32){throw 'Invalid maintenance label'}
     $name=$time.namePart+'_'+$label+'_'+$time.nonce
   }
-  return (Assert-EvidencePath $Project (Join-Path $root ($category+'/'+$name)))
+  return (Assert-EvidencePath $Project (Join-Path $root ('records/'+$name)))
 }
 function Publish-EvidenceRecord($Project,$Source,$OriginalRelative,[string]$TransportArchive,[string]$ArtifactArchive) {
   $root=Initialize-EvidenceArchive $Project
@@ -445,7 +454,7 @@ function Write-EvidenceEnvelope($Root,$Relative,$OriginalRelative) {
   $originalSum=(Get-FileHash -LiteralPath (Join-Path $raw 'SHA256SUMS.txt')).Hash
   $time=if($m){Get-EvidenceOriginalTime $OriginalRelative}else{Get-EvidenceRunTime ('undated-'+$originalSum.Substring(0,8).ToLowerInvariant())}
   $record=[ordered]@{
-    schema=3;path=$Relative;category=$Relative.Split('/')[0];origin=$(if($github){'github-actions'}else{'local'});
+    schema=3;path=$Relative;category=$(if($Relative.StartsWith('records/')){if($m){(Get-EvidenceCategory $OriginalRelative $m).Split('/')[0]}else{'maintenance'}}else{$Relative.Split('/')[0]});origin=$(if($github){'github-actions'}else{'local'});
     kind=$(if($m){$m.kind}else{'historical-evidence-collection'});version=$m.version;runId=$m.runId;
     startedAtUtc=$started;recordedAtUtc=$recorded;timeBasis=$(if($time.precision -eq 'unknown'){'unknown'}else{'original-run-identifier'});
     identifierTime=$time.value;identifierTimePrecision=$time.precision;identifierTimeZone=$time.timeZone;
@@ -487,7 +496,15 @@ function Write-EvidenceRecordReadme($Root,$Record,$Manifest) {
 }
 function Test-EvidenceEnvelope($Root,$Relative) {
   $r=Get-Content -LiteralPath (Join-Path $Root 'record.json') -Raw -Encoding UTF8| ConvertFrom-EvidenceJson
-  $samePath=$r.path -eq $Relative -or ($Relative.StartsWith('maintenance/') -and $r.path -eq (Get-EvidenceCanonicalLocation $Relative))
+  $physical=$Relative
+  if($Relative.StartsWith('records/')){
+    if($Relative -notmatch '^records/[^/]+$' -or $r.category -notin @('tests','maintenance','fixtures')){throw 'Invalid evidence envelope identity'}
+    # Old sealed bytes retain their original identity. Validate the same dated
+    # name and source class while the catalog records the new physical location.
+    $parent=if($r.category -eq 'tests'){'tests/'+$r.origin}else{$r.category}
+    $Relative=$parent+'/'+$Relative.Split('/')[-1]
+  }
+  $samePath=($physical.StartsWith('records/') -and $r.path -eq $physical) -or $r.path -eq $Relative -or ($Relative.StartsWith('maintenance/') -and $r.path -eq (Get-EvidenceCanonicalLocation $Relative))
   $dated='(?:[0-9]{4}-[0-9]{2}-[0-9]{2}(?:T[0-9]{2}-[0-9]{2}-[0-9]{2}(?:\.[0-9]{3})?Z)?|undated)'
   $validLocation=$Relative -match ('^(tests/(local|github-actions)|maintenance|fixtures)/'+$dated+'-[a-f0-9]{8}$') -or
     $Relative -match ('^maintenance/'+$dated+'_[a-z][a-z0-9-]{0,31}_[a-f0-9]{8}$') -or

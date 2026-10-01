@@ -68,11 +68,11 @@ try {
   for(const name of harnessScripts)await copy(path.join(project,'scripts',name),path.join(source,'scripts',name));
   const importerPath='evidence-archive/tools/import-local-test-evidence.ps1';
   await copy(path.join(project,importerPath),path.join(source,importerPath));
-  await copy(path.join(project,'docs','evidence-archive-template.md'),path.join(source,'docs','evidence-archive-template.md'));
+  await copy(path.join(project,'docs','evidence-archive.md'),path.join(source,'docs','evidence-archive.md'));
   await copy(path.join(project,'package-lock.json'),path.join(source,'harness-package-lock.json'));
   const sourceFiles=[];for(const file of await files(source)){const b=await fs.readFile(file);sourceFiles.push({path:path.relative(source,file).replaceAll('\\','/'),bytes:b.length,sha256:sha(b)})}
   await json(path.join(evidence,'source-manifest.json'),sourceFiles);
-  manifest.harness.files=sourceFiles.filter(x=>x.path.startsWith('test/')||[...harnessScripts.map(x=>'scripts/'+x),importerPath,'scripts/check-environment.mjs','harness-package-lock.json','docs/evidence-archive-template.md'].includes(x.path));
+  manifest.harness.files=sourceFiles.filter(x=>x.path.startsWith('test/')||[...harnessScripts.map(x=>'scripts/'+x),importerPath,'scripts/check-environment.mjs','harness-package-lock.json','docs/evidence-archive.md'].includes(x.path));
   ps('Zip','-Source',source,'-Destination',path.join(evidence,'source.zip'));
   version=JSON.parse(await fs.readFile(path.join(source,'package.json'),'utf8')).version;
   if(!/^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-(?:alpha|beta|rc)(?:\.(?:0|[1-9][0-9]*))?)?$/.test(version))throw Error('Invalid application version');

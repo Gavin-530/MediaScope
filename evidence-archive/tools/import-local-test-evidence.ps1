@@ -102,12 +102,12 @@ function Find-ReceivedRecords([string]$Path,[int]$Depth=0) {
         $script:receivedSkips.Add($directory.FullName.Substring($records.Length+1).Replace('\','/'))
       }elseif($directory.Name -eq 'evidence-archive'){
         Find-ReceivedRecords $directory.FullName ($Depth+1)
-      }elseif($directory.Name -notin @('tests','maintenance','fixtures','legacy')){throw "Unexpected directory in received archive: $($directory.Name)"}
+      }elseif($directory.Name -notin @('records','tests','maintenance','fixtures','legacy')){throw "Unexpected directory in received archive: $($directory.Name)"}
     }
     if(@(Get-ChildItem -LiteralPath $full -File -Force | Where-Object {$_.Name -notin @('README.md','catalog.json')}).Count){throw 'Unexpected file in received archive'}
     return
   }
-  if((Split-Path -Leaf $full) -eq 'evidence-archive' -and @(Get-ChildItem -LiteralPath $full -Directory -Force | Where-Object {$_.Name -in @('tests','maintenance','fixtures')}).Count){throw 'Received archive catalog missing'}
+  if(@(Get-ChildItem -LiteralPath $full -Directory -Force | Where-Object {$_.Name -in @('records','tests','maintenance','fixtures')}).Count){throw 'Received archive catalog missing'}
   if(@(Get-ChildItem -LiteralPath $full -File -Force).Count){throw 'Put complete record or archive directories inside records; loose files are not accepted'}
   foreach($directory in Get-ChildItem -LiteralPath $full -Directory -Force | Sort-Object Name){
     if($directory.Name -in @('inbox','received','pending','tools','receipts','evidence-inbox')){
@@ -120,22 +120,41 @@ function Find-ReceivedRecords([string]$Path,[int]$Depth=0) {
 
 function Get-ReceivedPlan([string]$Records) {
   $seen=@{}
+  $seenTargets=@{}
+  $locations=@{}
+  $existing=@{}
+  foreach($local in Get-EvidenceRecords $root){
+    if($local.relative.StartsWith('legacy/')){continue}
+    $envelope=Get-Content -LiteralPath (Join-Path $local.source 'record.json') -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson
+    $identity=$envelope.category+'|'+$envelope.origin+'|'+$envelope.originalRelative
+    if($existing.ContainsKey($identity)){throw "Conflicting local sealed identity: $identity"}
+    $existing[$identity]=$local
+  }
   foreach($item in @(Find-ReceivedRecords $Records)){
     $recordFile=Join-Path $item.source 'record.json'
     $record=Get-Content -LiteralPath $recordFile -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson
-    $relative=[string]$item.relative
+    $relative=Get-EvidenceFlatLocation ([string]$item.relative)
+    $identity=$record.category+'|'+$record.origin+'|'+$record.originalRelative
     $destination=Assert-EvidencePath $project (Join-Path $root $relative)
     $sum=(Get-FileHash -LiteralPath (Join-Path $item.source 'SHA256SUMS.txt') -Algorithm SHA256).Hash
     $action='import'
-    if($seen.ContainsKey($relative)){
-      if($seen[$relative] -ne $sum){throw "Conflicting received identity: $relative"}
+    if($seen.ContainsKey($identity)){
+      if($seen[$identity] -ne $sum){throw "Conflicting received identity: $relative"}
       $action='duplicate'
-    }elseif(Test-Path -LiteralPath $destination){
-      $null=Test-EvidenceRecord $destination $relative
-      if((Get-FileHash -LiteralPath (Join-Path $destination 'SHA256SUMS.txt') -Algorithm SHA256).Hash -ne $sum){throw "Existing evidence conflicts: $relative"}
+      $relative=$seenTargets[$identity]
+      $destination=Join-Path $root $relative
+    }elseif($existing.ContainsKey($identity)){
+      $local=$existing[$identity]
+      $null=Test-EvidenceRecord $local.source $local.relative
+      if((Get-FileHash -LiteralPath (Join-Path $local.source 'SHA256SUMS.txt') -Algorithm SHA256).Hash -ne $sum){throw "Existing evidence conflicts: $relative"}
       $action='duplicate'
+      $relative=$local.relative
+      $destination=$local.source
     }
-    $seen[$relative]=$sum
+    if($action -eq 'import' -and ((Test-Path -LiteralPath $destination) -or ($locations.ContainsKey($relative) -and $locations[$relative] -ne $identity))){throw "Conflicting received destination: $relative"}
+    $seen[$identity]=$sum
+    $seenTargets[$identity]=$relative
+    $locations[$relative]=$identity
     $manifestPath=Join-Path $item.source 'original/manifest.json'
     $manifest=if(Test-Path -LiteralPath $manifestPath){Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson}else{$null}
     $sourceRelative=$item.source.Substring($Records.Length).TrimStart('\').Replace('\','/')
@@ -164,10 +183,6 @@ if(!$Batch -and !$Folder){
 $inputName=if($Folder){$Folder}else{$Batch}
 $batchRoot=Assert-EvidencePath $project (Join-Path $inbox $inputName)
 $records=if($Folder){$batchRoot}else{Assert-EvidencePath $project (Join-Path $batchRoot 'records')}
-# Automatic intake also understands previously created batch wrappers.
-if($Folder -and !(Test-Path (Join-Path $batchRoot 'catalog.json')) -and !(Test-Path (Join-Path $batchRoot 'record.json')) -and (Test-Path (Join-Path $batchRoot 'records') -PathType Container)){
-  $records=Assert-EvidencePath $project (Join-Path $batchRoot 'records')
-}
 $script:receiptDestination=$null
 $gate=$null;$transaction=$null;$committed=$false;$moved=@()
 try {

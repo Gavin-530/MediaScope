@@ -40,7 +40,7 @@ try {
   $env:GITHUB_ACTIONS='true'
   $published=Publish-EvidenceRecord $project $staging $logical
 } finally {[Environment]::SetEnvironmentVariable('GITHUB_ACTIONS',$priorActions)}
-if(!$published.StartsWith((Join-Path $root 'tests/local')+'\',[StringComparison]::OrdinalIgnoreCase)){throw 'Host environment changed local evidence provenance'}
+if(!$published.StartsWith((Join-Path $root 'records')+'\',[StringComparison]::OrdinalIgnoreCase)){throw 'Host environment changed local evidence provenance'}
 if(!(Test-Path (Join-Path $published 'README.md')) -or (Get-FileHash (Join-Path $published 'original/SHA256SUMS.txt')).Hash -ne $before){throw 'Envelope modified original data'}
 $null=Test-EvidenceCatalog $root
 Write-Output 'PASS: readable timestamp envelope preserves original data and failed status'
@@ -196,7 +196,7 @@ foreach($case in $cases){
 }
 if((Test-EvidenceCatalog $precisionRoot) -ne 4){throw 'Precision records not all valid'}
 Write-Output 'PASS: millisecond, second, day and unknown identities publish without invented digits or timezone'
-$second=Join-Path $precisionRoot 'tests/local/2026-10-01T10-20-30Z-1234ab02'
+$second=Join-Path $precisionRoot 'records/2026-10-01T10-20-30Z-1234ab02'
 $recordBytes=[IO.File]::ReadAllBytes((Join-Path $second 'record.json'))
 $sumBytes=[IO.File]::ReadAllBytes((Join-Path $second 'SHA256SUMS.txt'))
 $r4=Get-Content (Join-Path $second 'record.json') -Raw| ConvertFrom-EvidenceJson
@@ -234,3 +234,63 @@ $cm.testStepOutcome='success'
 [IO.File]::WriteAllText((Join-Path $cloudPrecision 'manifest.json'),($cm|ConvertTo-Json -Depth 8));Write-EvidenceChecksums $cloudPrecision
 Reject {Test-GitHubEvidenceBundle $cloudPrecision} 'Successful CI requires exactly one'
 Write-Output 'PASS: cloud time compatibility retains repository/run checks and never relaxes successful CI evidence gates'
+
+# Flatten an already sealed old layout, including cloud provenance and a
+# registered historical catalog, without regenerating any sealed file.
+$flatProject=Join-Path $project 'flat-layout'
+$flatRoot=Initialize-EvidenceArchive $flatProject
+$cm.testStepOutcome='failure'
+[IO.File]::WriteAllText((Join-Path $cloudPrecision 'manifest.json'),($cm|ConvertTo-Json -Depth 8));Write-EvidenceChecksums $cloudPrecision
+$fixtures=@(
+  @{source=(Join-Path $published 'original');path='tests/local/2026-09-30T12-34-56.789Z-1234abcd';logical=$logical},
+  @{source=$cloudPrecision;path='tests/github-actions/2026-10-01T10-20-30Z-1234ab05';logical=('github-actions-'+$cm.bundleId)},
+  @{source=(Join-Path $audit3.source 'original');path=('maintenance/'+(Split-Path -Leaf $audit3.source));logical=(Get-Content (Join-Path $audit3.source 'record.json') -Raw|ConvertFrom-EvidenceJson).originalRelative}
+)
+$oldHashes=@{}
+$longWriter=Join-Path $project 'long-path-fixture.cjs'
+[IO.File]::WriteAllText($longWriter,'const fs=require("fs"),path=require("path");fs.mkdirSync(path.dirname(process.argv[2]),{recursive:true});fs.writeFileSync(process.argv[2],process.argv[3]);')
+foreach($entry in $fixtures){
+  $target=Join-Path $flatRoot $entry.path
+  $null=New-Item -ItemType Directory -Path $target -Force
+  Copy-Item -LiteralPath $entry.source -Destination (Join-Path $target 'original') -Recurse
+  if($entry.path.StartsWith('tests/local/')){
+    $longFile=Join-Path (Join-Path $target 'original') (('a'*75)+'/'+('b'*75)+'/existing-long-path.txt')
+    & node.exe $longWriter $longFile 'Existing long sealed file'
+    if($LASTEXITCODE -ne 0){throw 'Long path fixture creation failed'}
+    Write-EvidenceChecksums (Join-Path $target 'original')
+  }
+  Write-EvidenceEnvelope $target $entry.path $entry.logical
+  Add-EvidenceCatalogRecord $flatRoot @{source=$target;relative=$entry.path}
+  $oldHashes[$entry.path]=(Get-FileHash (Join-Path $target 'SHA256SUMS.txt')).Hash
+}
+$oldIndex=Get-Content (Join-Path $flatRoot 'catalog.json') -Raw|ConvertFrom-EvidenceJson
+$oldIndex.PSObject.Properties.Remove('layout')
+$historyPath=$fixtures[2].path+'/original/original-legacy-catalog.json'
+$oldIndex|Add-Member -MemberType NoteProperty -Name historicalCatalogs -Value @(@{path=$historyPath;sha256=(Get-FileHash (Join-Path $flatRoot $historyPath)).Hash})
+[IO.File]::WriteAllText((Join-Path $flatRoot 'catalog.json'),($oldIndex|ConvertTo-Json -Depth 8))
+& (Join-Path $sourceProject 'scripts/organize-test-evidence.ps1') -Project $flatProject -Apply|Out-Null
+if((Test-EvidenceCatalog $flatRoot) -ne 4){throw 'Flat migration lost sealed records or catalog history'}
+foreach($entry in $fixtures){
+  $flatPath=Get-EvidenceFlatLocation $entry.path
+  if((Get-FileHash (Join-Path (Join-Path $flatRoot $flatPath) 'SHA256SUMS.txt')).Hash -ne $oldHashes[$entry.path]){throw 'Flat migration changed sealed bytes'}
+}
+$null=Initialize-EvidenceArchive $flatProject
+if((Test-Path (Join-Path $flatRoot 'tests')) -or (Test-Path (Join-Path $flatRoot 'maintenance')) -or (Test-Path (Join-Path $flatRoot 'README.md')) -or (Test-Path (Join-Path $flatRoot 'fixtures'))){throw 'Initialization recreated scattered categories or duplicate documentation'}
+Write-Output 'PASS: sealed local and cloud records flatten byte-exactly with catalog history and initialization never recreates old categories or a rule README'
+
+$lengtheningProject=Join-Path $project 'lengthening'
+$lengtheningRoot=Initialize-EvidenceArchive $lengtheningProject
+$oldAudit=Join-Path $lengtheningRoot ('maintenance/'+((Split-Path -Leaf $audit3.source) -replace '_archive-organization_','-'))
+$null=New-Item -ItemType Directory -Path $oldAudit -Force
+Copy-Item -LiteralPath (Join-Path $audit3.source 'original') -Destination (Join-Path $oldAudit 'original') -Recurse
+$longFile=Join-Path (Join-Path $oldAudit 'original') (('a'*75)+'/'+('b'*75)+'/existing-long-path.txt')
+& node.exe $longWriter $longFile 'Do not lengthen this file path'
+if($LASTEXITCODE -ne 0){throw 'Lengthening fixture creation failed'}
+Write-EvidenceChecksums (Join-Path $oldAudit 'original')
+$oldAuditRelative=$oldAudit.Substring($lengtheningRoot.Length+1).Replace('\','/')
+Write-EvidenceEnvelope $oldAudit $oldAuditRelative $fixtures[2].logical
+Add-EvidenceCatalogRecord $lengtheningRoot @{source=$oldAudit;relative=$oldAuditRelative}
+$lengtheningHash=(Get-FileHash (Join-Path $lengtheningRoot 'catalog.json')).Hash
+Reject {& (Join-Path $sourceProject 'scripts/organize-test-evidence.ps1') -Project $lengtheningProject -Apply} 'introduce or lengthen'
+if(!(Test-Path $oldAudit) -or (Get-FileHash (Join-Path $lengtheningRoot 'catalog.json')).Hash -ne $lengtheningHash){throw 'Long path refusal mutated sealed records or the catalog'}
+Write-Output 'PASS: shortening existing long sealed paths is allowed while extending them is refused before any records move'
