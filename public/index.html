@@ -460,6 +460,17 @@
       </div>
       <section id="task" class="task hidden task-banner" aria-live="polite">
         <button
+          id="toggle-snap"
+          class="toggle-btn snap-btn active"
+          title="切换边缘吸附"
+          aria-label="切换边缘吸附"
+        >
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" id="snap-icon">
+            <line x1="12" y1="17" x2="12" y2="22"></line>
+            <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.68V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3v4.68a2 2 0 0 1-1.11 1.87l-1.78.89A2 2 0 0 0 5 15.24Z"></path>
+          </svg>
+        </button>
+        <button
           id="toggle-island"
           class="toggle-btn"
           title="切换视图模式"
@@ -559,7 +570,7 @@
       </section>
       <footer>
         <span id="environment">检测分析引擎…</span
-        ><span>MediaScope 0.1.10-beta · 测量与推断分开呈现</span>
+        ><span><span onclick="window.open('https://github.com/Gavin-530/MediaScope', '_blank')" style="cursor: pointer;">MediaScope 0.2.2</span> · 测量与推断分开呈现</span>
       </footer>
     </main>
   </body>
