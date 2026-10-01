@@ -809,6 +809,30 @@ $("#import-report").onchange = async (e) => {
     input.value = "";
   }
 };
+
+const themeToggle = document.getElementById("theme-toggle");
+if (themeToggle) {
+  const themes = ["auto", "dark", "light"];
+  const icons = { auto: "◑", dark: "🌙", light: "☀" };
+  
+  let currentTheme = localStorage.getItem("mediascope-theme") || "auto";
+  themeToggle.textContent = icons[currentTheme] || "◑";
+
+  themeToggle.addEventListener("click", () => {
+    currentTheme = localStorage.getItem("mediascope-theme") || "auto";
+    const nextIndex = (themes.indexOf(currentTheme) + 1) % themes.length;
+    const nextTheme = themes[nextIndex];
+    
+    if (nextTheme === "auto") {
+      document.documentElement.removeAttribute("data-theme");
+      localStorage.removeItem("mediascope-theme");
+    } else {
+      document.documentElement.setAttribute("data-theme", nextTheme);
+      localStorage.setItem("mediascope-theme", nextTheme);
+    }
+    themeToggle.textContent = icons[nextTheme];
+  });
+}
 function download(text, name, type) {
   const count = downloadNames.get(name) || 0;
   downloadNames.set(name, count + 1);

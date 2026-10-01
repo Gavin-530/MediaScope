@@ -6,6 +6,14 @@
     <meta name="token" content="__TOKEN__" />
     <title>MediaScope · 媒体分析</title>
     <link rel="stylesheet" href="style.css" />
+    <script>
+      (function() {
+        var savedTheme = localStorage.getItem('mediascope-theme');
+        if (savedTheme && savedTheme !== 'auto') {
+          document.documentElement.setAttribute('data-theme', savedTheme);
+        }
+      })();
+    </script>
     <script src="/app.js" type="module"></script>
   </head>
 
@@ -15,11 +23,14 @@
         <a class="brand" href="/">◧ MediaScope <span>LOCAL ANALYSIS</span></a>
         <span class="local">● 本机处理 · 原文件只读</span>
       </div>
-      <nav aria-label="工作模式" class="header-nav">
-        <button class="tab selected" data-mode="inspect">01 / 文件分析</button>
-        <button class="tab" data-mode="compare">02 / 质量对比</button>
-        <button class="tab" data-mode="trial">03 / 片段实验</button>
-      </nav>
+      <div class="header-right" style="display: flex; gap: 16px; align-items: center; flex-wrap: nowrap;">
+        <nav aria-label="工作模式" class="header-nav">
+          <button class="tab selected" data-mode="inspect">01 / 文件分析</button>
+          <button class="tab" data-mode="compare">02 / 质量对比</button>
+          <button class="tab" data-mode="trial">03 / 片段实验</button>
+          <button id="theme-toggle" class="theme-toggle-btn" title="切换模式 (系统/黑夜/白天)" aria-label="切换模式">◑</button>
+        </nav>
+      </div>
     </header>
     <main>
       <div class="portable-controls">
