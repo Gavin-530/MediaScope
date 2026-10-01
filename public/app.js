@@ -1913,3 +1913,36 @@ if (taskEl) {
   syncTaskBrief();
   setInterval(syncTaskBrief, 300);
 }
+
+const themeToggleBtn = document.getElementById("theme-toggle");
+if (themeToggleBtn) {
+  const states = ["system", "light", "dark"];
+  const icons = {
+    system: document.getElementById("theme-icon-system"),
+    light: document.getElementById("theme-icon-light"),
+    dark: document.getElementById("theme-icon-dark")
+  };
+  
+  let currentTheme = localStorage.getItem("mediascope-theme") || "system";
+  
+  function applyTheme() {
+    if (currentTheme === "system") {
+      document.documentElement.removeAttribute("data-theme");
+    } else {
+      document.documentElement.setAttribute("data-theme", currentTheme);
+    }
+    
+    for (const [key, icon] of Object.entries(icons)) {
+      if (icon) icon.style.display = key === currentTheme ? "block" : "none";
+    }
+  }
+  
+  applyTheme();
+  
+  themeToggleBtn.onclick = () => {
+    const idx = states.indexOf(currentTheme);
+    currentTheme = states[(idx + 1) % states.length];
+    localStorage.setItem("mediascope-theme", currentTheme);
+    applyTheme();
+  };
+}
