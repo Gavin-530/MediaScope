@@ -1,104 +1,36 @@
 :root {
-  color-scheme: light dark;
-  --bg-color1: #fdfdfd;
-  --bg-color2: #f7f7f7;
-  --bg-color3: #f0f0f0;
+  color-scheme: light;
+  --bg-color1: #ebebeb;
+  --bg-color2: #e2e2e2;
+  --bg-color3: #d9d9d9;
 
-  --panel: rgba(255, 255, 255, 0.85);
+  --panel: rgba(245, 245, 245, 0.85);
   --panel-border: rgba(0, 0, 0, 0.1);
-  --panel-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.05);
+  --panel-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.08);
   --line: rgba(0, 0, 0, 0.08);
-  --text: #1a1a1a;
-  --muted: #666666;
-  --accent: #000000;
+  --text: #333333;
+  --muted: #767676;
+  --accent: #444444;
 
-  --input-bg: rgba(255, 255, 255, 0.8);
+  --input-bg: rgba(255, 255, 255, 0.6);
   --input-border: rgba(0, 0, 0, 0.15);
-  --button-bg: #eeeeee;
-  --button-hover: #dddddd;
+  --button-bg: #dcdcdc;
+  --button-hover: #cccccc;
   --accent-text: #ffffff;
-  --secondary-bg: #ffffff;
-  --secondary-border: #cccccc;
+  --secondary-bg: #e6e6e6;
+  --secondary-border: #bfbfbf;
   --evidence-text: var(--text);
-  --notice-text: var(--text);
-  --frame-detail-bg: #f5f5f5;
+  --notice-text: #555555;
+  --frame-detail-bg: #d4d4d4;
 
-  --progress-track: #e0e0e0;
-  --progress-fill: #10b981;
-  --banner-bg: #e8e8e8;
-  --banner-border: #cccccc;
+  --progress-track: #cfcfcf;
+  --progress-fill: #ffaa00;
+  --banner-bg: #e0e0e0;
+  --banner-border: #bfbfbf;
 
   --chart-height: 230px;
   --scrollbar-thumb: rgba(0, 0, 0, 0.2);
-  --scrollbar-thumb-hover: rgba(0, 0, 0, 0.4);
-}
-
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --bg-color1: #050505;
-  --bg-color2: #0a0a0a;
-  --bg-color3: #0f0f0f;
-
-  --panel: rgba(15, 15, 15, 0.7);
-  --panel-border: rgba(255, 255, 255, 0.15);
-  --panel-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
-  --line: rgba(255, 255, 255, 0.1);
-  --text: #e0e0e0;
-  --muted: #888888;
-  --accent: #ffffff;
-
-  --input-bg: rgba(15, 15, 15, 0.8);
-  --input-border: rgba(255, 255, 255, 0.3);
-  --button-bg: #2a2a2a;
-  --button-hover: #3a3a3a;
-  --accent-text: #000000;
-  --secondary-bg: #333333;
-  --secondary-border: #555555;
-  --evidence-text: #cccccc;
-  --notice-text: #aaaaaa;
-  --frame-detail-bg: #1a1a1a;
-  --scrollbar-thumb: rgba(255, 255, 255, 0.2);
-  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.4);
-
-  --progress-track: #1f1f1f;
-  --progress-fill: #10b981;
-  --banner-bg: #262626;
-  --banner-border: #444444;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    color-scheme: dark;
-    --bg-color1: #050505;
-    --bg-color2: #0a0a0a;
-    --bg-color3: #0f0f0f;
-
-    --panel: rgba(15, 15, 15, 0.7);
-    --panel-border: rgba(255, 255, 255, 0.15);
-    --panel-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
-    --line: rgba(255, 255, 255, 0.1);
-    --text: #e0e0e0;
-    --muted: #888888;
-    --accent: #ffffff;
-
-    --input-bg: rgba(15, 15, 15, 0.8);
-    --input-border: rgba(255, 255, 255, 0.3);
-    --button-bg: #2a2a2a;
-    --button-hover: #3a3a3a;
-    --accent-text: #000000;
-    --secondary-bg: #333333;
-    --secondary-border: #555555;
-    --evidence-text: #cccccc;
-    --notice-text: #aaaaaa;
-    --frame-detail-bg: #1a1a1a;
-    --scrollbar-thumb: rgba(255, 255, 255, 0.2);
-    --scrollbar-thumb-hover: rgba(255, 255, 255, 0.4);
-
-    --progress-track: #1f1f1f;
-    --progress-fill: #10b981;
-    --banner-bg: #262626;
-    --banner-border: #444444;
-  }
+  --scrollbar-thumb-hover: rgba(0, 0, 0, 0.35);
 }
 
 /* Custom Scrollbar */
@@ -966,19 +898,21 @@ canvas.frames-canvas {
 }
 
 .task-progress-track {
-  height: 7px;
-  margin-top: 7px;
-  overflow: hidden;
+  height: 10px; /* Thicker track for emphasis */
+  margin-top: 10px;
+  overflow: hidden; /* Restored to prevent indeterminate animation from flying out */
   border-radius: 999px;
   background: var(--progress-track);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.4);
 }
 
 .task-progress-track > span {
   display: block;
   width: 0;
   height: 100%;
-  border-radius: inherit;
+  border-radius: 999px;
   background: var(--progress-fill);
+  box-shadow: 0 0 10px var(--progress-fill), 0 0 5px var(--progress-fill);
   transition: width 0.25s ease;
 }
 

@@ -214,15 +214,8 @@ function queueRow(j, position) {
     secondary = j.candidate ? " → " + fileName(j.candidate) : "";
   const pathText =
     (j.file || j.reference || "") + (j.candidate ? " → " + j.candidate : "");
-  const action =
-    j.status === "done"
-      ? "report"
-      : ["error", "cancelled"].includes(j.status)
-        ? "retry"
-        : "cancel";
-  const label = { report: "查看报告", retry: "重新排队", cancel: "取消" }[
-    action
-  ];
+  const action = ["done", "error", "cancelled"].includes(j.status) ? "retry" : "cancel";
+  const label = { retry: "重新排队", cancel: "取消" }[action];
   const stage =
     j.status === "running" ? j.progress?.stage || j.message : j.message;
   return `<div class="queue-item">${j.status === "queued" ? `<input class="portable-check" type="checkbox" data-plan-select="${j.id}" aria-label="选择任务计划 ${esc(primary)}" ${selectedPlans.has(j.id) ? "checked" : ""}>` : ""}<div class="queue-item-main"><strong>${position ? position + ". " : ""}${esc(primary + secondary)}</strong><span class="queue-state">${esc(names[j.type])} · ${states[j.status]}</span><p class="queue-path" title="${esc(pathText)}">${esc(pathText)}</p><p class="queue-description">${esc(j.description || "")}${stage ? " · " + esc(stage) : ""}</p></div><button class="secondary" data-job="${j.id}" data-action="${action}">${label}</button></div>`;
@@ -810,29 +803,7 @@ $("#import-report").onchange = async (e) => {
   }
 };
 
-const themeToggle = document.getElementById("theme-toggle");
-if (themeToggle) {
-  const themes = ["auto", "dark", "light"];
-  const icons = { auto: "◑", dark: "🌙", light: "☀" };
-  
-  let currentTheme = localStorage.getItem("mediascope-theme") || "auto";
-  themeToggle.textContent = icons[currentTheme] || "◑";
 
-  themeToggle.addEventListener("click", () => {
-    currentTheme = localStorage.getItem("mediascope-theme") || "auto";
-    const nextIndex = (themes.indexOf(currentTheme) + 1) % themes.length;
-    const nextTheme = themes[nextIndex];
-    
-    if (nextTheme === "auto") {
-      document.documentElement.removeAttribute("data-theme");
-      localStorage.removeItem("mediascope-theme");
-    } else {
-      document.documentElement.setAttribute("data-theme", nextTheme);
-      localStorage.setItem("mediascope-theme", nextTheme);
-    }
-    themeToggle.textContent = icons[nextTheme];
-  });
-}
 function download(text, name, type) {
   const count = downloadNames.get(name) || 0;
   downloadNames.set(name, count + 1);
