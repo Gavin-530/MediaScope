@@ -42,14 +42,14 @@ foreach($directory in Get-ChildItem -LiteralPath $build -Directory -Force){
 foreach($candidate in $candidates){Write-Output "$(if($Apply){'Archiving before removal'}else{'Would archive and remove'}): $($candidate.path) ($([math]::Round($candidate.bytes/1MB,2)) MiB)"}
 if(!$Apply -or !$candidates.Count){exit 0}
 
-$gate=[IO.File]::Open((Join-Path $build 'evidence-recording.lock'),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+$gate=[IO.File]::Open((Get-EvidenceLockPath $project),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
 try {
-  if(Test-Path -LiteralPath (Join-Path $build 'test-run.lock')){throw 'Test runner lock exists; cleanup refused'}
+  if(Test-Path -LiteralPath (Join-Path (Get-EvidencePendingRoot $project) 'test-run.lock')){throw 'Test runner lock exists; cleanup refused'}
   $null=Test-EvidenceCatalog $root
   $active=@(Get-CimInstance Win32_Process -Filter "Name='node.exe' OR Name='ffmpeg.exe' OR Name='ffprobe.exe'" | Where-Object {$_.CommandLine -and $_.CommandLine.IndexOf($build,[StringComparison]::OrdinalIgnoreCase) -ge 0})
   if($active.Count){throw 'A build/test process is active; cleanup refused'}
   $name='build-maintenance-'+(Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssfffZ')+'-'+[guid]::NewGuid().ToString('N').Substring(0,8)
-  $partial=Join-Path $root ($name+'.partial-'+[guid]::NewGuid().ToString('N'))
+  $partial=Join-Path (Get-EvidencePendingRoot $project) ('staging/'+$name+'.partial-'+[guid]::NewGuid().ToString('N'))
   New-Item -ItemType Directory -Path $partial | Out-Null
   $inventory=@()
   foreach($candidate in $candidates){
@@ -75,8 +75,7 @@ try {
   Write-EvidenceChecksums $partial
   $null=Test-EvidenceChecksums $partial
   $destination=Join-Path $root $name
-  [IO.Directory]::Move($partial,$destination)
-  Add-EvidenceCatalogRecord $root @{source=$destination;relative=$name}
+  $destination=Publish-EvidenceRecord $project $partial $name
   $null=Test-EvidenceCatalog $root
   foreach($candidate in $candidates){
     $current=@(Safe-Files $candidate.path)

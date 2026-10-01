@@ -1,34 +1,38 @@
 # MediaScope GitHub 自动测试
 
-工作流配置为自动执行完整测试并显示控制台检查结果；没有产物上传步骤。详细测试证据的远端存储及批量同步尚未启用，本地导入工具用于校验符合约定格式的证据包。远端是否实际运行成功，以对应提交的 Actions 记录为准。
+工作流使用同一本地完整发布测试入口；远端运行是否成功，以对应提交的 Actions 记录为准。工作流修改需提交并推送后才生效。
 
-## 执行与门槛
+## 执行与身份
 
-工作流在推送分支或 Tag、创建/更新/重新打开 PR、合并队列和手动启动时执行。只在本地修改或保存文件不会触发；默认不定时执行。分支推送与 PR 检查可能分别产生记录，两者测试的提交可能不同。
+push、Tag、PR、merge_group、workflow_dispatch 执行 Windows Server 2022 x64 完整回归；本地保存文件不触发远端运行。Node.js/FFmpeg 根据 runtime-lock.json 下载并校验，npm ci --ignore-scripts 安装依赖；执行 node scripts/test.mjs --release。Edge 使用 runner 已装版本，并记录其身份。
 
-使用 GitHub 托管的 Windows Server 2022 x64 临时机器，不使用本机 runner。`scripts/run-ci-tests.ps1` 使用 `runtime-lock.json` 的 Node.js/FFmpeg 下载和 SHA-256 校验、`npm ci --ignore-scripts` 以及同一个 `node scripts/test.mjs --release`。Edge 使用 runner 已安装版本，并记录实际版本；不把云端耗时解释为用户电脑速度。
+门槛保持完整套件、干净源码、非零实际检查、零失败/取消/跳过/TODO和全部功能映射通过。本地 `npm run test:release` 使用相同入口和条件；`npm test` 使用相同回归判定但允许未提交修改，部分测试或历史对比不能代替此检查。必需合并检查需配置分支规则；绿色结果不自动发布 Release，也不替代包验证、首次联网部署和人工安装/卸载验收。
 
-严格门槛与[本地测试规范](testing.md)一致：完整套件、干净源码、非零实际检查、零失败/取消/跳过/TODO、全部功能映射通过。设置为必需合并检查是另一个仓库设置，写入工作流并不自动禁止合并，也不自动发布 Release。
+本地和远端是独立执行，不能合并成一次结果。同一套用例及证据格式，不保证耗时、路径、截图等字节一致；比较需核对源码及验证器 SHA、实际工具和测试范围。PR 通常执行合并提交。记录仓库、SHA、run_id、run_attempt、job 和触发事件，重跑独立保存。
 
-PR 默认测试 GitHub 合并提交；推送/Tag 测试该提交。证据同时记录实际 SHA、运行编号和重新运行次数，不能以分支名或版本号代替提交身份。失败重跑不覆盖前次证据，不自动取消较早运行。
+另有 commit-messages.yml 的 Commit messages 检查，在 Ubuntu 24.04 使用预装 Node.js 检查提交及 PR 标题；不运行产品测试，不计作媒体回归。规则见[贡献规范](contributing.md)。
 
-## 证据范围与保留
+## 远端证据
 
-计划上传范围仅限 GitHub 临时机器本次测试新生成的记录：已提交源码的测试快照、结构化结果与功能映射、测量日志/CSV/报告/失败截图、工具身份及 SHA-256。另保存准备环境日志和失败时尚未完成归档的沙箱；异常诊断不算测试通过。
+测试步骤结束后，即使失败也尝试导出和上传本次证据。导出器限 GitHub-hosted runner，只收集匹配本次仓库、SHA、运行及重跑身份的 App 记录，以及本次初始化诊断和未完成沙箱。拒绝混入本机档案和无关运行；不收集凭证、完整环境变量、.git 或事件载荷。
 
-禁止复制或上传这台电脑已有的 `local-test-archive/`、用户报告、历史验收、开发依赖或运行时缓存。未来的证据导出命令须限定在隔离的 GitHub 托管 runner 上，不能用来上传本地档案，不收集完整环境变量、凭证、`.git` 或事件载荷。正式发布 ZIP 按用户授权另行上传到 Release，与测试产物分开管理。
+导出先验证原始记录，再产生带清单和 SHA-256 的 bundle.zip。产物名为 mediascope-test-evidence-<run_id>-<run_attempt>，保留 90 天，不覆盖。上传使用固定 SHA 的官方 upload-artifact。测试通过和上传成功是不同状态；导出/上传失败必须明确报错。取消、超时或平台故障仍可能没有完整证据，不能承诺每次异常均可保存。
 
-远端产物计划统一命名 `mediascope-test-evidence-<GitHub运行编号>-<重跑次数>`，保留 90 天；重新运行生成独立产物。云端临时磁盘及 GitHub 产物都不是永久档案。取消、超时或平台故障可能使最终导出/上传无法完成，必须检查产物是否存在，不承诺每次异常都有完整证据。
-
-本地不会同步产生一份。产物需在到期前下载，再执行：
+## 本地同步和原样保存
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/import-github-test-evidence.ps1 -Archive <下载的产物ZIP>
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-test-evidence.ps1
+npm run evidence:sync
+npm run evidence:list -- -Origin github-actions
+npm run evidence:verify
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/import-github-test-evidence.ps1 -Archive <下载的ZIP>
 ```
 
-导入工具不执行 ZIP 中的程序，校验安全路径、内部清单/摘要、仓库与运行身份、实际测试记录和发布门槛后，将原始证据保存到 `local-test-archive/github-actions-<UTC运行编号>/` 并登记总目录。内部 `records/runs/<版本>/<编号>/` 保持原内容；同次同内容导入不重复保存，不同内容拒绝覆盖。导入失败保留 `.build/github-evidence-import/` 中的诊断副本。
+同步分页查询远端产物，核对实际运行身份和 API 摘要；PR 的分支 head_sha 与实际合并测试 SHA 分别保存，不能混为同一提交，下载后执行本地导入。身份键为仓库/run_id/run_attempt；当前工作流只有一个产品回归 job。将来增加 job/矩阵时须同时扩展产物名及身份键，不能直接复用本方案覆盖不同 job。
 
-导入成功后按[本地数据规范](local-data.md)永久保留，不跟随远端到期删除。未在到期前下载的记录可能无法找回；本地磁盘离线、损坏或丢失也需要另行备份。之后接入同步命令可批量下载新记录；当前不创建后台任务或系统定时任务。
+鉴权优先 GH_TOKEN/GITHUB_TOKEN，随后使用现有 Git credential helper，禁用交互提示；不将凭证写入日志或档案。下载需具备 Actions 读取权限。导入不执行下载包中的程序，校验安全路径、内部清单、仓库/提交/运行身份和实际发布门槛。支持 bundle ZIP 和 upload-artifact 外层 ZIP，保留原始传输字节及内部文件，不重跑测试替代云端记录。
 
-应用回归、确切发布包验证、首次联网部署和人工安装/卸载验收分别保留。Actions 绿色结果不能替代后面三项。
+正式记录位于 evidence-archive/tests/github-actions/<原时间精度与编号>/；当前导出器生成毫秒 UTC 编号，历史导入不强制补毫秒，精度规则见[归档说明](evidence-archive-template.md)。新本地封装的时间来源及精度与 GitHub 的仓库/run_id/run_attempt/SHA 身份分别校验，精度兼容不会放宽成功 CI 的完整证据门槛。同次同内容导入不重复，不同内容拒绝覆盖。未完成下载、导入失败诊断保存在 pending。sync-state.json 区分已保存、缺失、过期和同步错误；partial scan 说明分页范围尚未完整，不能据此宣称全部运行已归档。
+
+npm start、npm test、test:core、test:browser 运行前会尝试小范围补同步，失败不阻止原命令；MEDIASCOPE_SKIP_EVIDENCE_SYNC=1 可跳过。本轮不安装后台服务或系统定时任务；需要全量补查时显式运行 evidence:sync。同步不会上传本机资料，电脑离线时延后。
+
+远端临时磁盘和限期产物不是永久备份。过去未上传的文件不能从测试状态补造；可取得的原始日志需明确其证据范围。正式发布 ZIP 与产品用户报告各自保留。

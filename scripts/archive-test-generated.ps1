@@ -43,7 +43,7 @@ if(!$items.Count){Write-Output 'No generated test files or directories to archiv
 New-Item -ItemType Directory -Force -Path $buildRoot | Out-Null
 $gate=$null
 try {
-  try {$gate=[IO.File]::Open((Join-Path $buildRoot 'evidence-recording.lock'),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)}
+  try {$gate=[IO.File]::Open((Get-EvidenceLockPath $project),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)}
   catch {throw 'Evidence recording is active; archive refused'}
   $catalogPath=Join-Path $root 'catalog.json'
   if(Test-Path -LiteralPath $catalogPath){$null=Test-EvidenceCatalog $root}
@@ -63,7 +63,7 @@ try {
   $runId=(Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssfffZ')+'-'+[guid]::NewGuid().ToString('N').Substring(0,8)
   $name="generated-fixtures-$runId"
   $destination=Join-Path $root $name
-  $partial="$destination.partial-$([guid]::NewGuid().ToString('N'))"
+  $partial=Join-Path (Get-EvidencePendingRoot $project) ("staging/$name.partial-$([guid]::NewGuid().ToString('N'))")
   if(Test-Path -LiteralPath $destination){throw "Snapshot already exists: $destination"}
   New-Item -ItemType Directory -Force -Path $partial | Out-Null
   $zipPath=Join-Path $partial 'fixtures.zip'
@@ -109,8 +109,7 @@ try {
   [IO.File]::WriteAllText((Join-Path $partial 'report.md'),"# Generated test fixture snapshot`n`n$($dirs.Count) directories, $($rootFiles.Count) top-level files, and $($entries.Count) total files captured from test-work. This is a maintenance snapshot, not a test result. The historical acceptance directory and unclassified items were excluded.`n",(New-Object Text.UTF8Encoding($false)))
   Write-EvidenceChecksums $partial
   $null=Test-EvidenceRecord $partial $name
-  [IO.Directory]::Move($partial,$destination)
-  Add-EvidenceCatalogRecord $root @{source=$destination;relative=$name}
+  $destination=Publish-EvidenceRecord $project $partial $name
   Write-Output "Archived $($dirs.Count) directories and $($rootFiles.Count) top-level files ($($entries.Count) total files): $destination"
   Write-Output "Verified ZIP and archive catalog: $destination"
 }finally{if($gate){$gate.Dispose()}}

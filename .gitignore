@@ -4,6 +4,10 @@ test-work/
 .build/
 node_modules/
 /local-test-archive/
+/evidence-archive/*
+!/evidence-archive/tools/
+/evidence-archive/tools/*
+!/evidence-archive/tools/import-local-test-evidence.ps1
 # One-off audit reports stay local; permanent rules live in docs/.
 /TEST_SYSTEM_AUDIT.md
 releases/**/*.zip

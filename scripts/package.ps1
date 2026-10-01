@@ -1,5 +1,5 @@
 param(
-  [Parameter(Mandatory=$true)][ValidatePattern('^\d+\.\d+\.\d+(-(alpha|beta|rc)(\.\d+)?)?$')][string]$Version
+  [Parameter(Mandatory=$true)][ValidatePattern('^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(-(alpha|beta|rc)(\.(?:0|[1-9][0-9]*))?)?$')][string]$Version
 )
 . (Join-Path $PSScriptRoot 'deployment.ps1')
 $project=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))

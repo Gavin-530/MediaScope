@@ -22,8 +22,8 @@ function Assert-Throws($Body,$Pattern){
 }
 
 $fixtureRoot=Join-Path $project 'test-work'
-$archiveRoot=Join-Path $project 'local-test-archive'
-$rules=@{'test-work'=@{path=$fixtureRoot};'local-test-archive'=@{path=$archiveRoot}}
+$archiveRoot=Join-Path $project 'legacy-protocol-archive'
+$rules=@{'test-work'=@{path=$fixtureRoot};'evidence-archive'=@{path=$archiveRoot}}
 New-Item -ItemType Directory -Force -Path (Join-Path $fixtureRoot 'bitdepth'),$archiveRoot | Out-Null
 [IO.File]::WriteAllText((Join-Path $fixtureRoot 'bitdepth/protocol.txt'),'filesystem evidence protocol')
 [IO.File]::WriteAllText((Join-Path $fixtureRoot 'psnr.log'),'filesystem fixture, not a media measurement')
@@ -64,3 +64,43 @@ $manifest.evidenceRevision=1
 Write-EvidenceChecksums $record
 Assert-Throws {Test-EvidenceRecord $record $identity} 'Missing verifier snapshot'
 Write-Output 'PASS: new successful deployment records require verifier snapshots'
+
+# Explicit protocol fixture; these counts are contract inputs, not media results.
+$assessmentRecord=Join-Path $project 'assessment-record'
+$null=New-Item -ItemType Directory -Path $assessmentRecord
+foreach($file in @('source.zip','source-manifest.json','events.jsonl.gz','artifact-manifest.json')){[IO.File]::WriteAllText((Join-Path $assessmentRecord $file),'Protocol placeholder; no media executed.')}
+$assessmentLog=Join-Path $assessmentRecord 'output.log'
+[IO.File]::WriteAllText($assessmentLog,'Regression assessment protocol inputs only.')
+$counts=@{tests=1;passed=1;failed=0;cancelled=0;skipped=0;todo=0}
+$feature=@{id='protocol-only';status='passed'}
+$assessment=@{schema=3;evidenceRevision=1;kind='App';version='0.2.1';runId='20260930T000000000Z-1234abcd';scope='full';source=@{kind='working-tree'};outcome='passed';exitCode=0;testSummary=$counts;releaseCheck=@{requested=$false;ready=$true};validation=@{schema=1;mode='full-regression';status='complete';accepted=$true};log=@{file='output.log';storedBytes=(Get-Item $assessmentLog).Length;sha256=(Get-FileHash $assessmentLog).Hash}}
+function Save-AssessmentProtocol {
+  [IO.File]::WriteAllText((Join-Path $assessmentRecord 'manifest.json'),($assessment | ConvertTo-Json -Depth 10))
+  [IO.File]::WriteAllText((Join-Path $assessmentRecord 'results.json'),(@{counts=$counts} | ConvertTo-Json -Depth 5))
+  [IO.File]::WriteAllText((Join-Path $assessmentRecord 'features.json'),(@{schema=2;features=@($feature)} | ConvertTo-Json -Depth 5))
+  Write-EvidenceChecksums $assessmentRecord
+}
+Save-AssessmentProtocol
+$null=Test-EvidenceRecord $assessmentRecord $identity
+$assessment.outcome='failed';$assessment.exitCode=1;$assessment.validation.status='failed';$assessment.validation.accepted=$false;$assessment.validation.processExitCode=1;Save-AssessmentProtocol
+$null=Test-EvidenceRecord $assessmentRecord $identity
+$assessment.outcome='passed';$assessment.exitCode=0;$assessment.validation.status='complete';$assessment.validation.accepted=$true;Save-AssessmentProtocol
+Assert-Throws {Test-EvidenceRecord $assessmentRecord $identity} 'Invalid regression assessment'
+$assessment.validation.processExitCode=0
+$feature.status='partial';Save-AssessmentProtocol
+Assert-Throws {Test-EvidenceRecord $assessmentRecord $identity} 'Invalid regression assessment'
+$feature.status='passed';$counts.tests=2;$counts.skipped=1;Save-AssessmentProtocol
+Assert-Throws {Test-EvidenceRecord $assessmentRecord $identity} 'Invalid regression assessment'
+$assessment.outcome='failed';$assessment.exitCode=1;$assessment.releaseCheck.ready=$false
+$assessment.validation.status='incomplete';$assessment.validation.accepted=$false;Save-AssessmentProtocol
+$null=Test-EvidenceRecord $assessmentRecord $identity
+$assessment.scope='browser';$assessment.outcome='passed';$assessment.exitCode=0
+$assessment.validation.mode='partial-regression';$assessment.validation.accepted=$true;Save-AssessmentProtocol
+$null=Test-EvidenceRecord $assessmentRecord $identity
+$assessment.validation.status='complete';Save-AssessmentProtocol
+Assert-Throws {Test-EvidenceRecord $assessmentRecord $identity} 'Invalid regression assessment'
+$assessment.scope='full';$assessment.source.kind='git';$assessment.validation.mode='historical-comparison';$assessment.validation.status='incomplete';Save-AssessmentProtocol
+$null=Test-EvidenceRecord $assessmentRecord $identity
+$assessment.releaseCheck.ready=$true;Save-AssessmentProtocol
+Assert-Throws {Test-EvidenceRecord $assessmentRecord $identity} 'Narrow scope cannot claim release readiness'
+Write-Output 'PASS: explicit regression assessments reject incomplete full passes and preserve partial or historical scope'

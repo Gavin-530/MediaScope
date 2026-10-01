@@ -6,7 +6,8 @@ function Save-DeploymentResult([string]$Outcome,[string]$Failure) {
 }
 trap {Save-DeploymentResult 'failed' $_.Exception.Message;throw $_}
 $project=Split-Path $PSScriptRoot
-$work=Join-Path $project ('.build/deployment-test-'+[guid]::NewGuid().ToString('N'))
+. (Join-Path $PSScriptRoot 'evidence-lib.ps1')
+$work=Join-Path $project ('evidence-archive/pending/deployment-runs/deployment-test-'+[guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force $work | Out-Null
 $homeDir=Join-Path $work 'home with spaces'
 $script:passed=0

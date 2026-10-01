@@ -85,7 +85,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/manage.ps1 -Action E
 
 ## 开发与维护
 
-源码开发先运行 `npm ci --ignore-scripts`，使用已安装的 Microsoft Edge 执行 `npm test`。测试在独立快照中运行，自动归档后回收沙箱；素材不使用用户媒体。
+源码开发先运行 `npm ci --ignore-scripts`，使用已安装的 Microsoft Edge 执行 `npm test`。当前版本完整回归与 Actions 使用相同通过条件，不允许跳过；`npm run test:release` 另要求干净源码，与 Actions 入口一致。快速检查使用 `test:core` / `test:browser`，结果明确标为部分范围。测试在独立快照中运行，自动归档后回收沙箱；素材不使用用户媒体。
 
 | 文档 | 内容 |
 | --- | --- |
@@ -94,7 +94,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/manage.ps1 -Action E
 | [本地数据规范](docs/local-data.md) | 命名、永久保留、Git 范围和清理 |
 | [发布规范](docs/releasing.md) | 版本、附件、验收和 Release 正文 |
 
-以上是随源码维护的长期规则；本地测试和审查记录保存在 Git 忽略的 `local-test-archive/`，不会自动上传。项目内的资料需另行备份。
+以上是随源码维护的长期规则；测试和审查记录统一保存在 Git 忽略的 `evidence-archive/`。本机档案不上传；Actions 只上传远端本次证据，本机通过校验后导入。使用 `npm run evidence:list`、`npm run evidence:verify`、`npm run evidence:sync` 查询、校验和同步。协作者的完整封存记录放入 `evidence-archive/inbox/<批次>/records/`，使用 `npm run evidence:import -- -Batch <批次>` 预览，再加 `-Contributor <贡献者> -Apply` 导入；规则见[本地数据规范](docs/local-data.md)。项目内的资料需另行备份。
+
+归档时间编号按来源保留毫秒、秒、日期或未知；不补造小数、零点和时区。新记录保存时间来源与表示精度，旧档案保持原字节；具体见[归档时间规则](docs/evidence-archive-template.md)。
 
 ## 计算与图表说明
 
@@ -132,6 +134,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/manage.ps1 -Action E
 文件分析、参考质量比较、片段率失真实验支持混合排队。在各功能中选择文件并设置参数后点击“加入队列”，重复添加，再点击“开始 / 继续队列”。完整分析可直接加入队列；未读取轨道信息时自动选择第一个视频轨道，需指定其他轨道时先读取信息。每项任务保存添加时的参数，后续修改表单不影响已排队任务。
 
 队列顺序执行，运行或暂停期间均可继续添加。“读取信息”只做文件预览，不占队列项；完整分析在队列中只占一项，内部阶段在进度区显示。暂停后续任务不会中断当前任务；取消当前项或某项失败后会继续下一项，已取消或失败的任务可从折叠的“已结束任务”中重新排队，从头运行。每项完成后均可从队列查看报告并导出 JSON。结果列表可导出全部或勾选的已完成报告；队列内等待的任务可勾选导出为计划表。原运行按钮会提交任务并开始队列。刷新网页可恢复队列；当前队列仅在服务运行期间保留，重启服务后可导入已保存的计划表，已生成的报告保存在前述独立的数据目录。
+
+## 参与开发
+
+[贡献与提交规范](docs/contributing.md)说明提交标题、PR 审查与验证表述的要求。测试和发布分别遵循[测试规范](docs/testing.md)与[发布规范](docs/releasing.md)。
 
 ## 参考
 

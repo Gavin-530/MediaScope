@@ -3,7 +3,9 @@ $ErrorActionPreference='Stop'
 $project=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 if($env:GITHUB_ACTIONS -ne 'true'){throw 'This bootstrap is for GitHub Actions; use npm test locally'}
 . (Join-Path $PSScriptRoot 'deployment.ps1')
-$diagnostics=Join-Path $project '.build/ci-diagnostics'
+. (Join-Path $PSScriptRoot 'evidence-lib.ps1')
+$null=Initialize-EvidenceArchive $project
+$diagnostics=Join-Path (Get-EvidencePendingRoot $project) 'ci-diagnostics'
 New-Item -ItemType Directory -Force -Path $diagnostics | Out-Null
 Start-Transcript -Path (Join-Path $diagnostics 'bootstrap.log') -NoClobber | Out-Null
 $code=2
