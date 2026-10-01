@@ -112,7 +112,9 @@ test('cancelled and failed tasks can be requeued while paused and resume with la
  assert.equal(retryRes.status,202);
  const completedRetry=await retryRes.json();
  assert.notEqual(completedRetry.id,first.id);
- assert.equal((await finished(completedRetry.id)).status,'done','retry starts while the queue is running without another start request');
+ assert.equal((await(await request('jobs/'+completedRetry.id)).json()).status,'queued','retry respects the queue pause after it drains');
+ await request('queue','POST',{action:'start'});
+ assert.equal((await finished(completedRetry.id)).status,'done');
  assert.equal((await request('jobs/'+completedRetry.id+'/report')).status,200);
  assert.equal((await request('jobs/'+first.id+'/report')).status,200,'the original report remains available');
 });
