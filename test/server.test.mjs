@@ -108,7 +108,7 @@ test('cancelled and failed tasks can be requeued while paused and resume with la
  assert.equal((await finished(first.id)).status,'done');
  assert.equal((await finished(second.id)).status,'error');
  assert.equal((await finished(later.id)).status,'done');
- assert.equal((await request('jobs/'+first.id+'/retry','POST',{})).status,409);
+ assert.equal((await request('jobs/'+first.id+'/retry','POST',{})).status,202);
 });
 
 test('plan export is ordered and plan import validates every item before replacing or starting work',async()=>{

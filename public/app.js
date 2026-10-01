@@ -220,7 +220,7 @@ function queueRow(j, position) {
   const label = { retry: "重新排队", cancel: "取消" }[action];
   const stage =
     j.status === "running" ? j.progress?.stage || j.message : j.message;
-  return `<div class="queue-item">${j.status === "queued" ? `<input class="portable-check" type="checkbox" data-plan-select="${j.id}" aria-label="选择任务计划 ${esc(primary)}" ${selectedPlans.has(j.id) ? "checked" : ""}>` : ""}<div class="queue-item-main"><strong>${position ? position + ". " : ""}${esc(primary + secondary)}</strong><span class="queue-state">${esc(names[j.type])} · ${states[j.status]}</span><p class="queue-path" title="${esc(pathText)}">${esc(pathText)}</p><p class="queue-description">${esc(j.description || "")}${stage ? " · " + esc(stage) : ""}</p></div><button class="secondary" data-job="${j.id}" data-action="${action}">${label}</button></div>`;
+  return `<div class="queue-item">${j.status === "queued" ? `<input class="portable-check" type="checkbox" data-plan-select="${j.id}" aria-label="选择任务计划 ${esc(primary)}" ${selectedPlans.has(j.id) ? "checked" : ""}>` : ""}<div class="queue-item-main"><strong>${position ? position + ". " : ""}${esc(primary + secondary)}</strong><span class="queue-state">${esc(names[j.type])} · ${states[j.status]}</span><p class="queue-path" title="${esc(pathText)}">${esc(pathText)}</p><p class="queue-description">${esc(j.description || "")}${stage ? " · " + esc(stage) : ""}</p></div><button class="secondary" data-job="${j.id}" data-action="${j.status === 'done' ? 'report' : action}">${j.status === 'done' ? '查看报告' : label}</button>${j.status === 'done' ? `<button class="secondary" style="margin-left: 8px;" data-job="${j.id}" data-action="retry">重新排队</button>` : ''}</div>`;
 }
 function resultItems() {
   return [
