@@ -100,8 +100,16 @@ Write-Output 'PASS: corrupt files and traversal identities are rejected before p
 
 $junctionBatch=Join-Path $receiver 'evidence-inbox/linked/records'
 $null=New-Item -ItemType Directory -Path $junctionBatch -Force
-$null=New-Item -ItemType Junction -Path (Join-Path $junctionBatch 'linked-record') -Target $local
-Reject {& $importer -Project $receiver -Batch linked -Contributor Bob -Apply} 'Linked received entry'
+$junction=Join-Path $junctionBatch 'linked-record'
+$null=New-Item -ItemType Junction -Path $junction -Target $local
+try{Reject {& $importer -Project $receiver -Batch linked -Contributor Bob -Apply} 'Linked received entry'}
+finally{
+  # Remove only the junction created by this test, never its target or evidence.
+  $junctionPath=[IO.Path]::GetFullPath($junction)
+  if(!$junctionPath.StartsWith($workRoot+'\',[StringComparison]::OrdinalIgnoreCase) -or
+     !((Get-Item -LiteralPath $junctionPath -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'Unsafe junction fixture cleanup'}
+  [IO.Directory]::Delete($junctionPath)
+}
 Write-Output 'PASS: junctions are rejected before recursive traversal'
 
 $null=Copy-Received locked $newRecord

@@ -28,6 +28,18 @@ function Assert-ReceivedTree([string]$Path) {
   }
 }
 
+function Move-ImportReceipt([string]$Source,[string]$Destination) {
+  $null=Assert-EvidencePath $project $Source
+  $null=Assert-EvidencePath $project $Destination
+  # Windows scanners may briefly hold the catalog backup after File.Replace.
+  # Retry only receipt relocation; never repeat a catalog commit or an import.
+  for($attempt=0;$attempt -lt 10;$attempt++){
+    try{[IO.Directory]::Move($Source,$Destination);return}
+    catch [IO.IOException]{if($attempt -eq 9){throw};Start-Sleep -Milliseconds 100}
+    catch [UnauthorizedAccessException]{if($attempt -eq 9){throw};Start-Sleep -Milliseconds 100}
+  }
+}
+
 function Get-ReceivedPlan([string]$Records) {
   Assert-ReceivedTree $Records
   if(@(Get-ChildItem -LiteralPath $Records -File -Force).Count){throw 'Put complete record directories inside records; loose files are not accepted'}
@@ -138,7 +150,7 @@ try {
   $null=Test-EvidenceCatalogData $root $catalog
   [IO.File]::Replace($catalogNew,$catalogPath,(Join-Path $transaction 'catalog-before.json'))
   $committed=$true
-  [IO.Directory]::Move($transaction,$receiptDestination)
+  Move-ImportReceipt $transaction $receiptDestination
   $transaction=$null
   Write-Output "Imported $($new.Count) record(s); audit: $auditRelative"
   Write-Output "Original received files retained: $records"
