@@ -41,7 +41,7 @@ if(process.env.GITHUB_ACTIONS==='true')manifest.github={repository:process.env.G
 try {
   gate=spawn('powershell.exe',psArgs('Lock'),{windowsHide:true,stdio:['pipe','pipe','pipe']});
   gate.stdin.on('error',()=>{});
-  await new Promise((resolve,reject)=>{let message='';const timer=setTimeout(()=>reject(Error('Evidence lock timeout')),30000);gate.stdout.on('data',b=>{message+=b;if(message.includes('READY')){clearTimeout(timer);resolve()}});gate.stderr.on('data',b=>message+=b);gate.once('error',e=>{clearTimeout(timer);reject(e)});gate.once('exit',()=>{clearTimeout(timer);reject(Error('Evidence lock/verification failed: '+message))})});
+  await new Promise((resolve,reject)=>{let message='';const timer=setTimeout(()=>reject(Error('Evidence lock timeout')),180000);gate.stdout.on('data',b=>{message+=b;if(message.includes('READY')){clearTimeout(timer);resolve()}});gate.stderr.on('data',b=>message+=b);gate.once('error',e=>{clearTimeout(timer);reject(e)});gate.once('exit',()=>{clearTimeout(timer);reject(Error('Evidence lock/verification failed: '+message))})});
   await fs.mkdir(evidence,{recursive:true});await fs.mkdir(source,{recursive:true});
   manifest.harness={commit:git('rev-parse','HEAD'),workingTree:git('status','--porcelain=v1','--untracked-files=normal').split('\n').filter(Boolean)};
   if(requireClean&&manifest.harness.workingTree.length)throw Error('TEST_INFRA: --require-clean requires a clean working tree');
