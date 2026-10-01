@@ -4,7 +4,12 @@
     {
       "path": "evidence-archive/inbox",
       "class": "protected",
-      "reason": "Received collaborator archives and import receipts; never clean automatically"
+      "reason": "Incoming collaborator archives awaiting import; never clean automatically"
+    },
+    {
+      "path": "evidence-archive/received",
+      "class": "protected",
+      "reason": "Retained originals and receipts of completed imports; never clean automatically"
     },
     {
       "path": "evidence-archive",

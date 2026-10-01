@@ -1,5 +1,6 @@
 param(
   [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$')][string]$Batch,
+  [ValidateScript({$_ -notin @('.','..') -and [IO.Path]::GetFileName($_) -eq $_})][string]$Folder,
   [string]$Contributor,
   [switch]$Apply,
   [string]$Project
@@ -12,6 +13,7 @@ if(!$Project){$Project=Join-Path $PSScriptRoot '../..'}
 $project=[IO.Path]::GetFullPath($Project).TrimEnd('\')
 $root=Get-EvidenceRoot $project
 $inbox=Assert-EvidencePath $project (Join-Path $root 'inbox')
+$receivedRoot=Assert-EvidencePath $project (Join-Path $root 'received')
 $script:receivedSkips=New-Object 'System.Collections.Generic.List[string]'
 $script:receivedCatalogs=New-Object 'System.Collections.Generic.List[object]'
 
@@ -40,6 +42,24 @@ function Move-ImportReceipt([string]$Source,[string]$Destination) {
     catch [IO.IOException]{if($attempt -eq 9){throw};Start-Sleep -Milliseconds 100}
     catch [UnauthorizedAccessException]{if($attempt -eq 9){throw};Start-Sleep -Milliseconds 100}
   }
+}
+
+function Save-ImportFiles([string]$Transaction,[string]$Id) {
+  # Legacy -Batch calls retain their layout. Direct inbox imports move completed
+  # originals outside intake, without copying or descending into foreign trees.
+  $receiptRoot=if($Folder){Join-Path $receivedRoot $Id}else{$batchRoot}
+  $receipts=Assert-EvidencePath $project (Join-Path $receiptRoot 'receipts')
+  $null=New-Item -ItemType Directory -Path $receipts -Force
+  $script:receiptDestination=Assert-EvidencePath $project (Join-Path $receipts $Id)
+  Move-ImportReceipt $Transaction $script:receiptDestination
+  if($Folder){
+    $originals=Assert-EvidencePath $project (Join-Path $receiptRoot 'records')
+    $null=New-Item -ItemType Directory -Path $originals -Force
+    $retained=Assert-EvidencePath $project (Join-Path $originals $Folder)
+    Move-ImportReceipt $batchRoot $retained
+    Write-Output "Original received folder retained: $retained"
+  }else{Write-Output "Original received files retained: $records"}
+  Write-Output "Receipt: $script:receiptDestination"
 }
 
 function Find-ReceivedRecords([string]$Path,[int]$Depth=0) {
@@ -77,7 +97,7 @@ function Find-ReceivedRecords([string]$Path,[int]$Depth=0) {
     $sourceRelative=$full.Substring($records.Length).TrimStart('\').Replace('\','/')
     $script:receivedCatalogs.Add(@{path=$(if($sourceRelative){$sourceRelative}else{'.'});sha256=(Get-FileHash -LiteralPath $catalogFile).Hash})
     foreach($directory in Get-ChildItem -LiteralPath $full -Directory -Force){
-      if($directory.Name -in @('inbox','pending','tools','receipts','evidence-inbox')){
+      if($directory.Name -in @('inbox','received','pending','tools','receipts','evidence-inbox')){
         # Do not enumerate these trees: they may contain further received archives or links.
         $script:receivedSkips.Add($directory.FullName.Substring($records.Length+1).Replace('\','/'))
       }elseif($directory.Name -eq 'evidence-archive'){
@@ -90,7 +110,7 @@ function Find-ReceivedRecords([string]$Path,[int]$Depth=0) {
   if((Split-Path -Leaf $full) -eq 'evidence-archive' -and @(Get-ChildItem -LiteralPath $full -Directory -Force | Where-Object {$_.Name -in @('tests','maintenance','fixtures')}).Count){throw 'Received archive catalog missing'}
   if(@(Get-ChildItem -LiteralPath $full -File -Force).Count){throw 'Put complete record or archive directories inside records; loose files are not accepted'}
   foreach($directory in Get-ChildItem -LiteralPath $full -Directory -Force | Sort-Object Name){
-    if($directory.Name -in @('inbox','pending','tools','receipts','evidence-inbox')){
+    if($directory.Name -in @('inbox','received','pending','tools','receipts','evidence-inbox')){
       $script:receivedSkips.Add($directory.FullName.Substring($records.Length+1).Replace('\','/'))
       continue
     }
@@ -123,20 +143,32 @@ function Get-ReceivedPlan([string]$Records) {
   }
 }
 
-if(!$Batch){
-  if($Apply){throw 'Apply requires -Batch and -Contributor'}
+if($Batch -and $Folder){throw 'Choose either -Batch (legacy layout) or -Folder'}
+if($Apply -and ([string]::IsNullOrWhiteSpace($Contributor) -or $Contributor.Length -gt 200)){throw 'Apply requires a contributor name (1-200 characters)'}
+if(!$Batch -and !$Folder){
   $null=New-Item -ItemType Directory -Path $inbox -Force
   Write-Output "Inbox: $inbox"
-  Write-Output 'Place sealed records or entire evidence-archive folders in evidence-archive/inbox/<batch>/records/. Extract ZIPs yourself; never overwrite your own catalog.'
-  Write-Output 'Foreign inbox, pending and tools trees are skipped; only sealed records are merged.'
-  Write-Output 'Preview: npm run evidence:import -- -Batch alice-20261001'
-  Write-Output 'Import:  npm run evidence:import -- -Batch alice-20261001 -Contributor Alice -Apply'
-  Get-ChildItem -LiteralPath $inbox -Directory -Force | Select-Object -ExpandProperty Name
+  Write-Output 'Drop entire evidence-archive folders directly into inbox. Extract ZIPs yourself; never overwrite your own catalog.'
+  Write-Output 'Foreign inbox, received, pending and tools trees are skipped; only sealed records are merged.'
+  Write-Output 'Preview: npm run evidence:import'
+  Write-Output 'Import:  npm run evidence:import -- -Contributor Alice -Apply'
+  foreach($file in Get-ChildItem -LiteralPath $inbox -File -Force){Write-Output "Unprocessed inbox file (extract ZIPs first): $($file.Name)"}
+  $folders=@(Get-ChildItem -LiteralPath $inbox -Directory -Force | Sort-Object Name)
+  if(!$folders.Count){Write-Output 'Inbox is empty; no archives to import.';return}
+  foreach($item in $folders){
+    Write-Output "Received folder: $($item.Name)"
+    & $PSCommandPath -Project $project -Folder $item.Name -Contributor $Contributor -Apply:$Apply
+  }
   return
 }
-if($Apply -and ([string]::IsNullOrWhiteSpace($Contributor) -or $Contributor.Length -gt 200)){throw 'Apply requires a contributor name (1-200 characters)'}
-$batchRoot=Assert-EvidencePath $project (Join-Path $inbox $Batch)
-$records=Assert-EvidencePath $project (Join-Path $batchRoot 'records')
+$inputName=if($Folder){$Folder}else{$Batch}
+$batchRoot=Assert-EvidencePath $project (Join-Path $inbox $inputName)
+$records=if($Folder){$batchRoot}else{Assert-EvidencePath $project (Join-Path $batchRoot 'records')}
+# Automatic intake also understands previously created batch wrappers.
+if($Folder -and !(Test-Path (Join-Path $batchRoot 'catalog.json')) -and !(Test-Path (Join-Path $batchRoot 'record.json')) -and (Test-Path (Join-Path $batchRoot 'records') -PathType Container)){
+  $records=Assert-EvidencePath $project (Join-Path $batchRoot 'records')
+}
+$script:receiptDestination=$null
 $gate=$null;$transaction=$null;$committed=$false;$moved=@()
 try {
   if($Apply){
@@ -154,14 +186,20 @@ try {
   $plan | Select-Object action,relative | Format-Table -AutoSize
   $new=@($plan | Where-Object {$_.action -eq 'import'})
   if(!$Apply){Write-Output "Preview only: $($new.Count) new record(s). Use -Contributor <name> -Apply to import.";return}
-  if(!$new.Count){Write-Output 'All records already exist with identical checksums; nothing changed.';return}
+  if(!$new.Count -and !$Folder){Write-Output 'All records already exist with identical checksums; nothing changed.';return}
 
   $id=[DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ')+'-'+[guid]::NewGuid().ToString('N').Substring(0,8)
   $transaction=Assert-EvidencePath $project (Join-Path (Get-EvidencePendingRoot $project) ('local-import-'+$id))
   $null=New-Item -ItemType Directory -Path $transaction
-  $receipt=[ordered]@{schema=1;operation='local-evidence-import';batch=$Batch;contributor=$Contributor;receivedFrom='user-supplied; not independently authenticated';importedAtUtc=[DateTime]::UtcNow.ToString('o');skippedSubtrees=@($script:receivedSkips.ToArray());sourceCatalogs=@($script:receivedCatalogs.ToArray());records=@($plan | ForEach-Object {[ordered]@{folder=$_.folder;path=$_.relative;checksumsSha256=$_.checksumsSha256;action=$_.action;sourceCommit=$_.sourceCommit;github=$_.github}})}
+  $receipt=[ordered]@{schema=1;operation='local-evidence-import';batch=$inputName;intakeFolder=$inputName;contributor=$Contributor;receivedFrom='user-supplied; not independently authenticated';importedAtUtc=[DateTime]::UtcNow.ToString('o');skippedSubtrees=@($script:receivedSkips.ToArray());sourceCatalogs=@($script:receivedCatalogs.ToArray());records=@($plan | ForEach-Object {[ordered]@{folder=$_.folder;path=$_.relative;checksumsSha256=$_.checksumsSha256;action=$_.action;sourceCommit=$_.sourceCommit;github=$_.github}})}
   $utf8=New-Object Text.UTF8Encoding($false)
   [IO.File]::WriteAllText((Join-Path $transaction 'receipt.json'),($receipt | ConvertTo-Json -Depth 20),$utf8)
+  if(!$new.Count){
+    Save-ImportFiles $transaction $id
+    $transaction=$null
+    Write-Output 'All records already exist with identical checksums; catalog unchanged, received original retained outside inbox.'
+    return
+  }
   $entries=@();$staged=@();$index=0
   foreach($item in $new){
     $candidate=Assert-EvidencePath $project (Join-Path $transaction ('record-'+$index))
@@ -179,7 +217,7 @@ try {
   $raw=Join-Path $audit 'original'
   $null=New-Item -ItemType Directory -Path $raw -Force
   Copy-Item -LiteralPath (Join-Path $transaction 'receipt.json') -Destination $raw
-  $manifest=@{schema=1;kind='build-maintenance';operation='local-evidence-import';createdAtUtc=$receipt.importedAtUtc;note='Import audit only; no product tests rerun';batch=$Batch;contributor=$Contributor;records=$new.Count}
+  $manifest=@{schema=1;kind='build-maintenance';operation='local-evidence-import';createdAtUtc=$receipt.importedAtUtc;note='Import audit only; no product tests rerun';batch=$inputName;contributor=$Contributor;records=$new.Count}
   [IO.File]::WriteAllText((Join-Path $raw 'manifest.json'),($manifest | ConvertTo-Json -Depth 8),$utf8)
   Write-EvidenceChecksums $raw
   $auditDestination=Get-EvidenceDestination $project ('local-evidence-import-'+$id) $manifest
@@ -194,9 +232,6 @@ try {
   $catalog.records=@($catalog.records)+@($entries)
   $catalogNew=Join-Path $transaction 'catalog-new.json'
   [IO.File]::WriteAllText($catalogNew,($catalog | ConvertTo-Json -Depth 20),$utf8)
-  $receipts=Assert-EvidencePath $project (Join-Path $batchRoot 'receipts')
-  $null=New-Item -ItemType Directory -Path $receipts -Force
-  $receiptDestination=Assert-EvidencePath $project (Join-Path $receipts $id)
   foreach($item in $staged){
     $null=Assert-EvidencePath $project $item.destination
     if(Test-Path -LiteralPath $item.destination){throw "Destination appeared during import: $($item.relative)"}
@@ -208,11 +243,9 @@ try {
   $null=Test-EvidenceCatalogData $root $catalog
   [IO.File]::Replace($catalogNew,$catalogPath,(Join-Path $transaction 'catalog-before.json'))
   $committed=$true
-  Move-ImportReceipt $transaction $receiptDestination
+  Save-ImportFiles $transaction $id
   $transaction=$null
   Write-Output "Imported $($new.Count) record(s); audit: $auditRelative"
-  Write-Output "Original received files retained: $records"
-  Write-Output "Receipt: $receiptDestination"
 } catch {
   if(!$committed){
     # Only move this transaction's new directories back; never delete existing archives.
@@ -222,6 +255,6 @@ try {
       [IO.Directory]::Move($item.destination,$item.candidate)
     }
   }
-  if($transaction){Write-Warning "Import interrupted (catalog committed: $committed); received originals and transaction retained: $transaction"}
+  if($transaction){Write-Warning "Import interrupted (catalog committed: $committed); inspect inbox, transaction $transaction and receipt $script:receiptDestination; originals are preserved"}
   throw
 } finally {if($gate){$gate.Dispose()}}

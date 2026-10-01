@@ -94,7 +94,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/manage.ps1 -Action E
 | [本地数据规范](docs/local-data.md) | 命名、永久保留、Git 范围和清理 |
 | [发布规范](docs/releasing.md) | 版本、附件、验收和 Release 正文 |
 
-以上是随源码维护的长期规则；测试和审查记录统一保存在 Git 忽略的 `evidence-archive/`。本机档案不上传；Actions 只上传远端本次证据，本机通过校验后导入。使用 `npm run evidence:list`、`npm run evidence:verify`、`npm run evidence:sync` 查询、校验和同步。协作者的完整封存记录放入 `evidence-archive/inbox/<批次>/records/`，使用 `npm run evidence:import -- -Batch <批次>` 预览，再加 `-Contributor <贡献者> -Apply` 导入；规则见[本地数据规范](docs/local-data.md)。项目内的资料需另行备份。
+以上是随源码维护的长期规则；测试和审查记录统一保存在 `evidence-archive/`，其中归档数据被 Git 忽略，`tools/import-local-test-evidence.ps1` 随 Git 维护。本机档案不上传；Actions 只上传远端本次证据，本机通过校验后导入。使用 `npm run evidence:list`、`npm run evidence:verify`、`npm run evidence:sync` 查询、校验和同步。协作者整个 `evidence-archive` 文件夹直接放到本机 `evidence-archive/inbox/`；使用 `npm run evidence:import` 自动扫描并预览，再加 `-Contributor <贡献者> -Apply` 正式导入。程序自动将完成的整包原件和回执移至 `evidence-archive/received/`，不需要手动创建批次。规则见[本地数据规范](docs/local-data.md)。项目内的资料需另行备份。
 
 归档时间编号按来源保留毫秒、秒、日期或未知；不补造小数、零点和时区。新记录保存时间来源与表示精度，旧档案保持原字节；具体见[归档时间规则](docs/evidence-archive-template.md)。
 

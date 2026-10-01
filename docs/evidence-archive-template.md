@@ -10,7 +10,8 @@
 | fixtures | 测试素材快照 |
 | pending | 正在运行、待导入、失败或中断的证据；不自动清理 |
 | legacy | 尚未整理的旧格式资料暂存位置；旧资料按内容整理后不再留在此处 |
-| inbox | 协作者归档的接收原件和回执，不计作正式记录；整包导入不递归并入对方的 inbox |
+| inbox | 直接放入对方的整个归档文件夹，等待程序处理；不计作正式记录 |
+| received | 导入完成后保留的整包原件及回执，由程序自动生成接收编号；不计作正式记录 |
 | tools | 本机导入程序；import-local-test-evidence.ps1 随 Git 维护，收到的 tools 不执行、不覆盖 |
 
 每份新归档有 README.md、record.json、original/、SHA256SUMS.txt。GitHub 导入还保存原始 bundle.zip；通过 Actions 外层 ZIP 下载时也保存 artifact.zip。
@@ -18,7 +19,43 @@ catalog.json 登记所有封存记录，并校验历史原 catalog 快照的 SHA
 pending 的存在不表示测试通过；运行结果与归档状态分别记录。
 本地与 Actions 分类以原始清单的 GitHub 运行身份为依据，不以整理或导入时的主机环境决定。在 Actions 中整理本地记录仍归入 tests/local，本地导入云端记录仍归入 tests/github-actions。导入、导出、迁移及整理入口省略 Project 时，在脚本初始化后计算其所在项目根目录，与当前工作目录无关。
 
-在项目根目录执行 npm run evidence:list、npm run evidence:verify、npm run evidence:sync。协作者单份记录或整个归档放入 inbox/<批次>/records，执行 npm run evidence:import -- -Batch <批次> 预览，再加 -Contributor <贡献者> -Apply。跳过外来 inbox、pending 和 tools，仅按已封存记录校验、去重与登记；见本地数据规范。
+在项目根目录执行 npm run evidence:list、npm run evidence:verify、npm run evidence:sync。
+
+## 接收整包或单份测试记录
+
+收到对方整个 evidence-archive 后，直接放到本机 inbox 中，无需手动创建批次或 records。例如导入前：
+
+```text
+evidence-archive/
+  inbox/
+    evidence-archive/           # 直接放入对方整包，保留 catalog.json
+      catalog.json
+      tests/
+      maintenance/
+      fixtures/
+      inbox/                    # 跳过
+      received/                 # 跳过
+      tools/                    # 跳过，不执行
+  tools/
+    import-local-test-evidence.ps1
+```
+
+ZIP 先自行解压；单份完整封存记录也可以直接放入 inbox。多个整包同名时先改外层文件夹名，例如 alice-evidence-archive、bob-evidence-archive，不修改内部编号或索引，不覆盖已有待处理资料。在项目根目录运行：
+
+```powershell
+npm run evidence:import
+npm run evidence:import -- -Contributor "Alice" -Apply
+npm run evidence:verify
+```
+
+第一条自动扫描 inbox 并预览，第二条正式导入。不同贡献者的整包可用 `-Folder "外层文件夹名"` 分别处理。多个整包逐包提交，遇到错误停止后续处理，先前成功的整包保留其结果；冲突或损坏的当前整包不部分导入。
+
+程序识别嵌套包装，但跳过对方的 inbox、received、pending、tools、receipts 和旧版 evidence-inbox；仅校验、去重并登记已封存记录，不执行对方代码。同编号同内容跳过，同编号不同内容停止。导入后正式分类不增加 evidence-archive 或 inbox 层；整包原件移到 `received/<自动编号>/records/<收到的文件夹名>/`，回执放在同一编号下的 receipts。即使整包全部是重复记录，也保留本次原件和去重回执并移出 inbox，不重复创建正式记录或维护审计。
+
+旧式 `-Batch` 手动批次入口保留兼容，其原件和回执仍沿用原有位置；日常整包接收使用上面的直接放入流程。程序不会后台监听文件夹，也不自动下载外来档案；放入后需执行导入命令。也可接收同一电脑其他工作树的测试归档。更多规则见项目的 docs/local-data.md。
+
+## 时间与记录规则
+
 维护目录采用 时间部分_事项_8位编号；产品和素材采用 时间部分-8位编号。时间部分按来源精度选择：
 
 | 来源 | 时间部分示例 | 时区 |
@@ -37,4 +74,6 @@ pending 的存在不表示测试通过；运行结果与归档状态分别记录
 缺少统一清单的混合历史材料使用 undated_release-materials_摘要前8位，明确标记时间与整体结果未知。不会从文件修改时间补造测试时间，也不把旧说明中的多次检查合并成一次通过结果。
 旧记录按类型进入正式目录；原文件保存在 original，旧路径映射和原清单快照保存在 archive-organization 维护记录。已封存的旧维护记录仅改外层目录名，原 record.json.path 作为历史身份不改写，当前位置以 catalog 和路径映射为准。
 同步只下载远端证据，不会上传本机档案。离线时延后，远端过期的文件无法自动找回。
-资料由 Git 忽略并永久保留；另需备份本目录。正式发布 ZIP 和用户报告仍分别保存在 releases 与 .mediascope。
+归档数据、inbox、received、catalog.json 和本机 README 由 Git 忽略；tools/import-local-test-evidence.ps1 与 docs 中的规则随 Git 维护。另需备份整个归档目录（包括 inbox 和 received）；正式发布 ZIP 和用户报告仍分别保存在 releases 与 .mediascope。
+
+本说明的共享模板为 docs/evidence-archive-template.md。初始化只在本机 README 不存在时复制模板，现有 README 不自动覆盖，以保留可能的本机备注；修改共享规则时也需同步本机说明。封存记录中的 README 属于原始证据，不随当前模板更新。

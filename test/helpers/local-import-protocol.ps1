@@ -194,3 +194,67 @@ Copy-Item -LiteralPath $local -Destination (Join-Path $missingParent ('tests/loc
 Reject {& $importer -Project $receiver -Batch missing-catalog -Contributor Carol -Apply} 'Received archive catalog missing'
 if((Get-FileHash $catalog).Hash -ne $stableHash){throw 'Missing donor catalog changed local ledger'}
 Write-Output 'PASS: an incomplete whole archive is rejected instead of silently importing unregistered data'
+
+# User workflow: drop the complete archive directly into inbox, with no batch
+# or records directories prepared by the receiver.
+$directReceiver=Join-Path $workRoot 'direct'
+$directRoot=Get-EvidenceRoot $directReceiver
+$drop=Join-Path $directRoot 'inbox/evidence-archive'
+$null=New-Item -ItemType Directory -Path (Split-Path -Parent $drop) -Force
+Copy-Item -LiteralPath (Get-EvidenceRoot $sender) -Destination $drop -Recurse
+$foreignReceived=Join-Path $drop 'received/old/records/evidence-archive'
+$null=New-Item -ItemType Directory -Path $foreignReceived -Force
+[IO.File]::WriteAllText((Join-Path $foreignReceived 'record.json'),'invalid old received copy',$utf8)
+$dropHashes=@(Get-EvidenceFiles $drop|ForEach-Object {$_.path+':'+(Get-FileHash -LiteralPath $_.full).Hash})
+$preview=(& $importer -Project $directReceiver | Out-String)
+if($preview -notmatch '4 new record' -or !(Test-Path $drop) -or (Test-Path (Join-Path $directRoot 'catalog.json')) -or (Test-Path (Join-Path $directRoot 'received'))){throw 'Direct inbox preview requires wrappers or changes originals'}
+Write-Output 'PASS: directly dropped whole archives are discovered without manual batch folders and preview changes no records'
+
+& $importer -Project $directReceiver -Contributor 'Direct sender' -Apply | Out-Null
+$retainedBatches=@(Get-ChildItem (Join-Path $directRoot 'received') -Directory)
+$retained=Join-Path $retainedBatches[0].FullName 'records/evidence-archive'
+$retainedHashes=@(Get-EvidenceFiles $retained|ForEach-Object {$_.path+':'+(Get-FileHash -LiteralPath $_.full).Hash})
+$directReceiptPath=@(Get-ChildItem (Join-Path $retainedBatches[0].FullName 'receipts') -Directory)[0].FullName
+$directReceipt=Get-Content (Join-Path $directReceiptPath 'receipt.json') -Raw|ConvertFrom-EvidenceJson
+if((Test-Path $drop) -or $retainedBatches.Count -ne 1 -or (Test-EvidenceCatalog $directRoot) -ne 5 -or ($dropHashes -join "`n") -ne ($retainedHashes -join "`n") -or $directReceipt.skippedSubtrees -notcontains 'received' -or (Test-Path (Join-Path $directRoot 'evidence-archive'))){throw 'Direct import lost bytes, retained foreign received records or nested formal archives'}
+Write-Output 'PASS: direct import moves byte-exact originals and receipts outside inbox and skips the donor received area'
+
+$directCatalog=Join-Path $directRoot 'catalog.json'
+$directHash=(Get-FileHash $directCatalog).Hash
+Copy-Item -LiteralPath $retained -Destination $drop -Recurse
+& $importer -Project $directReceiver -Contributor 'Direct sender' -Apply | Out-Null
+if((Test-Path $drop) -or (Get-FileHash $directCatalog).Hash -ne $directHash -or (Test-EvidenceCatalog $directRoot) -ne 5 -or @(Get-ChildItem (Join-Path $directRoot 'received') -Directory).Count -ne 2){throw 'Duplicate direct import changed ledger or left intake occupied'}
+$emptyOutput=(& $importer -Project $directReceiver -Contributor 'Direct sender' -Apply | Out-String)
+if($emptyOutput -notmatch 'Inbox is empty' -or @(Get-ChildItem (Join-Path $directRoot 'received') -Directory).Count -ne 2){throw 'Completed originals were automatically re-imported'}
+Write-Output 'PASS: duplicate whole-archive drops clear intake without duplicate records or audit and completed originals are never rescanned'
+
+# Multiple packages with different contributors can be selected individually.
+$directNew=New-Record '20261001T102033Z-1234ab05' 'Direct sender new record'
+$validDrop=Join-Path $directRoot 'inbox/renamed archive'
+Copy-Item -LiteralPath (Get-EvidenceRoot $sender) -Destination $validDrop -Recurse
+$badDrop=Join-Path $directRoot 'inbox/bad archive'
+Copy-Item -LiteralPath (Get-EvidenceRoot $sender) -Destination $badDrop -Recurse
+$badIndex=Get-Content (Join-Path $badDrop 'catalog.json') -Raw|ConvertFrom-EvidenceJson
+$badIndex.records[0].checksumsSha256='0'*64
+[IO.File]::WriteAllText((Join-Path $badDrop 'catalog.json'),($badIndex|ConvertTo-Json -Depth 10),$utf8)
+Reject {& $importer -Project $directReceiver -Contributor 'Bad sender' -Apply} 'Received catalog checksum mismatch'
+if((Get-FileHash $directCatalog).Hash -ne $directHash -or !(Test-Path $badDrop) -or !(Test-Path $validDrop)){throw 'Invalid direct package mutated intake or ledger'}
+Reject {& $importer -Project $directReceiver -Folder '../escape'} 'ParameterArgumentValidationError'
+& $importer -Project $directReceiver -Folder 'renamed archive' -Contributor 'Other sender' -Apply | Out-Null
+if((Test-Path $validDrop) -or !(Test-Path $badDrop) -or (Test-EvidenceCatalog $directRoot) -ne 7){throw 'Folder selection mixed packages or failed to import a renamed archive'}
+Write-Output 'PASS: corrupt packages stay in inbox and folder selection isolates renamed archives without traversal'
+
+# Catalog replacement failure must preserve directly dropped originals too.
+$retryReceiver=Join-Path $workRoot 'direct-retry'
+$retryRoot=Initialize-EvidenceArchive $retryReceiver
+$retryDrop=Join-Path $retryRoot 'inbox/evidence-archive'
+$null=New-Item -ItemType Directory -Path (Split-Path -Parent $retryDrop) -Force
+Copy-Item -LiteralPath (Get-EvidenceRoot $sender) -Destination $retryDrop -Recurse
+$retryCatalog=Join-Path $retryRoot 'catalog.json'
+$retryHash=(Get-FileHash $retryCatalog).Hash
+$held=[IO.File]::Open($retryCatalog,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+try{Reject {& $importer -Project $retryReceiver -Contributor 'Retry sender' -Apply} 'Replace|used by another process|being used'}finally{$held.Dispose()}
+if(!(Test-Path $retryDrop) -or (Test-Path (Join-Path $retryRoot 'received')) -or (Get-FileHash $retryCatalog).Hash -ne $retryHash -or (Test-EvidenceCatalog $retryRoot) -ne 0){throw 'Failed direct import moved originals or published a partial ledger'}
+& $importer -Project $retryReceiver -Contributor 'Retry sender' -Apply | Out-Null
+if((Test-Path $retryDrop) -or (Test-EvidenceCatalog $retryRoot) -ne 6){throw 'Direct import retry failed'}
+Write-Output 'PASS: direct import rolls back publication errors and retries without losing the whole received package'

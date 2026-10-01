@@ -7,7 +7,8 @@
 | 路径 | 分类与处理 |
 | --- | --- |
 | `evidence-archive/` | 唯一长期测试/维护证据入口；永久保留，清理工具拒绝删除 |
-| `evidence-archive/inbox/` | 协作者归档的接收原件与导入回执；永久保留，不自动上传或清理 |
+| `evidence-archive/inbox/` | 直接放入对方整包的待处理接收入口；不自动上传或清理 |
+| `evidence-archive/received/` | 导入完成的整包原件和回执；永久保留，不自动上传或清理 |
 | `evidence-archive/tools/` | 导入程序；其中 import-local-test-evidence.ps1 随 Git 维护，其余内容不跟踪 |
 | `evidence-archive/pending/` | 运行中、待导入、中断证据和锁；不自动删除 |
 | `evidence-archive/legacy/local-test-archive/` | 尚未整理的旧档案暂存位置，仍受保护；整理后原文件进入各分类的 original，原 catalog 保存为校验快照 |
@@ -45,42 +46,47 @@ npm run evidence:verify
 
 接收入口统一为 `evidence-archive/inbox/`；处理入口为 `evidence-archive/tools/import-local-test-evidence.ps1`，也可使用 `npm run evidence:import`。工具不执行收到的脚本，不改变媒体分析、界面或安装流程。接收目录受本地数据策略保护并被 Git 忽略；导入规则与程序随 Git 共享。
 
-首次执行 `npm run evidence:import` 创建接收目录并列出批次。对方可发送单份完整封存记录，也可发送整个 evidence-archive。收到 ZIP 后先自行解压，放入同一批次的 records；不要直接覆盖本机归档根目录。结构如下：
+对方可以发送整个 evidence-archive，也可以发送单份完整封存记录。将收到的文件夹直接放进本机 inbox，不用手动建批次或 records；ZIP 先自行解压，不要覆盖本机归档根目录。程序执行时自动扫描接收入口并逐包处理。导入前结构如下：
+
+完整路径是 `evidence-archive/inbox/evidence-archive/`。若同时接收多个同名整包，可以只改外层文件夹名称，例如 alice-evidence-archive、bob-evidence-archive，避免复制时相互覆盖；内部文件和编号保持原样。归档根 README 使用 docs/evidence-archive-template.md 作为共享模板；初始化仅在 README 缺失时复制，不自动覆盖现有本机说明。更新规则时同步本机 README，已封存记录或收到整包中的历史 README 保留原样。
 
 ```text
 evidence-archive/
   tools/
     import-local-test-evidence.ps1
   inbox/
-    alice-20261001/
-      records/
-        evidence-archive/   # 对方整个归档，含其 catalog.json
-          tests/
-          maintenance/
-          fixtures/
-          inbox/            # 会跳过，保持原件
-          tools/            # 会跳过，不执行或覆盖本机程序
-        单份封存记录目录/     # 也可直接放单份或多份记录
-      receipts/             # 程序生成
+    evidence-archive/       # 直接放对方整包，保留 catalog.json
+      catalog.json
+      tests/
+      maintenance/
+      fixtures/
+      inbox/                # 跳过，保持原件
+      received/             # 跳过，避免再次并入历史接收包
+      tools/                # 跳过，不执行或覆盖本机程序
+    单份封存记录目录/         # 单份也可以直接放入
 ```
 
-批次名使用 ASCII 字母、数字、点、下划线、连字符，并以字母或数字开头。单份封存记录必须包含 README.md、record.json、SHA256SUMS.txt、original/ 及原有压缩附件。整包须保留自己的 catalog.json；程序核对它，但不会用它替换本机索引。不要把整个项目放进 records，不手工补造清单或修改编号来绕过冲突。暂不支持旧版未封装目录和直接读取 ZIP；整包内的 pending 待处理资料仅保留原件，不正式导入。
+单份封存记录必须包含 README.md、record.json、SHA256SUMS.txt、original/ 及原有压缩附件。整包须保留自己的 catalog.json；程序核对它，但不会用它替换本机索引。不要把整个项目放进 inbox，不手工补造清单或修改编号来绕过冲突。暂不支持旧版未封装目录和直接读取 ZIP；整包内的 pending 待处理资料仅保留原件，不正式导入。仅放入文件夹不会触发后台监听，需执行下列命令：
 
-套娃处理以记录为单位：程序识别包装目录及嵌套的 evidence-archive，只提取已封存记录；到达一份记录后不再拆其 original。每份收到的归档中的 inbox、pending、tools、receipts 和旧版 evidence-inbox 都会跳过，不进入它们继续寻找档案，即使包含循环目录链接也不跟随。嵌套包装最多 24 层，超限停止。对方接收箱中尚未正式导入的记录若也要收集，应由对方另行单独提供，不自动混入本次导入。
+套娃处理以记录为单位：程序识别包装目录及嵌套的 evidence-archive，只提取已封存记录；到达一份记录后不再拆其 original。每份收到的归档中的 inbox、received、pending、tools、receipts 和旧版 evidence-inbox 都会跳过，不进入它们继续寻找档案，即使包含循环目录链接也不跟随。嵌套包装最多 24 层，超限停止。对方接收箱中尚未正式导入的记录若也要收集，应由对方另行单独提供，不自动混入本次导入。
 
 ```powershell
 # 预览：完整检查本机索引和全部接收记录，但不写入正式归档
-npm run evidence:import -- -Batch alice-20261001
+npm run evidence:import
 # 应用：贡献者可填写名称或账号；含空格时加引号
-npm run evidence:import -- -Batch alice-20261001 -Contributor "Alice" -Apply
+npm run evidence:import -- -Contributor "Alice" -Apply
+# 多个贡献者的整包可按外层文件夹分别处理
+npm run evidence:import -- -Folder "bob-evidence-archive" -Contributor "Bob" -Apply
 npm run evidence:verify
 ```
 
-工具按收到的封装身份进入既有 tests/local、tests/github-actions、maintenance 或 fixtures 分类；保留原始文件字节、编号、时间精度、提交、运行范围和失败结果。逐项校验完整性，同编号同内容跳过，同编号不同内容停止整个批次；不把他人的测试改称本机执行或合并成一次通过。贡献者由接收者填写，不能作为经过认证的身份。
+工具按收到的封装身份进入既有 tests/local、tests/github-actions、maintenance 或 fixtures 分类；保留原始文件字节、编号、时间精度、提交、运行范围和失败结果。逐项校验完整性，同编号同内容跳过，同编号不同内容停止当前整包，不部分导入该包。多个整包按文件夹名称排序逐包提交，失败时停止后续处理，先前成功的整包不回滚。不把他人的测试改称本机执行或合并成一次通过。贡献者由接收者填写，不能作为经过认证的身份；不同贡献者使用 -Folder 分别处理。
 
-应用时使用现有归档记录锁，先校验并暂存所有新记录，再统一更新本机 catalog.json；不会导入对方的索引或程序。来源、提交（原清单已记录时）、接收批次、源索引摘要、跳过目录及逐条记录摘要另存为 maintenance 中的 local-evidence-import 审计记录。接收原件保留在 records，本机索引快照与回执留在 receipts；成功后没有新增未完成 pending，重复运行不会新增记录或审计。正式分类中不会新增一层 evidence-archive 或外来 inbox；接收批次内保留的原始目录层级不是正式归档层级。
+应用时使用现有归档记录锁，先校验并暂存当前包所有新记录，再统一更新本机 catalog.json；不会导入对方的索引或程序。来源、提交（原清单已记录时）、收到的文件夹名称、源索引摘要、跳过目录及逐条记录摘要另存为 maintenance 中的 local-evidence-import 审计记录。程序自动生成接收编号，把整个收到的文件夹原样移至 `received/<自动编号>/records/<收到的文件夹名>/`，回执及本机索引快照放在 `received/<自动编号>/receipts/<自动编号>/`；成功后该包移出 inbox，且没有新增未完成 pending。全部重复的整包也移至 received，保留去重回执，但不再创建正式记录或维护审计。正式分类中不会新增一层 evidence-archive 或外来 inbox；received 内保存的原件目录层级不是正式归档层级。
 
-正常捕获的提交前错误会将本批新目录移回 pending 事务目录，保留旧索引和接收原件；不删除已有资料。进程被强行终止或断电时可能留下待恢复事务，工具不会忽略索引异常继续导入。遇到报错保留接收批次和提示中的 pending/local-import-*，先核对 plan.json、catalog-before.json（若已生成）及正式索引，不手工覆盖或删除档案。
+接收整包也可来自同一电脑的其他工作树，例如合并 PR 时将隔离工作树产生的测试记录转入主项目；该导入程序不会自动联网下载。旧式 `-Batch <批次>` 入口保留兼容，要求 inbox/<批次>/records，且原件和回执仍留在旧位置；无需为新的整包接收采用这一结构。已完成的历史 PR #6 接收批次保存在 received/pr6-merge-20261001，保留原有 records、receipts 和合并说明。查明来源与状态可查看接收包的说明、receipts/*/receipt.json 和 maintenance 中对应的 local-evidence-import 审计。
+
+正常捕获的提交前错误会将当前包新目录移回 pending 事务目录，保留旧索引和 inbox 原件；不删除已有资料。如果索引已提交而原件移动受文件占用阻碍，可能留下 inbox 原件和 received 回执，再次处理时会去重并完成移入。进程被强行终止或断电时可能留下待恢复事务，工具不会忽略索引异常继续导入。遇到报错保留 inbox、received 与提示中的 pending/local-import-*，先核对 plan.json、catalog-before.json（若已生成）及正式索引，不手工覆盖或删除档案。
 
 ## 检查与清理
 
@@ -96,4 +102,4 @@ Clean 默认预览，核对后加 -Apply；其他类别为 BuildStages、Downloa
 
 SHA256SUMS.txt 与 catalog.json 检测文件变化、记录缺失及未登记记录。正常校验列出 pending；使用 verify-test-evidence.ps1 -RequireComplete 可拒绝未完成项。失败不能被后来成功覆盖；恢复只处理证据，不增加产品通过数。
 
-永久保留是清理策略，不是备份。另行备份整个 evidence-archive（包含 inbox）、用户报告、验收资料和 releases；校验不能恢复磁盘损坏或误删。
+永久保留是清理策略，不是备份。另行备份整个 evidence-archive（包含 inbox 和 received）、用户报告、验收资料和 releases；校验不能恢复磁盘损坏或误删。

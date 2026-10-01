@@ -144,7 +144,7 @@ finally {
     const destination=path.join(project,'evidence-archive','runs',version,id);
     const archived=ps('Commit','-Source',evidence,'-Destination',destination).trim();
     console.log('Evidence: '+archived);console.log(ps('Clean','-Source',work).trim());
-    let totalBytes=0;for(const file of await files(path.join(project,'evidence-archive'),{excludeTopLevel:['inbox','tools']}))totalBytes+=(await fs.stat(file)).size;
+    let totalBytes=0;for(const file of await files(path.join(project,'evidence-archive'),{excludeTopLevel:['inbox','received','tools']}))totalBytes+=(await fs.stat(file)).size;
     if(totalBytes>warnTotalMiB*1024*1024)console.warn(`Evidence exceeds ${warnTotalMiB} MiB; records remain protected`);
   }catch(e){exitCode=2;console.error('Evidence/cleanup failed: '+e.stack+'\nRetained: '+work)}
   if(gate){gate.stdin.end('\n');if(gate.exitCode===null&&gate.signalCode===null)await new Promise(resolve=>gate.once('exit',resolve))}
