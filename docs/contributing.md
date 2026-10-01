@@ -27,6 +27,13 @@ type(scope): describe the concrete change
 | `chore` | 其他维护事项；版本准备使用 `chore(release)` |
 | `revert` | 撤销已有提交，在正文引用被撤销的提交并解释原因 |
 
+## 提交时机与作者身份
+
+- 交付到主分支的提交按可独立理解和验证的逻辑改动组织，对应代码、回归测试和必要文档一起交付。复杂功能可拆为多条有明确用途的提交，不以减少数量为目的混合独立改动。
+- 开发中的检查点可以保留在功能分支；审阅期间可以追加修正提交，便于核查反馈。合并时再整理同一改动的临时尝试和连续修正，或采用下文的 squash 方式；提交次数和 CI 运行次数不作为功能完成数或质量指标。
+- 提交前核对作者名称和邮箱，使用本人稳定署名及能关联 GitHub 账号的邮箱，可使用 GitHub 官方 noreply 邮箱。不要使用通用开发者名称和占位邮箱代替贡献者身份；整理他人提交时保留原作者信息，身份有疑问时向贡献者核实，不代填推测信息。邮箱关联方法见 [GitHub 指南](https://docs.github.com/en/account-and-profile/how-tos/email-preferences/setting-your-commit-email-address)。
+- 不要求每次本地检查点都执行完整回归；实际验证范围与结果仍按[测试规范](testing.md)保存，最终整合源码须满足原有验收条件。
+
 ## 正文、兼容性与验证
 
 简单、可从标题和差异直接理解的改动可省略正文。复杂改动须在标题后的空行之后说明：原问题及触发条件、改动后的行为、重要的实现选择，以及兼容性或迁移影响。正文建议按约 72 列换行，URL 和代码标识可保持完整。
@@ -50,7 +57,11 @@ details remain readable in light mode.
 
 审阅时检查标题与实际差异是否一致、提交是否按逻辑组织、验证陈述是否有记录、版本是否符合[发布规范](releasing.md)。格式检查不能判断这些语义事实。
 
-可按改动选择合并方式：多条自成一体的提交可以保留；修正和尝试较多的 PR 可以在合并前整理或 squash。使用 squash 时，维护者须审查最终提交标题与正文，并保留相关 PR 和贡献者信息。普通提交不能以 `Merge ...` 标题绕过检查；真正有多个父提交的自动 `Merge ...` 提交允许使用 Git 的合并格式。`git revert` 自动生成的 `Revert "..."` 及 `This reverts commit <完整 SHA>.` 也允许保留。
+按改动选择合并方式：一个逻辑改动包含多次修正时，优先考虑 squash；多条提交各自完整且有独立用途时，可以保留。使用 squash 时，维护者须审查最终提交标题与正文，并保留相关 PR 和贡献者信息；包含多个独立改动的 PR 不应仅为减少数量而整体压成一个提交。此做法参考 [Node.js 的提交整理指南](https://github.com/nodejs/node/blob/main/doc/contributing/pull-requests.md#commit-squashing)。
+
+推荐每次改动使用独立功能分支。长期复用的分支不一律 squash：先评估后续 PR 的历史关系，避免再次包含已压缩合并的提交；具体取舍见 [GitHub 合并指南](https://docs.github.com/en/pull-requests/reference/pull-request-merges)。历史整理以尚未合并的功能分支为范围；已共享分支的历史整理须与参与者协调，不为统一格式或减少数量重写主分支、已发布标签及历史证据。
+
+普通提交不能以 `Merge ...` 标题绕过检查；真正有多个父提交的自动 `Merge ...` 提交允许使用 Git 的合并格式。`git revert` 自动生成的 `Revert "..."` 及 `This reverts commit <完整 SHA>.` 也允许保留。
 
 ## 检查与历史边界
 
