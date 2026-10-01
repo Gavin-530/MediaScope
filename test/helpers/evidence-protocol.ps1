@@ -22,8 +22,8 @@ function Assert-Throws($Body,$Pattern){
 }
 
 $fixtureRoot=Join-Path $project 'test-work'
-$archiveRoot=Join-Path $project 'local-test-archive'
-$rules=@{'test-work'=@{path=$fixtureRoot};'local-test-archive'=@{path=$archiveRoot}}
+$archiveRoot=Join-Path $project 'legacy-protocol-archive'
+$rules=@{'test-work'=@{path=$fixtureRoot};'evidence-archive'=@{path=$archiveRoot}}
 New-Item -ItemType Directory -Force -Path (Join-Path $fixtureRoot 'bitdepth'),$archiveRoot | Out-Null
 [IO.File]::WriteAllText((Join-Path $fixtureRoot 'bitdepth/protocol.txt'),'filesystem evidence protocol')
 [IO.File]::WriteAllText((Join-Path $fixtureRoot 'psnr.log'),'filesystem fixture, not a media measurement')

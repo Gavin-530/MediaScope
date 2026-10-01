@@ -17,6 +17,8 @@ node scripts/test.mjs --release
 - `--source-ref <提交>` 只读取指定提交，不切换分支；应用与当前测试系统的身份分别保存。普通开发测试允许 dirty 工作区并保存确切源码；`--require-clean` 仅检查工作区，不等同于发布验收。
 - 优先使用锁定私有 FFmpeg/FFprobe，再查询 PATH。可用 `FFMPEG_PATH`、`FFPROBE_PATH`、`MEDIASCOPE_BROWSER_PATH` 指定程序；缺少依赖、初始化失败或零用例都不能报告成功。
 
+提交规范工具使用独立命令 `npm run test:commits` 验证格式、事件范围及真实 Git 提交快照。该检查无需媒体运行时，不纳入应用功能映射或产品发布测试数；入口和 PR 要求见[贡献与提交规范](contributing.md)。
+
 ## 覆盖与结果
 
 功能与用例的唯一映射为 [`test/coverage.json`](../test/coverage.json)，覆盖媒体分析、指标与位深/色彩、时间轴、SI/TI、试编码、队列、报告、图表和真实浏览器交互。新增功能须同时更新用例与映射。
@@ -35,7 +37,8 @@ node scripts/test.mjs --release
 
 ## 证据与维护
 
-每次应用测试从独立源码快照运行，自动归档成功和失败记录，校验后才回收本次沙箱。前置阻塞也保留调用参数和原因。
+每次应用测试从独立源码快照运行，成功、失败和前置阻塞都保留记录。运行沙箱及证据位于 evidence-archive/pending；校验并登记正式归档后才回收本次沙箱。新的统一目录包裹 original 原始记录，不改写原 schema。
+归档封装与产品 manifest 是独立 schema：新封装 schema 3 记录编号时间的来源、精度和时区，并兼容旧封装 schema 1/2。毫秒、秒、日期和未知时间按来源保存，不补造精度；目录编号时间不是产品运行耗时或时钟准确度证明。具体规则见[归档说明](evidence-archive-template.md)。
 
 | 记录 | 保留内容 |
 | --- | --- |
@@ -53,8 +56,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/list-test-evidence.p
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/recover-test-evidence.ps1 -RunId <编号>
 ```
 
-恢复前先确认进程已结束并审查 `test-run.lock`，不能直接删除锁。应用记录提交使用原子清单替换；登记失败保留待处理证据，恢复不增加产品测试通过数。包/部署或其他未完成记录须先审查暂存及日志。
+恢复前先确认进程已结束并审查 `evidence-archive/pending/test-run.lock`，不能直接删除锁。应用记录提交使用原子清单替换；登记失败保留待处理证据，恢复不增加产品测试通过数。包/部署或其他未完成记录须先审查暂存及日志。
 
-原生安装/卸载弹窗、全部响应式尺寸和媒体组合、真实首次联网下载仍按[发布规范](releasing.md)分别验收。归档命名、永久保留、Git 范围及清理统一见[本地数据规范](local-data.md)。
+原生安装/卸载弹窗、全部响应式尺寸和媒体组合、真实首次联网下载仍按[发布规范](releasing.md)分别验收。npm run evidence:list 支持 -- -Origin local/github-actions、-Version、-Outcome、-Json 筛选。归档命名、永久保留、Git 范围及清理统一见[本地数据规范](local-data.md)。
 
-GitHub 自动执行使用同一完整发布入口，远端运行身份、证据范围及本地长期导入见 [GitHub 自动测试](github-actions.md)。本地证据不会自动上传；云端证据必须下载并校验后才能称为本地永久归档。
+GitHub 自动执行使用同一完整发布入口，远端运行身份、证据范围及本地长期导入见 [GitHub 自动测试](github-actions.md)。本地证据不会自动上传；云端证据必须下载并校验后才能称为本地永久归档。使用 npm run evidence:sync 同步；npm start/npm test 的包装入口会尝试补同步，网络失败不会改变应用测试结果。直接调用测试脚本不自动同步。

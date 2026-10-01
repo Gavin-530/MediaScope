@@ -58,3 +58,38 @@ try {$null=$bad.CreateEntry('../outside.txt')}finally{$bad.Dispose()}
 Assert-Rejected {Expand-GitHubEvidenceZip $unsafe (Join-Path $project 'unsafe-extract')} 'Unsafe ZIP entry'
 if(Test-Path -LiteralPath (Join-Path $project 'outside.txt')){throw 'ZIP escaped extraction root'}
 Write-Output 'PASS: ZIP path traversal is rejected before extraction'
+
+# Round-trip the real exporter with a blocked, explicitly synthetic protocol record.
+$exportProject=Join-Path $project 'export-project'
+$null=Initialize-EvidenceArchive $exportProject
+$staging=Join-Path (Get-EvidencePendingRoot $exportProject) 'staging/app'
+$null=New-Item -ItemType Directory -Path (Split-Path -Parent $staging) -Force
+Copy-Item -LiteralPath $record -Destination $staging -Recurse
+$prior=@{}
+foreach($name in @('GITHUB_ACTIONS','RUNNER_ENVIRONMENT','GITHUB_REPOSITORY','GITHUB_RUN_ID','GITHUB_RUN_ATTEMPT','GITHUB_SHA','GITHUB_JOB')){$prior[$name]=[Environment]::GetEnvironmentVariable($name)}
+try {
+  $env:GITHUB_ACTIONS='true';$env:RUNNER_ENVIRONMENT='github-hosted'
+  $env:GITHUB_REPOSITORY=$identity.repository;$env:GITHUB_RUN_ID=$identity.runId
+  $env:GITHUB_RUN_ATTEMPT=$identity.runAttempt;$env:GITHUB_SHA=$identity.sha;$env:GITHUB_JOB='protocol'
+  $null=Publish-EvidenceRecord $exportProject $staging $relative
+  & (Join-Path $sourceProject 'scripts/export-github-test-evidence.ps1') -Project $exportProject -TestStepOutcome failure | Out-Null
+} finally {foreach($name in $prior.Keys){[Environment]::SetEnvironmentVariable($name,$prior[$name])}}
+$transport=Join-Path (Get-EvidencePendingRoot $exportProject) 'cloud-export/bundle.zip'
+$outerRoot=Join-Path $project 'artifact-wrapper'
+$null=New-Item -ItemType Directory -Path $outerRoot
+Copy-Item -LiteralPath $transport -Destination (Join-Path $outerRoot 'bundle.zip')
+$outer=Join-Path $project 'artifact.zip'
+[IO.Compression.ZipFile]::CreateFromDirectory($outerRoot,$outer)
+$receiver=Join-Path $project 'receiver'
+$received=Import-GitHubEvidence $receiver $outer $identity.repository $identity.runId $identity.runAttempt $identity.sha
+if((Get-FileHash (Join-Path $received 'bundle.zip')).Hash -ne (Get-FileHash $transport).Hash -or
+   (Get-FileHash (Join-Path $received 'artifact.zip')).Hash -ne (Get-FileHash $outer).Hash){throw 'Original transport bytes were not retained'}
+$null=Test-EvidenceCatalog (Get-EvidenceRoot $receiver)
+Write-Output 'PASS: actual exporter plus nested artifact import retain both original ZIP transports'
+
+$cliReceiver=Join-Path $project 'cli-receiver'
+$cliOutput=& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $sourceProject 'scripts/import-github-test-evidence.ps1') -Project $cliReceiver -Archive $outer -Repository $identity.repository -RunId $identity.runId -Attempt $identity.runAttempt -Commit $identity.sha
+if($LASTEXITCODE -ne 0){throw 'Actual import CLI failed'}
+$cliPath=($cliOutput -join [Environment]::NewLine).Trim()
+if(!(Test-Path (Join-Path $cliPath 'record.json')) -or (Test-EvidenceCatalog (Get-EvidenceRoot $cliReceiver)) -ne 1){throw 'CLI did not create a valid isolated archive'}
+Write-Output 'PASS: actual import command validates arguments and returns its registered archive path'

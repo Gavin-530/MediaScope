@@ -35,11 +35,12 @@ function Expand-GitHubEvidenceZip($Archive,$Destination) {
 
 function Test-GitHubEvidenceBundle($Root) {
   $null=Test-EvidenceChecksums $Root
-  $m=Get-Content -LiteralPath (Join-Path $Root 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-  if($m.schema -ne 1 -or $m.kind -ne 'github-actions-evidence' -or $m.bundleId -notmatch '^\d{8}T\d{9}Z-[a-f0-9]{8}$' -or
+  $m=Get-Content -LiteralPath (Join-Path $Root 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson
+  if($m.schema -ne 1 -or $m.kind -ne 'github-actions-evidence' -or $m.bundleId -notmatch ('^'+(Get-EvidenceIdentifierPattern)+'$') -or
      $m.github.repository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' -or $m.github.runId -notmatch '^[1-9]\d*$' -or
      $m.github.runAttempt -notmatch '^[1-9]\d*$' -or $m.github.sha -notmatch '^[a-f0-9]{40}$' -or
      $m.testStepOutcome -notin @('success','failure','cancelled','skipped')){throw 'Invalid GitHub evidence identity'}
+  $null=Get-EvidenceRunTime $m.bundleId
   foreach($file in Get-EvidenceFiles $Root){
     if($file.path -notin @('manifest.json','SHA256SUMS.txt') -and $file.path -notmatch '^(records|diagnostics|pending)/'){throw "Unexpected bundle file: $($file.path)"}
   }
@@ -48,8 +49,8 @@ function Test-GitHubEvidenceBundle($Root) {
     $null=Test-EvidenceCatalog $recordsRoot
     $records=@(Get-EvidenceRecords $recordsRoot)
     foreach($record in $records){
-      if($record.relative -notmatch '^runs/'){throw 'Cloud export cannot include local maintenance records'}
-      $app=Get-Content -LiteralPath (Join-Path $record.source 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+      if((Get-EvidencePayload $record).relative -notmatch '^runs/'){throw 'Cloud export cannot include local maintenance records'}
+      $app=Get-Content -LiteralPath (Join-Path (Get-EvidencePayload $record).source 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson
       if($app.kind -ne 'App' -or $app.github.repository -ne $m.github.repository -or $app.github.runId -ne $m.github.runId -or
          $app.github.runAttempt -ne $m.github.runAttempt -or $app.github.sha -ne $m.github.sha){throw 'Application/cloud provenance mismatch'}
       if($app.harness.commit -and $app.harness.commit -ne $m.github.sha){throw 'Application harness commit mismatch'}
@@ -58,7 +59,7 @@ function Test-GitHubEvidenceBundle($Root) {
   }
   if($m.testStepOutcome -eq 'success'){
     if($records.Count -ne 1 -or (Test-Path -LiteralPath (Join-Path $Root 'pending'))){throw 'Successful CI requires exactly one complete record and no pending evidence'}
-    $app=Get-Content -LiteralPath (Join-Path $records[0].source 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    $app=Get-Content -LiteralPath (Join-Path (Get-EvidencePayload $records[0]).source 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson
     if($app.schema -ne 3 -or $app.outcome -ne 'passed' -or !$app.releaseCheck.requested -or !$app.releaseCheck.ready -or
        $app.harness.commit -ne $m.github.sha -or $app.source.commit -ne $m.github.sha){throw 'Successful CI is missing strict release evidence'}
   }
@@ -67,44 +68,44 @@ function Test-GitHubEvidenceBundle($Root) {
 
 function Get-ArchivedGitHubEvidence($Root,$Repository,$RunId,$Attempt) {
   foreach($record in Get-EvidenceRecords $Root){
-    if($record.relative -notmatch '^github-actions-'){continue}
-    $m=Get-Content -LiteralPath (Join-Path $record.source 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    $payload=Get-EvidencePayload $record
+    if($payload.relative -notmatch '^github-actions-'){continue}
+    $m=Get-Content -LiteralPath (Join-Path (Get-EvidencePayload $record).source 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson
     if($m.kind -eq 'github-actions-evidence' -and $m.github.repository -eq $Repository -and $m.github.runId -eq $RunId -and $m.github.runAttempt -eq $Attempt){return $record}
   }
 }
 
-function Import-GitHubEvidence($Project,$Archive,$Repository,$RunId,$Attempt) {
+function Import-GitHubEvidence($Project,$Archive,$Repository,$RunId,$Attempt,[string]$Commit) {
   $root=Get-EvidenceRoot $Project
-  $build=Assert-GitHubEvidencePath $Project (Join-Path $Project '.build')
+  $build=Get-EvidencePendingRoot $Project
   New-Item -ItemType Directory -Force -Path $build | Out-Null
-  $gate=[IO.File]::Open((Join-Path $build 'evidence-recording.lock'),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+  $gate=[IO.File]::Open((Get-EvidenceLockPath $Project),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
   $staging=$null
   try {
+    $root=Initialize-EvidenceArchive $Project
     if(Test-Path -LiteralPath (Join-Path $root 'catalog.json')){$null=Test-EvidenceCatalog $root}
     elseif(@(Get-EvidenceRecords $root).Count){throw 'Existing archive catalog is missing'}
     $staging=Assert-GitHubEvidencePath $Project (Join-Path $build ('github-evidence-import/'+[guid]::NewGuid().ToString('N')))
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $staging) | Out-Null
     Expand-GitHubEvidenceZip $Archive $staging
+    $transport=$Archive
+    if(!(Test-Path -LiteralPath (Join-Path $staging 'manifest.json')) -and (Test-Path -LiteralPath (Join-Path $staging 'bundle.zip'))){
+      $transport=Join-Path $staging 'bundle.zip'
+      $inner=$staging+'-inner'
+      Expand-GitHubEvidenceZip $transport $inner
+      $staging=$inner
+    }
     $m=Test-GitHubEvidenceBundle $staging
-    if($m.github.repository -ne $Repository -or ($RunId -and $m.github.runId -ne $RunId) -or ($Attempt -and $m.github.runAttempt -ne $Attempt)){throw 'Downloaded evidence does not match requested repository/run/attempt'}
+    if($m.github.repository -ne $Repository -or ($RunId -and $m.github.runId -ne $RunId) -or ($Attempt -and $m.github.runAttempt -ne $Attempt) -or ($Commit -and $m.github.sha -ne $Commit)){throw 'Downloaded evidence does not match requested repository/run/attempt'}
     $existing=Get-ArchivedGitHubEvidence $root $Repository $m.github.runId $m.github.runAttempt
     if($existing){
-      if((Get-FileHash -LiteralPath (Join-Path $existing.source 'SHA256SUMS.txt')).Hash -ne (Get-FileHash -LiteralPath (Join-Path $staging 'SHA256SUMS.txt')).Hash){throw 'Existing GitHub run differs; overwrite refused'}
+      if((Get-FileHash -LiteralPath (Join-Path (Get-EvidencePayload $existing).source 'SHA256SUMS.txt')).Hash -ne (Get-FileHash -LiteralPath (Join-Path $staging 'SHA256SUMS.txt')).Hash){throw 'Existing GitHub run differs; overwrite refused'}
       $null=Assert-GitHubEvidencePath $Project $staging
       Remove-Item -LiteralPath $staging -Recurse -Force
       return $existing.source
     }
     $relative='github-actions-'+$m.bundleId
-    $destination=Assert-GitHubEvidencePath $Project (Join-Path $root $relative)
-    if(Test-Path -LiteralPath $destination){throw 'Archive destination exists; overwrite refused'}
-    New-Item -ItemType Directory -Force -Path $root | Out-Null
-    Move-Item -LiteralPath $staging -Destination $destination
-    try {Add-EvidenceCatalogRecord $root @{source=$destination;relative=$relative}}
-    catch {
-      $catalog=if(Test-Path -LiteralPath (Join-Path $root 'catalog.json')){Get-Content -LiteralPath (Join-Path $root 'catalog.json') -Raw | ConvertFrom-Json}else{$null}
-      if(!$catalog -or !@($catalog.records | Where-Object {$_.path -eq $relative}).Count){Move-Item -LiteralPath $destination -Destination $staging}
-      throw
-    }
+    $destination=Publish-EvidenceRecord $Project $staging $relative $transport $Archive
     $null=Test-EvidenceCatalog $root
     return $destination
   } catch {

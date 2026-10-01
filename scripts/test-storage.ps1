@@ -18,7 +18,8 @@ switch($Action){
   Lock {
     $gate=$null
     try {
-      $gate=[IO.File]::Open((Join-Path $project '.build/evidence-recording.lock'),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+      $gate=[IO.File]::Open((Get-EvidenceLockPath $project),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+      $null=Initialize-EvidenceArchive $project
       if(Test-Path -LiteralPath (Join-Path $root 'catalog.json')){$null=Test-EvidenceCatalog $root}
       elseif(@(Get-EvidenceRecords $root).Count){throw 'Evidence catalog is missing'}
       Write-Output 'READY'
@@ -36,22 +37,13 @@ switch($Action){
     if(!$dest.StartsWith($root+'\runs\',[StringComparison]::OrdinalIgnoreCase)){throw 'Invalid archive destination'}
     Write-EvidenceChecksums $src
     $relative=$dest.Substring($root.Length+1).Replace('\','/')
-    $null=Test-EvidenceRecord $src $relative
-    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dest) | Out-Null
-    Move-Item -LiteralPath $src -Destination $dest
-    try {Add-EvidenceCatalogRecord $root @{source=$dest;relative=$relative}}
-    catch {
-      $catalogPath=Join-Path $root 'catalog.json'
-      $catalog=if(Test-Path -LiteralPath $catalogPath){Get-Content -LiteralPath $catalogPath -Raw -Encoding UTF8 | ConvertFrom-Json}else{$null}
-      if(!$catalog -or @($catalog.records | Where-Object {$_.path -eq $relative}).Count -eq 0){Move-Item -LiteralPath $dest -Destination $src}
-      throw
-    }
-    $count=Test-EvidenceCatalog $root
-    Write-Output "Verified $count evidence records"
+    $published=Publish-EvidenceRecord $project $src $relative
+    $null=Test-EvidenceCatalog $root
+    Write-Output $published
   }
   Clean {
     $src=Assert-Local $Source
-    $allowed=Join-Path $project '.build/test-runs'
+    $allowed=Join-Path (Get-EvidencePendingRoot $project) 'test-runs'
     if((Split-Path -Parent $src) -ne $allowed -or (Split-Path -Leaf $src) -notmatch '^\d{8}T\d{9}Z-[a-f0-9]{8}$'){throw 'Invalid test sandbox'}
     foreach($item in Get-ChildItem -LiteralPath $src -Recurse -Force){if($item.Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Linked sandbox entry'}}
     Remove-Item -LiteralPath $src -Recurse -Force

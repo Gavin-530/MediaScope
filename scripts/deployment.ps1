@@ -46,7 +46,7 @@ function Expand-SafeZip($Archive,$Destination) {
 function Test-App($App) {
   Assert-NoLinks $App
   $manifest=Read-Json (Join-Path $App 'MANIFEST.json')
-  if($manifest.schema -ne 1 -or $manifest.platform -ne 'win32-x64' -or $manifest.version -notmatch '^\d+\.\d+\.\d+(-(alpha|beta|rc)(\.\d+)?)?$'){throw 'Unsupported application manifest'}
+  if($manifest.schema -ne 1 -or $manifest.platform -ne 'win32-x64' -or $manifest.version -notmatch '^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(-(alpha|beta|rc)(\.(?:0|[1-9][0-9]*))?)?$'){throw 'Unsupported application manifest'}
   $seen=@{}
   foreach($file in $manifest.files){
     $p=Safe-Path $App $file.path

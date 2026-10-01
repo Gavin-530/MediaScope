@@ -18,12 +18,14 @@ foreach($rule in $policy.rules){
   if(!$full.StartsWith($project+'\',[StringComparison]::OrdinalIgnoreCase) -or $rules.ContainsKey($name)){throw "Invalid local data rule: $name"}
   $rules[$name]=@{path=$full;class=$rule.class;reason=$rule.reason}
 }
-foreach($name in @('local-test-archive','.mediascope','releases','test-work\acceptance-20260921')){
+foreach($name in @('evidence-archive','.mediascope','releases','test-work\acceptance-20260921')){
   if(!$rules.ContainsKey($name) -or $rules[$name].class -ne 'protected'){throw "Required protected rule missing: $name"}
 }
-foreach($name in @('test-work','.build','.build\downloads','.build\evidence-staging')){
+foreach($name in @('test-work','.build','.build\downloads','evidence-archive\pending')){
   if(!$rules.ContainsKey($name)){throw "Required local data rule missing: $name"}
 }
+
+. (Join-Path $PSScriptRoot 'evidence-lib.ps1')
 
 function Assert-Contained([string]$Path) {
   $full=[IO.Path]::GetFullPath($Path).TrimEnd('\')
@@ -87,7 +89,7 @@ function Test-GeneratedFileName([string]$Name) {
 }
 
 function Verify-Evidence {
-  $local=$rules['local-test-archive'].path
+  $local=$rules['evidence-archive'].path
   if(Test-Path -LiteralPath $local){
     & (Join-Path $PSScriptRoot 'verify-test-evidence.ps1')
   }else{Write-Output 'No local test evidence to verify.'}
@@ -157,7 +159,7 @@ function Get-Candidates([string]$Kind) {
     if(Test-Path -LiteralPath $root){
       foreach($dir in Get-ChildItem -LiteralPath $root -Directory -Force){
         if($dir.Name -match '^deployment-test-[a-f0-9]{32}$'){
-          $logs=@(Get-ChildItem -LiteralPath $rules['local-test-archive'].path -Recurse -File -Filter '*.log' -ErrorAction SilentlyContinue)
+          $logs=@(Get-ChildItem -LiteralPath $rules['evidence-archive'].path -Recurse -File -Filter '*.log' -ErrorAction SilentlyContinue)
           $referenced=$false
           foreach($log in $logs){if(Select-String -LiteralPath $log.FullName -Pattern $dir.Name -SimpleMatch -Quiet){$referenced=$true;break}}
           if($referenced){$found+=@{path=$dir.FullName;why='Deployment sandbox referenced by archived test log'}}
@@ -173,14 +175,14 @@ function Get-Candidates([string]$Kind) {
 
 function Assert-TestGeneratedArchived($Candidates) {
   $root=$rules['test-work'].path.TrimEnd('\')+'\'
-  $snapshots=@(Get-ChildItem -LiteralPath $rules['local-test-archive'].path -Directory -Filter 'generated-fixtures-*' | Where-Object {$_.Name -notmatch '\.partial-[a-f0-9]{32}$'} | Sort-Object Name -Descending)
+  $snapshots=@(Get-EvidenceRecords $rules['evidence-archive'].path | ForEach-Object {Get-EvidencePayload $_})
   $records=@()
   foreach($snapshot in $snapshots){
-    $manifestPath=Join-Path $snapshot.FullName 'manifest.json'
+    $manifestPath=Join-Path $snapshot.source 'manifest.json'
     if(!(Test-Path -LiteralPath $manifestPath)){continue}
     $manifest=Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if($manifest.kind -ne 'generated-fixture-snapshot' -or $manifest.schema -ne 1){continue}
-    $records+=@{name=$snapshot.Name;manifest=$manifest}
+    $records+=@{name=$snapshot.relative;manifest=$manifest}
   }
   # Old directory and top-level-file snapshots can jointly cover cleanup.
   # Each individual candidate must still match one complete snapshot exactly.
@@ -232,7 +234,7 @@ if($Action -eq 'Status'){
 if($Action -eq 'Verify'){
   if($Category -or $Apply){throw 'Verify does not accept -Category or -Apply'}
   Verify-ProtectedData
-  foreach($name in @('local-test-archive','.mediascope','releases','test-work\acceptance-20260921')){
+  foreach($name in @('evidence-archive','.mediascope','releases','test-work\acceptance-20260921')){
     if(Test-Path -LiteralPath $rules[$name].path){$size=Get-Size $rules[$name].path;Write-Output "Protected path scanned: $name ($($size.count) files)"}
   }
   exit 0
@@ -244,7 +246,7 @@ try {
   if($Apply){
     $build=Assert-Contained $rules['.build'].path
     New-Item -ItemType Directory -Force -Path $build | Out-Null
-    $lock=Join-Path $build 'evidence-recording.lock'
+    $lock=Get-EvidenceLockPath $project
     try {$gate=[IO.File]::Open($lock,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)}
     catch {throw 'Evidence recording is active; cleanup refused'}
     if($Category -eq 'TestGenerated'){Assert-NoActiveTests}

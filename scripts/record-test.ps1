@@ -24,15 +24,15 @@ if($Kind -eq 'App'){
 }
 . (Join-Path $PSScriptRoot 'evidence-lib.ps1')
 $root=Get-EvidenceRoot $project
-New-Item -ItemType Directory -Force -Path (Join-Path $project '.build') | Out-Null
-try {$gate=[IO.File]::Open((Join-Path $project '.build/evidence-recording.lock'),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)}
+try {$gate=[IO.File]::Open((Get-EvidenceLockPath $project),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)}
 catch {throw 'Another evidence recording is already running'}
 try {
+$null=Initialize-EvidenceArchive $project
 $catalogPath=Join-Path $root 'catalog.json'
 if(Test-Path -LiteralPath $catalogPath){$null=Test-EvidenceCatalog $root}
 elseif(@(Get-EvidenceRecords $root).Count){throw "Evidence catalog missing: $catalogPath"}
 $version=(Get-Content -LiteralPath (Join-Path $project 'package.json') -Raw -Encoding UTF8 | ConvertFrom-Json).version
-if($version -notmatch '^\d+\.\d+\.\d+(-(alpha|beta|rc)(\.\d+)?)?$'){throw 'Invalid package version'}
+if($version -notmatch '^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(-(alpha|beta|rc)(\.(?:0|[1-9][0-9]*))?)?$'){throw 'Invalid package version'}
 $package=$null
 if($Kind -in @('Package','OnlineDeployment')){
   if(!$Archive){throw '-Archive is required for package and deployment tests'}
@@ -45,7 +45,7 @@ if($Kind -in @('Package','OnlineDeployment')){
     $reader=[IO.StreamReader]::new($entries[0].Open(),[Text.Encoding]::UTF8)
     try {$packageManifest=$reader.ReadToEnd() | ConvertFrom-Json}finally{$reader.Dispose()}
   } finally {$zip.Dispose()}
-  if($packageManifest.version -notmatch '^\d+\.\d+\.\d+(-(alpha|beta|rc)(\.\d+)?)?$'){throw 'Invalid package manifest version'}
+  if($packageManifest.version -notmatch '^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(-(alpha|beta|rc)(\.(?:0|[1-9][0-9]*))?)?$'){throw 'Invalid package manifest version'}
   $version=$packageManifest.version
   $package=@{path=$archivePath;bytes=(Get-Item -LiteralPath $archivePath).Length;sha256=(Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash;manifestVersion=$version}
 }
@@ -53,7 +53,7 @@ $gitCommit=(& git -C $project rev-parse HEAD).Trim()
 $gitStatus=@(& git -C $project status --porcelain=v1 --untracked-files=normal)
 if($RequireClean -and $gitStatus.Count){throw 'The source tree is not clean'}
 $runId=(Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssfffZ')+'-'+[guid]::NewGuid().ToString('N').Substring(0,8)
-$staging=Join-Path $project ".build/evidence-staging/$runId"
+$staging=Join-Path (Get-EvidencePendingRoot $project) "staging/$runId"
 $localRun=Join-Path $root "runs/$version/$runId"
 $log=Join-Path $staging 'output.log'
 $runtime=$null
@@ -84,7 +84,8 @@ if($Kind -in @('Package','OnlineDeployment')){
   $harness=@{archive='harness.zip';files='harness-manifest.json';commit=$gitCommit;workingTree=$gitStatus}
   $Arguments+=@('-ResultPath',(Join-Path $staging 'deployment-results.json'))
 }
-$buildRoot=[IO.Path]::GetFullPath((Join-Path $project '.build')).TrimEnd('\')
+$buildRoot=[IO.Path]::GetFullPath((Join-Path (Get-EvidencePendingRoot $project) 'deployment-runs')).TrimEnd('\')
+New-Item -ItemType Directory -Path $buildRoot -Force | Out-Null
 $buildBefore=@(Get-ChildItem -LiteralPath $buildRoot -Directory -Force | ForEach-Object {$_.FullName})
 $originalLocation=Get-Location;$previousPreference=$ErrorActionPreference
 $exitCode=1
@@ -171,7 +172,7 @@ $manifest=[ordered]@{
   retention='permanent-local-evidence; no automatic deletion'
 }
 [IO.File]::WriteAllText((Join-Path $staging 'manifest.json'),($manifest | ConvertTo-Json -Depth 12), (New-Object Text.UTF8Encoding($false)))
-& (Join-Path $PSScriptRoot 'test-storage.ps1') -Action Commit -Source $staging -Destination $localRun
+$localRun=& (Join-Path $PSScriptRoot 'test-storage.ps1') -Action Commit -Source $staging -Destination $localRun
 foreach($sandbox in $sandboxEvidence){
   $target=[IO.Path]::GetFullPath($sandbox.path)
   if((Split-Path -Parent $target) -ne $buildRoot -or (Split-Path -Leaf $target) -notmatch '^(deployment-test|verify)-[a-f0-9]{32}$'){throw 'Invalid sandbox cleanup target'}

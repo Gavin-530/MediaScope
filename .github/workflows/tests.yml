@@ -27,7 +27,21 @@ jobs:
         with:
           persist-credentials: false
       - name: Prepare locked runtime and execute strict full regression
+        id: regression
         timeout-minutes: 75
         run: ./scripts/run-ci-tests.ps1
-      # Artifact export/upload awaits explicit approval of the evidence scope.
-      # No upload-artifact action and no local archive transfer are enabled.
+      - name: Export this run's original evidence
+        if: always()
+        env:
+          TEST_STEP_OUTCOME: ${{ steps.regression.outcome }}
+        run: ./scripts/export-github-test-evidence.ps1 -TestStepOutcome $env:TEST_STEP_OUTCOME
+      - name: Preserve this run's evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mediascope-test-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence-archive/pending/cloud-export/bundle.zip
+          retention-days: 90
+          compression-level: 0
+          if-no-files-found: error
+          overwrite: false

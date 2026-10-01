@@ -15,7 +15,7 @@ if(!['full','core','browser'].includes(suite))throw Error('Suite must be full, c
 if(release&&(suite!=='full'||ref))throw Error('--release requires the full suite against the clean current checkout');
 if(!Number.isSafeInteger(maxLogMiB)||maxLogMiB<1||maxLogMiB>256||!Number.isSafeInteger(warnTotalMiB)||warnTotalMiB<1)throw Error('Invalid evidence size limit');
 const id=new Date().toISOString().replace(/[-:.]/g,'')+'-'+randomUUID().slice(0,8);
-const work=path.join(project,'.build','test-runs',id),source=path.join(work,'source'),evidence=path.join(work,'evidence');
+const work=path.join(project,'evidence-archive','pending','test-runs',id),source=path.join(work,'source'),evidence=path.join(work,'evidence');
 const sha=b=>createHash('sha256').update(b).digest('hex');
 const git=(...a)=>execFileSync('git',['-C',project,...a],{encoding:'utf8',windowsHide:true}).trim();
 const psFile=path.join(project,'scripts','test-storage.ps1');
@@ -31,7 +31,7 @@ const run=(exe,a,options={})=>new Promise((resolve,reject)=>{
 });
 ps('Validate','-Source',work);
 await fs.mkdir(path.dirname(work),{recursive:true});
-const lockPath=path.join(project,'.build','test-run.lock');
+const lockPath=path.join(project,'evidence-archive','pending','test-run.lock');
 const lock=await fs.open(lockPath,'wx').catch(()=>{throw Error('Another test run is active, or an interrupted test-run.lock needs inspection')});
 await lock.writeFile(JSON.stringify({pid:process.pid,runId:id,started:new Date().toISOString()}));
 let gate,exitCode=2,version=JSON.parse(await fs.readFile(path.join(project,'package.json'),'utf8')).version,output='',events=[],preflight={},command;
@@ -64,15 +64,16 @@ try {
   if(ref)execFileSync('powershell.exe',['-NoProfile','-Command',"$p=$env:MEDIASCOPE_HARNESS_TARGET; $root=$env:MEDIASCOPE_SANDBOX; if([IO.Path]::GetFullPath($p).StartsWith([IO.Path]::GetFullPath($root)+'\\')){if(Test-Path -LiteralPath $p){Remove-Item -LiteralPath $p -Recurse -Force}}else{throw 'Invalid harness target'}"],{env:{...process.env,MEDIASCOPE_HARNESS_TARGET:path.join(source,'test'),MEDIASCOPE_SANDBOX:work},windowsHide:true});
   await copy(path.join(project,'test'),path.join(source,'test'));
   await copy(path.join(project,'scripts','check-environment.mjs'),path.join(source,'scripts','check-environment.mjs'));
-  const harnessScripts=['test.mjs','test-storage.ps1','evidence-lib.ps1','local-data.ps1','github-evidence-lib.ps1','import-github-test-evidence.ps1','run-ci-tests.ps1'];
+  const harnessScripts=['test.mjs','test-storage.ps1','evidence-lib.ps1','local-data.ps1','github-evidence-lib.ps1','import-github-test-evidence.ps1','run-ci-tests.ps1','export-github-test-evidence.ps1','sync-github-test-evidence.mjs','migrate-test-evidence.ps1','organize-test-evidence.ps1','list-test-evidence.ps1','verify-test-evidence.ps1'];
   for(const name of harnessScripts)await copy(path.join(project,'scripts',name),path.join(source,'scripts',name));
+  await copy(path.join(project,'docs','evidence-archive-template.md'),path.join(source,'docs','evidence-archive-template.md'));
   await copy(path.join(project,'package-lock.json'),path.join(source,'harness-package-lock.json'));
   const sourceFiles=[];for(const file of await files(source)){const b=await fs.readFile(file);sourceFiles.push({path:path.relative(source,file).replaceAll('\\','/'),bytes:b.length,sha256:sha(b)})}
   await json(path.join(evidence,'source-manifest.json'),sourceFiles);
-  manifest.harness.files=sourceFiles.filter(x=>x.path.startsWith('test/')||[...harnessScripts.map(x=>'scripts/'+x),'scripts/check-environment.mjs','harness-package-lock.json'].includes(x.path));
+  manifest.harness.files=sourceFiles.filter(x=>x.path.startsWith('test/')||[...harnessScripts.map(x=>'scripts/'+x),'scripts/check-environment.mjs','harness-package-lock.json','docs/evidence-archive-template.md'].includes(x.path));
   ps('Zip','-Source',source,'-Destination',path.join(evidence,'source.zip'));
   version=JSON.parse(await fs.readFile(path.join(source,'package.json'),'utf8')).version;
-  if(!/^\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)(?:\.\d+)?)?$/.test(version))throw Error('Invalid application version');
+  if(!/^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-(?:alpha|beta|rc)(?:\.(?:0|[1-9][0-9]*))?)?$/.test(version))throw Error('Invalid application version');
   const runtime=JSON.parse(await fs.readFile(path.join(source,'runtime-lock.json'),'utf8'));
   const component=runtime.components.find(x=>x.name==='ffmpeg');
   const privateRoot=path.join(process.env.MEDIASCOPE_HOME||path.join(process.env.LOCALAPPDATA,'MediaScope'),'runtimes',component.sha256);
@@ -114,6 +115,8 @@ try {
 }catch(e){output+='\n'+e.stack+'\n';manifest.blockedReason=e.message;console.error(e.message)}
 finally {
   try {
+    Object.assign(manifest,{version,endedAt:new Date().toISOString(),exitCode,command});
+    await json(path.join(evidence,'manifest.json'),manifest);
     // Retain actual measurements and recipes, never reproducible encoded media/runtime copies.
     const generated=path.join(source,'test-work');let artifacts=[];
     try{artifacts=await files(generated)}catch(e){if(e.code!=='ENOENT')throw e}
@@ -125,14 +128,14 @@ finally {
     if(log.length>maxLogMiB*1024*1024)throw Error('Compressed log exceeds size limit; full log retained in sandbox');
     await fs.unlink(path.join(evidence,'output.log')).catch(e=>{if(e.code!=='ENOENT')throw e});
     try{const b=await fs.readFile(path.join(evidence,'events.jsonl'));await fs.writeFile(path.join(evidence,'events.jsonl.gz'),gzipSync(b));await fs.unlink(path.join(evidence,'events.jsonl'))}catch(e){if(e.code!=='ENOENT')throw e}
-    Object.assign(manifest,{version,endedAt:new Date().toISOString(),exitCode,command,environment:preflight,retention:manifest.github?'temporary GitHub runner; artifact 90 days; permanent only after verified local import':'permanent local evidence; no automatic deletion',log:{file:'output.log.gz',compression:'gzip',storedBytes:log.length,sha256:sha(log),maximumStoredMiB:maxLogMiB}});
+    Object.assign(manifest,{version,endedAt:new Date().toISOString(),exitCode,command,environment:preflight,retention:manifest.github?'temporary GitHub runner; export/upload required; permanent only after verified local import':'permanent local evidence; no automatic deletion',log:{file:'output.log.gz',compression:'gzip',storedBytes:log.length,sha256:sha(log),maximumStoredMiB:maxLogMiB}});
     await json(path.join(evidence,'manifest.json'),manifest);
     // A lock/ledger error is never bypassed with an unverified archive write.
     if(!gate||gate.exitCode!==null||gate.signalCode!==null)throw Error('Evidence lock unavailable; retained sandbox for recovery');
-    const destination=path.join(project,'local-test-archive','runs',version,id);
-    console.log(ps('Commit','-Source',evidence,'-Destination',destination).trim());
-    console.log('Evidence: '+destination);console.log(ps('Clean','-Source',work).trim());
-    let totalBytes=0;for(const file of await files(path.join(project,'local-test-archive')))totalBytes+=(await fs.stat(file)).size;
+    const destination=path.join(project,'evidence-archive','runs',version,id);
+    const archived=ps('Commit','-Source',evidence,'-Destination',destination).trim();
+    console.log('Evidence: '+archived);console.log(ps('Clean','-Source',work).trim());
+    let totalBytes=0;for(const file of await files(path.join(project,'evidence-archive')))totalBytes+=(await fs.stat(file)).size;
     if(totalBytes>warnTotalMiB*1024*1024)console.warn(`Evidence exceeds ${warnTotalMiB} MiB; records remain protected`);
   }catch(e){exitCode=2;console.error('Evidence/cleanup failed: '+e.stack+'\nRetained: '+work)}
   if(gate){gate.stdin.end('\n');if(gate.exitCode===null&&gate.signalCode===null)await new Promise(resolve=>gate.once('exit',resolve))}

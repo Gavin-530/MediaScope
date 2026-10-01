@@ -14,6 +14,6 @@
     {"id":"sidebar","purpose":"异步报告侧边栏目标真实存在；无此功能的旧版本明确跳过","files":["test/browser.test.mjs"],"names":"\\[sidebar\\]"},
     {"id":"compact-task","purpose":"实际失败状态不得显示上一任务阶段；旧版本明确跳过","files":["test/browser.test.mjs"],"names":"\\[compact-task\\]"},
     {"id":"themes","purpose":"真实报告的原始文字/说明/逐帧详情，以及主题切换后的可用按钮对比度","files":["test/browser.test.mjs"],"names":"\\[theme\\]"},
-    {"id":"test-system","purpose":"证据状态协议与发布门槛；不计作媒体测量验证","files":["test/test-system.test.mjs"],"names":"\\[test-system\\]"}
+    {"id":"test-system","purpose":"证据状态协议与发布门槛；不计作媒体测量验证","files":["test/test-system.test.mjs","test/archive-layout.test.mjs"],"names":"\\[test-system\\]"}
   ]
 }

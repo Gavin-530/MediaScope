@@ -6,35 +6,40 @@
 
 | 路径 | 分类与处理 |
 | --- | --- |
-| `local-test-archive/` | 唯一长期测试/维护归档；永久保留，清理工具拒绝删除 |
-| `.mediascope/` | 源码运行的用户报告、任务输入和失败资料；永久保留 |
-| `test-work/acceptance-20260921/` | 历史性能验收资料；保留原文件与 `SHA256SUMS.txt` |
-| `releases/` | 本机历史版本 ZIP；永久保留，与 GitHub Release 独立管理 |
-| `.build/downloads/` | 可重建运行时下载缓存；默认保留，须显式选择 Downloads 才清理 |
-| `.build/test-runs/`、`.build/evidence-staging/` | 运行中或待处理证据；归档失败、中断时保留，不能当缓存删除 |
-| `test-work/` 已知生成项 | 先确认完整快照与当前文件一致，再回收；验收资料和未知项保留 |
-| `.build/` 已知打包/部署沙箱 | 对应 ZIP 或必要诊断已保留并校验后才回收；未知项保留 |
-| `node_modules/` | 锁定的开发依赖，可由 `npm ci --ignore-scripts` 重建，不属于长期证据 |
+| `evidence-archive/` | 唯一长期测试/维护证据入口；永久保留，清理工具拒绝删除 |
+| `evidence-archive/pending/` | 运行中、待导入、中断证据和锁；不自动删除 |
+| `evidence-archive/legacy/local-test-archive/` | 尚未整理的旧档案暂存位置，仍受保护；整理后原文件进入各分类的 original，原 catalog 保存为校验快照 |
+| `local-test-archive/` | 未迁移时仍保护；迁移后不再写入 |
+| `.mediascope/` | 用户报告、任务输入和失败资料；永久保留 |
+| `test-work/acceptance-20260921/` | 历史验收原始资料；永久保留 |
+| `releases/` | 本机历史版本 ZIP；永久保留 |
+| `.build/downloads/` | 可重建下载缓存；默认保留，须显式选择 Downloads 才清理 |
+| `.build/` | 构建缓存及可重建打包沙箱；对应发布包/诊断已保存后才清理；未知项保留 |
+| `test-work/` 已知生成项 | 完整快照验证一致后才能回收；验收资料和未知项保留 |
+| `node_modules/` | 锁定开发依赖，可由 npm ci --ignore-scripts 重建 |
 
-测试记录、用户报告、生成素材、缓存、开发依赖和本地 ZIP 被 Git 忽略，不自动上传，也不进入安装包；测试代码与本规范可以随源码提交。历史审查报告留在本地归档，不在根目录重复保存。
+构建、测试活动停止后才清理其工作目录。运行日志和中断证据保存在受保护的 pending；不以“不是源码”为删除依据。永久保留资料、依赖、缓存和本地 ZIP 被 Git 忽略，不进入安装包。本机档案不自动上传。
 
-## 统一命名
+## 归档结构与命名
 
-| 对象 | 格式 |
-| --- | --- |
-| 规则文档 | `docs/<小写名称>.md`，多词用连字符；`README.md` 和 GitHub 模板沿用约定文件名 |
-| 产品测试记录 | `local-test-archive/runs/<版本>/<运行编号>/` |
-| 运行编号 | `yyyyMMddTHHmmssfffZ-<8 位小写十六进制随机号>`；UTC、毫秒精度 |
-| 维护记录 | `local-test-archive/<类别>-<运行编号>/`；不带产品版本，不计作产品通过数 |
-| GitHub 证据包 | `local-test-archive/github-actions-<运行编号>/`；内部原始测试记录保留版本及编号，以 GitHub 运行编号/重跑次数去重 |
-| 发布 Tag / 标题 / ZIP | 统一见[发布规范](releasing.md) |
-| 用户导出文件 | 按任务/素材与本地时间命名，见 [README](../README.md#报告与资源边界)；与测试归档 UTC 编号用途不同 |
+统一目录说明及时间精度规则见[归档入口模板](evidence-archive-template.md)。产品记录按来源进入 tests/local 或 tests/github-actions；维护进入 maintenance，素材快照进入 fixtures。产品与素材目录为 时间部分-8位编号，维护为 时间部分_事项_8位编号。时间部分按原编号保留毫秒、秒、日期或 undated；带 Z 的时刻为 UTC，仅日期不自动指定时区。不能补小数、补零点或用当前归档时间冒充原运行时间。编号时间、实际运行开始和清单创建时间分别保留，版本、提交和类型在清单中表达。
 
-历史归档、验收目录和已保留版本包保持原名、原内容；不为统一外观重写旧证据。新运行目录的格式由校验器检查。
+非证据文件沿用现有命名：规则文档为 docs/<小写名称>.md；README 和 GitHub 模板沿用约定名称；Tag、标题、ZIP 见[发布规范](releasing.md)，用户导出见 README。
+
+每份新记录有 README.md、record.json、original/ 和 SHA256SUMS.txt。新封装 schema 3 明确保存编号时间的值、表示精度、时区与来源；旧封装 schema 1/2 不改写。original 保存原始证据，按其原 schema 解读；封存不意味着产品通过。GitHub 导入另保留 bundle.zip；通过 Actions 外层 ZIP 下载时还保留 artifact.zip。重跑、更正、失败分别保存，禁止覆盖旧记录。全部封存记录登记 catalog.json；pending 不计作产品通过数。
+
+历史档案按原 schema 验证，不补造缺失证据、不改变原字节。迁移先预览，校验全部原文件后按内容分类并记录维护审计；旧索引作为原字节快照保存在维护归档中。已封存的旧维护记录仅改目录名，原清单中的旧路径保留为身份，当前路径在 catalog 与整理映射中登记：
+
+```powershell
+npm run evidence:migrate
+npm run evidence:migrate -- -Apply
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/organize-test-evidence.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/organize-test-evidence.ps1 -Apply
+npm run evidence:list
+npm run evidence:verify
+```
 
 ## 检查与清理
-
-在项目根目录执行：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/local-data.ps1 -Action Status
@@ -42,10 +47,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/local-data.ps1 -Acti
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/local-data.ps1 -Action Clean -Category TestGenerated
 ```
 
-`Clean` 默认预览，核对每个目标后加 `-Apply` 才执行。其他类别为 `BuildStages`、`Downloads`。执行前检查项目边界、目录链接、永久保留路径、证据校验及相关进程/记录锁；未知路径不自动删除。
+Clean 默认预览，核对后加 -Apply；其他类别为 BuildStages、Downloads。执行前检查项目边界、目录链接、永久保护、证据校验和记录锁。未知路径不自动删除。
 
-已知测试生成项必须与已登记快照的完整文件数、路径、大小和 SHA-256 一致。不同候选可由不同快照覆盖，单个候选须完整匹配一份快照。有新增/变化或没有快照时，先运行 `scripts/archive-test-generated.ps1`，校验后再清理。历史构建目录可用 `scripts/maintain-build.ps1` 预览；加 `-Apply` 会先归档诊断和清理清单，再回收已识别目录。旧 `scripts/cleanup.ps1` 同样默认预览。
+生成项必须与一份已登记快照的完整文件数、路径、大小和 SHA-256 一致；不同候选可分别匹配不同快照。有变化或无快照时先运行 scripts/archive-test-generated.ps1。scripts/maintain-build.ps1 的 -Apply 先归档诊断和清理清单，再回收已识别历史构建目录。
 
-各记录的 `SHA256SUMS.txt` 与总 `catalog.json` 检测文件变化、整份记录缺失及未完成归档；失败不能被重跑成功覆盖。异常时保留原记录并新增说明，不自动修复或删证据。
+SHA256SUMS.txt 与 catalog.json 检测文件变化、记录缺失及未登记记录。正常校验列出 pending；使用 verify-test-evidence.ps1 -RequireComplete 可拒绝未完成项。失败不能被后来成功覆盖；恢复只处理证据，不增加产品通过数。
 
-永久保留是清理策略，不是异地备份。数据仍在项目目录内，校验不能恢复删除、磁盘损坏或 `git clean -fdx` 造成的丢失；长期保存需另行备份项目的本地数据。测试记录内容和恢复入口见[测试规范](testing.md)。
+永久保留是清理策略，不是备份。另行备份 evidence-archive、用户报告、验收资料和 releases；校验不能恢复磁盘损坏或误删。
