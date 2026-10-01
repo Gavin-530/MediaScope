@@ -23,5 +23,5 @@ test('[test-system] collaborator import preserves provenance, deduplicates and r
   await mkdir('test-work',{recursive:true});
   const work=await mkdtemp(path.resolve('test-work/local-import-'));
   const output=execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',path.resolve('test/helpers/local-import-protocol.ps1'),'-Work',work],{encoding:'utf8',windowsHide:true,timeout:60000});
-  assert.equal(output.split(/\r?\n/).filter(x=>x.startsWith('PASS:')).length,9,output);
+  assert.equal(output.split(/\r?\n/).filter(x=>x.startsWith('PASS:')).length,13,output);
 });

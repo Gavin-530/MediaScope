@@ -22,7 +22,7 @@ const psFile=path.join(project,'scripts','test-storage.ps1');
 const psArgs=(action,...extra)=>['-NoProfile','-ExecutionPolicy','Bypass','-File',psFile,'-Action',action,...extra];
 const ps=(action,...extra)=>execFileSync('powershell.exe',psArgs(action,...extra),{encoding:'utf8',windowsHide:true,maxBuffer:8*1024*1024});
 const json=async(file,value)=>{await fs.mkdir(path.dirname(file),{recursive:true});await fs.writeFile(file,JSON.stringify(value,null,2)+'\n')};
-async function files(dir){const out=[];for(const e of await fs.readdir(dir,{withFileTypes:true})){if(e.isSymbolicLink())throw Error('Linked source/evidence entry: '+e.name);const p=path.join(dir,e.name);if(e.isDirectory())out.push(...await files(p));else if(e.isFile())out.push(p)}return out.sort()}
+async function files(dir,{excludeTopLevel=[]}={}){const out=[];for(const e of await fs.readdir(dir,{withFileTypes:true})){if(excludeTopLevel.includes(e.name))continue;if(e.isSymbolicLink())throw Error('Linked source/evidence entry: '+e.name);const p=path.join(dir,e.name);if(e.isDirectory())out.push(...await files(p));else if(e.isFile())out.push(p)}return out.sort()}
 async function copy(from,to){await fs.mkdir(path.dirname(to),{recursive:true});await fs.cp(from,to,{recursive:true,dereference:false,errorOnExist:false})}
 const run=(exe,a,options={})=>new Promise((resolve,reject)=>{
   const child=spawn(exe,a,{windowsHide:true,...options});let stdout='',stderr='';
@@ -64,13 +64,15 @@ try {
   if(ref)execFileSync('powershell.exe',['-NoProfile','-Command',"$p=$env:MEDIASCOPE_HARNESS_TARGET; $root=$env:MEDIASCOPE_SANDBOX; if([IO.Path]::GetFullPath($p).StartsWith([IO.Path]::GetFullPath($root)+'\\')){if(Test-Path -LiteralPath $p){Remove-Item -LiteralPath $p -Recurse -Force}}else{throw 'Invalid harness target'}"],{env:{...process.env,MEDIASCOPE_HARNESS_TARGET:path.join(source,'test'),MEDIASCOPE_SANDBOX:work},windowsHide:true});
   await copy(path.join(project,'test'),path.join(source,'test'));
   await copy(path.join(project,'scripts','check-environment.mjs'),path.join(source,'scripts','check-environment.mjs'));
-  const harnessScripts=['test.mjs','test-storage.ps1','evidence-lib.ps1','local-data.ps1','github-evidence-lib.ps1','import-github-test-evidence.ps1','import-local-test-evidence.ps1','run-ci-tests.ps1','export-github-test-evidence.ps1','sync-github-test-evidence.mjs','migrate-test-evidence.ps1','organize-test-evidence.ps1','list-test-evidence.ps1','verify-test-evidence.ps1'];
+  const harnessScripts=['test.mjs','test-storage.ps1','evidence-lib.ps1','local-data.ps1','github-evidence-lib.ps1','import-github-test-evidence.ps1','run-ci-tests.ps1','export-github-test-evidence.ps1','sync-github-test-evidence.mjs','migrate-test-evidence.ps1','organize-test-evidence.ps1','list-test-evidence.ps1','verify-test-evidence.ps1'];
   for(const name of harnessScripts)await copy(path.join(project,'scripts',name),path.join(source,'scripts',name));
+  const importerPath='evidence-archive/tools/import-local-test-evidence.ps1';
+  await copy(path.join(project,importerPath),path.join(source,importerPath));
   await copy(path.join(project,'docs','evidence-archive-template.md'),path.join(source,'docs','evidence-archive-template.md'));
   await copy(path.join(project,'package-lock.json'),path.join(source,'harness-package-lock.json'));
   const sourceFiles=[];for(const file of await files(source)){const b=await fs.readFile(file);sourceFiles.push({path:path.relative(source,file).replaceAll('\\','/'),bytes:b.length,sha256:sha(b)})}
   await json(path.join(evidence,'source-manifest.json'),sourceFiles);
-  manifest.harness.files=sourceFiles.filter(x=>x.path.startsWith('test/')||[...harnessScripts.map(x=>'scripts/'+x),'scripts/check-environment.mjs','harness-package-lock.json','docs/evidence-archive-template.md'].includes(x.path));
+  manifest.harness.files=sourceFiles.filter(x=>x.path.startsWith('test/')||[...harnessScripts.map(x=>'scripts/'+x),importerPath,'scripts/check-environment.mjs','harness-package-lock.json','docs/evidence-archive-template.md'].includes(x.path));
   ps('Zip','-Source',source,'-Destination',path.join(evidence,'source.zip'));
   version=JSON.parse(await fs.readFile(path.join(source,'package.json'),'utf8')).version;
   if(!/^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-(?:alpha|beta|rc)(?:\.(?:0|[1-9][0-9]*))?)?$/.test(version))throw Error('Invalid application version');
@@ -142,7 +144,7 @@ finally {
     const destination=path.join(project,'evidence-archive','runs',version,id);
     const archived=ps('Commit','-Source',evidence,'-Destination',destination).trim();
     console.log('Evidence: '+archived);console.log(ps('Clean','-Source',work).trim());
-    let totalBytes=0;for(const file of await files(path.join(project,'evidence-archive')))totalBytes+=(await fs.stat(file)).size;
+    let totalBytes=0;for(const file of await files(path.join(project,'evidence-archive'),{excludeTopLevel:['inbox','tools']}))totalBytes+=(await fs.stat(file)).size;
     if(totalBytes>warnTotalMiB*1024*1024)console.warn(`Evidence exceeds ${warnTotalMiB} MiB; records remain protected`);
   }catch(e){exitCode=2;console.error('Evidence/cleanup failed: '+e.stack+'\nRetained: '+work)}
   if(gate){gate.stdin.end('\n');if(gate.exitCode===null&&gate.signalCode===null)await new Promise(resolve=>gate.once('exit',resolve))}

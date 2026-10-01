@@ -222,7 +222,7 @@ function Test-EvidenceCatalogData($Root,$catalog) {
   if($catalog.schema -eq 2){
     foreach($item in Get-ChildItem -LiteralPath $Root -Force){
       if($item.Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Linked archive entry'}
-      if(($item.PSIsContainer -and $item.Name -notin @('tests','maintenance','fixtures','pending','legacy')) -or
+      if(($item.PSIsContainer -and $item.Name -notin @('tests','maintenance','fixtures','pending','legacy','inbox','tools')) -or
          (!$item.PSIsContainer -and $item.Name -notin @('README.md','catalog.json'))){throw 'Unexpected archive root entry'}
     }
     foreach($parent in @('tests','legacy')){

@@ -7,11 +7,13 @@ param(
 
 # Import sealed directories only. Never execute received code or rewrite evidence.
 $ErrorActionPreference='Stop'
-if(!$Project){$Project=Join-Path $PSScriptRoot '..'}
-. (Join-Path $PSScriptRoot 'evidence-lib.ps1')
+if(!$Project){$Project=Join-Path $PSScriptRoot '../..'}
+. (Join-Path $PSScriptRoot '../../scripts/evidence-lib.ps1')
 $project=[IO.Path]::GetFullPath($Project).TrimEnd('\')
-$inbox=Assert-EvidencePath $project (Join-Path $project 'evidence-inbox')
 $root=Get-EvidenceRoot $project
+$inbox=Assert-EvidencePath $project (Join-Path $root 'inbox')
+$script:receivedSkips=New-Object 'System.Collections.Generic.List[string]'
+$script:receivedCatalogs=New-Object 'System.Collections.Generic.List[object]'
 
 function Assert-ReceivedTree([string]$Path) {
   $full=Assert-EvidencePath $project $Path
@@ -40,18 +42,70 @@ function Move-ImportReceipt([string]$Source,[string]$Destination) {
   }
 }
 
+function Find-ReceivedRecords([string]$Path,[int]$Depth=0) {
+  $full=Assert-EvidencePath $project $Path
+  if($Depth -gt 24){throw 'Received wrappers are too deeply nested; no records imported'}
+  if(!(Test-Path -LiteralPath $full -PathType Container)){throw "Received directory missing: $full"}
+  if(Test-Path -LiteralPath (Join-Path $full 'record.json') -PathType Leaf){
+    Assert-ReceivedTree $full
+    $record=Get-Content -LiteralPath (Join-Path $full 'record.json') -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson
+    $null=Test-EvidenceRecord $full ([string]$record.path)
+    return @{source=$full;relative=[string]$record.path}
+  }
+  $catalogFile=Join-Path $full 'catalog.json'
+  if(Test-Path -LiteralPath $catalogFile -PathType Leaf){
+    $null=Assert-EvidencePath $project $catalogFile
+    $catalog=Get-Content -LiteralPath $catalogFile -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson
+    if($catalog.schema -ne 2 -or $null -eq $catalog.records){throw 'Received catalog must describe a modern sealed archive'}
+    Test-EvidenceLegacyCatalog $full $catalog
+    $sourceRecords=@(Get-EvidenceRecords $full)
+    $registered=@{}
+    foreach($entry in @($catalog.records)){
+      if(!$entry.path -or $registered.ContainsKey($entry.path)){throw 'Duplicate or invalid received catalog entry'}
+      $registered[$entry.path]=$entry.checksumsSha256
+    }
+    if($sourceRecords.Count -ne $registered.Count){throw 'Received catalog record count mismatch'}
+    foreach($item in $sourceRecords){
+      if(!(Test-Path -LiteralPath (Join-Path $item.source 'record.json') -PathType Leaf)){throw 'Received legacy records need sealed envelopes before import'}
+      Assert-ReceivedTree $item.source
+      $entry=Get-EvidenceCatalogEntry $item
+      if(!$registered.ContainsKey($item.relative) -or $registered[$item.relative] -ne $entry.checksumsSha256){throw "Received catalog checksum mismatch: $($item.relative)"}
+      $registered.Remove($item.relative)
+      $item
+    }
+    if($registered.Count){throw 'Received catalog contains missing records'}
+    $sourceRelative=$full.Substring($records.Length).TrimStart('\').Replace('\','/')
+    $script:receivedCatalogs.Add(@{path=$(if($sourceRelative){$sourceRelative}else{'.'});sha256=(Get-FileHash -LiteralPath $catalogFile).Hash})
+    foreach($directory in Get-ChildItem -LiteralPath $full -Directory -Force){
+      if($directory.Name -in @('inbox','pending','tools','receipts','evidence-inbox')){
+        # Do not enumerate these trees: they may contain further received archives or links.
+        $script:receivedSkips.Add($directory.FullName.Substring($records.Length+1).Replace('\','/'))
+      }elseif($directory.Name -eq 'evidence-archive'){
+        Find-ReceivedRecords $directory.FullName ($Depth+1)
+      }elseif($directory.Name -notin @('tests','maintenance','fixtures','legacy')){throw "Unexpected directory in received archive: $($directory.Name)"}
+    }
+    if(@(Get-ChildItem -LiteralPath $full -File -Force | Where-Object {$_.Name -notin @('README.md','catalog.json')}).Count){throw 'Unexpected file in received archive'}
+    return
+  }
+  if((Split-Path -Leaf $full) -eq 'evidence-archive' -and @(Get-ChildItem -LiteralPath $full -Directory -Force | Where-Object {$_.Name -in @('tests','maintenance','fixtures')}).Count){throw 'Received archive catalog missing'}
+  if(@(Get-ChildItem -LiteralPath $full -File -Force).Count){throw 'Put complete record or archive directories inside records; loose files are not accepted'}
+  foreach($directory in Get-ChildItem -LiteralPath $full -Directory -Force | Sort-Object Name){
+    if($directory.Name -in @('inbox','pending','tools','receipts','evidence-inbox')){
+      $script:receivedSkips.Add($directory.FullName.Substring($records.Length+1).Replace('\','/'))
+      continue
+    }
+    Find-ReceivedRecords $directory.FullName ($Depth+1)
+  }
+}
+
 function Get-ReceivedPlan([string]$Records) {
-  Assert-ReceivedTree $Records
-  if(@(Get-ChildItem -LiteralPath $Records -File -Force).Count){throw 'Put complete record directories inside records; loose files are not accepted'}
   $seen=@{}
-  foreach($directory in Get-ChildItem -LiteralPath $Records -Directory -Force | Sort-Object Name){
-    $recordFile=Join-Path $directory.FullName 'record.json'
-    if(!(Test-Path -LiteralPath $recordFile -PathType Leaf)){throw "Sealed record.json missing: $($directory.FullName)"}
+  foreach($item in @(Find-ReceivedRecords $Records)){
+    $recordFile=Join-Path $item.source 'record.json'
     $record=Get-Content -LiteralPath $recordFile -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson
-    $relative=[string]$record.path
-    $null=Test-EvidenceRecord $directory.FullName $relative
+    $relative=[string]$item.relative
     $destination=Assert-EvidencePath $project (Join-Path $root $relative)
-    $sum=(Get-FileHash -LiteralPath (Join-Path $directory.FullName 'SHA256SUMS.txt') -Algorithm SHA256).Hash
+    $sum=(Get-FileHash -LiteralPath (Join-Path $item.source 'SHA256SUMS.txt') -Algorithm SHA256).Hash
     $action='import'
     if($seen.ContainsKey($relative)){
       if($seen[$relative] -ne $sum){throw "Conflicting received identity: $relative"}
@@ -62,9 +116,10 @@ function Get-ReceivedPlan([string]$Records) {
       $action='duplicate'
     }
     $seen[$relative]=$sum
-    $manifestPath=Join-Path $directory.FullName 'original/manifest.json'
+    $manifestPath=Join-Path $item.source 'original/manifest.json'
     $manifest=if(Test-Path -LiteralPath $manifestPath){Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson}else{$null}
-    [pscustomobject]@{source=$directory.FullName;folder=$directory.Name;relative=$relative;destination=$destination;checksumsSha256=$sum;action=$action;sourceCommit=$manifest.source.commit;github=$record.github}
+    $sourceRelative=$item.source.Substring($Records.Length).TrimStart('\').Replace('\','/')
+    [pscustomobject]@{source=$item.source;folder=$(if($sourceRelative){$sourceRelative}else{'.'});relative=$relative;destination=$destination;checksumsSha256=$sum;action=$action;sourceCommit=$manifest.source.commit;github=$record.github}
   }
 }
 
@@ -72,7 +127,8 @@ if(!$Batch){
   if($Apply){throw 'Apply requires -Batch and -Contributor'}
   $null=New-Item -ItemType Directory -Path $inbox -Force
   Write-Output "Inbox: $inbox"
-  Write-Output 'Place sealed record folders in evidence-inbox/<batch>/records/. Extract ZIPs yourself; do not copy a sender catalog over your own.'
+  Write-Output 'Place sealed records or entire evidence-archive folders in evidence-archive/inbox/<batch>/records/. Extract ZIPs yourself; never overwrite your own catalog.'
+  Write-Output 'Foreign inbox, pending and tools trees are skipped; only sealed records are merged.'
   Write-Output 'Preview: npm run evidence:import -- -Batch alice-20261001'
   Write-Output 'Import:  npm run evidence:import -- -Batch alice-20261001 -Contributor Alice -Apply'
   Get-ChildItem -LiteralPath $inbox -Directory -Force | Select-Object -ExpandProperty Name
@@ -90,8 +146,10 @@ try {
     catch{throw 'Evidence recording is active; import refused'}
     $null=Initialize-EvidenceArchive $project
   }
-  if(Test-Path -LiteralPath $root){$null=Test-EvidenceCatalog $root}
+  if(Test-Path -LiteralPath (Join-Path $root 'catalog.json')){$null=Test-EvidenceCatalog $root}
+  elseif(@(Get-EvidenceRecords $root).Count){throw 'Local archive catalog missing'}
   $plan=@(Get-ReceivedPlan $records)
+  foreach($skipped in $script:receivedSkips){Write-Output "Skipped received subtree (original retained): $skipped"}
   if(!$plan.Count){throw 'No sealed records in the selected batch'}
   $plan | Select-Object action,relative | Format-Table -AutoSize
   $new=@($plan | Where-Object {$_.action -eq 'import'})
@@ -101,7 +159,7 @@ try {
   $id=[DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ')+'-'+[guid]::NewGuid().ToString('N').Substring(0,8)
   $transaction=Assert-EvidencePath $project (Join-Path (Get-EvidencePendingRoot $project) ('local-import-'+$id))
   $null=New-Item -ItemType Directory -Path $transaction
-  $receipt=[ordered]@{schema=1;operation='local-evidence-import';batch=$Batch;contributor=$Contributor;receivedFrom='user-supplied; not independently authenticated';importedAtUtc=[DateTime]::UtcNow.ToString('o');records=@($plan | ForEach-Object {[ordered]@{folder=$_.folder;path=$_.relative;checksumsSha256=$_.checksumsSha256;action=$_.action;sourceCommit=$_.sourceCommit;github=$_.github}})}
+  $receipt=[ordered]@{schema=1;operation='local-evidence-import';batch=$Batch;contributor=$Contributor;receivedFrom='user-supplied; not independently authenticated';importedAtUtc=[DateTime]::UtcNow.ToString('o');skippedSubtrees=@($script:receivedSkips.ToArray());sourceCatalogs=@($script:receivedCatalogs.ToArray());records=@($plan | ForEach-Object {[ordered]@{folder=$_.folder;path=$_.relative;checksumsSha256=$_.checksumsSha256;action=$_.action;sourceCommit=$_.sourceCommit;github=$_.github}})}
   $utf8=New-Object Text.UTF8Encoding($false)
   [IO.File]::WriteAllText((Join-Path $transaction 'receipt.json'),($receipt | ConvertTo-Json -Depth 20),$utf8)
   $entries=@();$staged=@();$index=0

@@ -2,7 +2,7 @@
   "schema": 1,
   "rules": [
     {
-      "path": "evidence-inbox",
+      "path": "evidence-archive/inbox",
       "class": "protected",
       "reason": "Received collaborator archives and import receipts; never clean automatically"
     },
