@@ -203,7 +203,7 @@ const server=http.createServer(async(req,res)=>{
         if(!['done','cancelled','error'].includes(original.status)){send(res,409,{error:'只能重新排队已完成、取消或失败的任务'});return}
         const input=inputs.get(original.id);
         if(!input){send(res,409,{error:'原任务参数已丢失'});return}
-        const job=createJob(input);send(res,202,{id:job.id});return;
+        const job=createJob(input);pump();send(res,202,{id:job.id});return;
       }
       const match=url.pathname.match(/^\/api\/jobs\/([a-f0-9-]+)(\/report)?$/);
       if(match){const j=jobs.get(match[1]);if(!j){send(res,404,{error:'任务不存在'});return}
