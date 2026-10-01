@@ -144,10 +144,12 @@ function message(
       ? "总量待核验"
       : `${percent.toFixed(percent < 10 && percent % 1 ? 1 : 0)}%`;
   const track = $("#task-progress-track"),
-    bar = $("#task-progress-bar");
+    bar = $("#task-progress-bar"),
+    islandBar = $("#island-progress-bar");
   track.classList.toggle("indeterminate", !determinate);
   if (!bar.style) bar.style = {};
   bar.style.width = determinate ? percent + "%" : "";
+  if (islandBar) islandBar.style.width = determinate ? percent + "%" : "";
   track.ariaValueNow = determinate ? String(percent) : "";
   track.ariaValueMax = determinate ? "100" : "";
   const subtasks = Object.values(progress.subtasks || {});
@@ -214,18 +216,11 @@ function queueRow(j, position) {
     secondary = j.candidate ? " → " + fileName(j.candidate) : "";
   const pathText =
     (j.file || j.reference || "") + (j.candidate ? " → " + j.candidate : "");
-  const action =
-    j.status === "done"
-      ? "report"
-      : ["error", "cancelled"].includes(j.status)
-        ? "retry"
-        : "cancel";
-  const label = { report: "查看报告", retry: "重新排队", cancel: "取消" }[
-    action
-  ];
+  const action = ["done", "error", "cancelled"].includes(j.status) ? "retry" : "cancel";
+  const label = { retry: "重新排队", cancel: "取消" }[action];
   const stage =
     j.status === "running" ? j.progress?.stage || j.message : j.message;
-  return `<div class="queue-item">${j.status === "queued" ? `<input class="portable-check" type="checkbox" data-plan-select="${j.id}" aria-label="选择任务计划 ${esc(primary)}" ${selectedPlans.has(j.id) ? "checked" : ""}>` : ""}<div class="queue-item-main"><strong>${position ? position + ". " : ""}${esc(primary + secondary)}</strong><span class="queue-state">${esc(names[j.type])} · ${states[j.status]}</span><p class="queue-path" title="${esc(pathText)}">${esc(pathText)}</p><p class="queue-description">${esc(j.description || "")}${stage ? " · " + esc(stage) : ""}</p></div><button class="secondary" data-job="${j.id}" data-action="${action}">${label}</button></div>`;
+  return `<div class="queue-item">${j.status === "queued" ? `<input class="portable-check" type="checkbox" data-plan-select="${j.id}" aria-label="选择任务计划 ${esc(primary)}" ${selectedPlans.has(j.id) ? "checked" : ""}>` : ""}<div class="queue-item-main"><strong>${position ? position + ". " : ""}${esc(primary + secondary)}</strong><span class="queue-state">${esc(names[j.type])} · ${states[j.status]}</span><p class="queue-path" title="${esc(pathText)}">${esc(pathText)}</p><p class="queue-description">${esc(j.description || "")}${stage ? " · " + esc(stage) : ""}</p></div><button class="secondary" data-job="${j.id}" data-action="${j.status === 'done' ? 'report' : action}">${j.status === 'done' ? '查看报告' : label}</button>${j.status === 'done' ? `<button class="secondary" style="margin-left: 8px;" data-job="${j.id}" data-action="retry">重新排队</button>` : ''}</div>`;
 }
 function resultItems() {
   return [
@@ -809,6 +804,8 @@ $("#import-report").onchange = async (e) => {
     input.value = "";
   }
 };
+
+
 function download(text, name, type) {
   const count = downloadNames.get(name) || 0;
   downloadNames.set(name, count + 1);
@@ -1769,6 +1766,7 @@ if (taskEl) {
             <span id="island-brief-text">当前无任务</span>
           </div>
           <div class="island-queue">排队: <span id="island-q-count">0</span></div>
+          <div class="island-progress-track"><div id="island-progress-bar"></div></div>
         `;
   // Toggle expansion
   header.onclick = () => {
@@ -1796,9 +1794,155 @@ if (taskEl) {
           '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 14 10 14 10 20"></polyline><polyline points="20 10 14 10 14 4"></polyline><line x1="14" y1="10" x2="21" y2="3"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>';
         toggleBtn.title = "切换到紧凑视图";
       }
+      taskEl.classList.remove('tucked');
+      taskEl.style.removeProperty('left');
+      taskEl.style.removeProperty('top');
+      taskEl.style.removeProperty('right');
+      taskEl.style.removeProperty('bottom');
+      taskEl.style.removeProperty('position');
+      taskEl.style.removeProperty('margin');
+      taskEl.style.removeProperty('transition');
     };
+  }
+
+  let isDragging = false;
+  let startX, startY, initialLeft, initialTop;
+  let snapEnabled = true;
+  let hasDragged = false;
+
+  const snapBtn = document.getElementById("toggle-snap");
+  if (snapBtn) {
+    snapBtn.onclick = (e) => {
+      e.stopPropagation();
+      snapEnabled = !snapEnabled;
+      snapBtn.classList.toggle("active", snapEnabled);
+      if (snapEnabled && !isDragging) {
+         snapToEdge();
+      }
+    };
+  }
+
+  function snapToEdge() {
+    if (!snapEnabled) return;
+
+    const rect = taskEl.getBoundingClientRect();
+    const vWidth = document.documentElement.clientWidth;
+    const vHeight = document.documentElement.clientHeight;
+    const centerX = rect.left + rect.width / 2;
+
+    let targetLeft;
+    let targetTop = rect.top;
+    const edgeMargin = 20; // Keep a small margin from the edge
+
+    // Only snap left or right
+    if (centerX < vWidth / 2) {
+      targetLeft = edgeMargin;
+    } else {
+      targetLeft = vWidth - rect.width - edgeMargin;
+    }
+
+    // Keep vertical position within viewport
+    targetTop = Math.max(edgeMargin, Math.min(targetTop, vHeight - rect.height - edgeMargin));
+
+    taskEl.style.position = 'fixed';
+    taskEl.style.setProperty('right', 'auto', 'important');
+    taskEl.style.setProperty('bottom', 'auto', 'important');
+    taskEl.style.margin = '0';
+    taskEl.style.transition = 'left 0.3s ease, top 0.3s ease';
+    
+    // Slide to the target position
+    taskEl.style.setProperty('left', targetLeft + 'px', 'important');
+    taskEl.style.setProperty('top', targetTop + 'px', 'important');
+    
+    setTimeout(() => { taskEl.style.transition = ''; }, 300);
+  }
+
+  taskEl.onmousedown = (e) => {
+    if (e.button !== 0) return;
+    const target = e.target;
+    if (target.closest('button') || target.closest('input') || target.closest('select')) return;
+
+    startX = e.clientX;
+    startY = e.clientY;
+    isDragging = false;
+    hasDragged = false;
+    
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  };
+
+  function onMouseMove(e) {
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+
+    if (!isDragging) {
+      if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
+        isDragging = true;
+        hasDragged = true;
+        const rect = taskEl.getBoundingClientRect();
+        initialLeft = rect.left;
+        initialTop = rect.top;
+
+        taskEl.style.position = 'fixed';
+        taskEl.style.setProperty('left', initialLeft + 'px', 'important');
+        taskEl.style.setProperty('top', initialTop + 'px', 'important');
+        taskEl.style.setProperty('right', 'auto', 'important');
+        taskEl.style.setProperty('bottom', 'auto', 'important');
+        taskEl.style.margin = '0';
+        taskEl.style.transition = 'none';
+      } else {
+        return;
+      }
+    }
+
+    taskEl.style.setProperty('left', (initialLeft + dx) + 'px', 'important');
+    taskEl.style.setProperty('top', (initialTop + dy) + 'px', 'important');
+  }
+
+  function onMouseUp() {
+    document.removeEventListener('mousemove', onMouseMove);
+    document.removeEventListener('mouseup', onMouseUp);
+    
+    if (hasDragged && snapEnabled) {
+      setTimeout(snapToEdge, 50);
+    }
+    isDragging = false;
+    hasDragged = false;
   }
 
   syncTaskBrief();
   setInterval(syncTaskBrief, 300);
+}
+
+const themeToggleBtn = document.getElementById("theme-toggle");
+if (themeToggleBtn) {
+  const states = ["system", "light", "dark"];
+  const icons = {
+    system: document.getElementById("theme-icon-system"),
+    light: document.getElementById("theme-icon-light"),
+    dark: document.getElementById("theme-icon-dark")
+  };
+  
+  let currentTheme = localStorage.getItem("mediascope-theme") || "system";
+  
+  function applyTheme() {
+    if (currentTheme === "system") {
+      document.documentElement.removeAttribute("data-theme");
+    } else {
+      document.documentElement.setAttribute("data-theme", currentTheme);
+    }
+    
+    for (const [key, icon] of Object.entries(icons)) {
+      if (icon) icon.style.display = key === currentTheme ? "block" : "none";
+    }
+  }
+  
+  applyTheme();
+  
+  themeToggleBtn.onclick = () => {
+    const idx = states.indexOf(currentTheme);
+    currentTheme = states[(idx + 1) % states.length];
+    localStorage.setItem("mediascope-theme", currentTheme);
+    applyTheme();
+  };
 }

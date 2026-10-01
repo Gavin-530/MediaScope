@@ -158,9 +158,10 @@ export function plot(
       Math.max(1, Math.ceil(-Math.log10((hi - lo) / 4)) + 1),
     );
     c.fillStyle = "#98a7ba";
+    c.lineWidth = 1;
     for (let i = 0; i <= 4; i++) {
       const y = top + ((base - top) * i) / 4;
-      c.strokeStyle = "#2b3442";
+      c.strokeStyle = "rgba(128, 128, 128, 0.25)";
       c.beginPath();
       c.moveTo(left, y);
       c.lineTo(w - right, y);
@@ -193,12 +194,13 @@ export function plot(
         }
       }
     } else {
-      for (const group of series.length ? series : [{ color: "#80e1c4" }]) {
+      for (const group of series.length ? series : [{ color: "#10b981" }]) {
         const points = series.length
           ? visible.filter((p) => p[3] === group.id)
           : visible;
         c.strokeStyle = group.color;
         c.fillStyle = group.color;
+        c.lineWidth = 2;
         c.setLineDash(group.dash || []);
         for (const segment of finiteSegments(points)) {
           // Dense traces retain each pixel column's extrema; gaps stay separate.
@@ -245,6 +247,7 @@ export function plot(
       c.setLineDash([]);
     }
     c.fillStyle = "#98a7ba";
+    c.lineWidth = 1;
     const ticks = Math.max(1, Math.min(4, Math.floor((w - left - right) / 90))),
       xd = Math.min(
         6,
@@ -252,7 +255,7 @@ export function plot(
       );
     for (let i = 0; i <= ticks; i++) {
       const x = left + ((w - left - right) * i) / ticks;
-      c.strokeStyle = "#2b3442";
+      c.strokeStyle = "rgba(128, 128, 128, 0.25)";
       c.beginPath();
       c.moveTo(x, top);
       c.lineTo(x, base + 4);

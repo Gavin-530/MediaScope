@@ -7,6 +7,14 @@
     <title>MediaScope · 媒体分析</title>
     <link rel="stylesheet" href="style.css" />
     <script src="/app.js" type="module"></script>
+    <script>
+      try {
+        var theme = localStorage.getItem("mediascope-theme");
+        if (theme && theme !== "system") {
+          document.documentElement.setAttribute("data-theme", theme);
+        }
+      } catch(e){}
+    </script>
   </head>
 
   <body>
@@ -15,11 +23,18 @@
         <a class="brand" href="/">◧ MediaScope <span>LOCAL ANALYSIS</span></a>
         <span class="local">● 本机处理 · 原文件只读</span>
       </div>
-      <nav aria-label="工作模式" class="header-nav">
-        <button class="tab selected" data-mode="inspect">01 / 文件分析</button>
-        <button class="tab" data-mode="compare">02 / 质量对比</button>
-        <button class="tab" data-mode="trial">03 / 片段实验</button>
-      </nav>
+      <div class="header-right" style="display: flex; gap: 16px; align-items: center; flex-wrap: nowrap;">
+        <nav aria-label="工作模式" class="header-nav">
+          <button id="theme-toggle" class="theme-toggle-btn" title="切换主题: 系统/浅色/深色" style="display: flex; align-items: center; justify-content: center; width: 38px; padding: 0;">
+            <svg id="theme-icon-system" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
+            <svg id="theme-icon-light" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
+            <svg id="theme-icon-dark" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+          </button>
+          <button class="tab selected" data-mode="inspect">01 / 文件分析</button>
+          <button class="tab" data-mode="compare">02 / 质量对比</button>
+          <button class="tab" data-mode="trial">03 / 片段实验</button>
+        </nav>
+      </div>
     </header>
     <main>
       <div class="portable-controls">
@@ -449,6 +464,18 @@
       </div>
       <section id="task" class="task hidden task-banner" aria-live="polite">
         <button
+          id="toggle-snap"
+          class="toggle-btn snap-btn active"
+          title="切换边缘吸附"
+          aria-label="切换边缘吸附"
+        >
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" id="snap-icon">
+            <rect width="18" height="18" x="3" y="3" rx="2" ry="2"></rect>
+            <path d="M15 3v18"></path>
+            <path d="m8 9 3 3-3 3"></path>
+          </svg>
+        </button>
+        <button
           id="toggle-island"
           class="toggle-btn"
           title="切换视图模式"
@@ -548,7 +575,7 @@
       </section>
       <footer>
         <span id="environment">检测分析引擎…</span
-        ><span>MediaScope 0.1.10-beta · 测量与推断分开呈现</span>
+        ><span><span onclick="window.open('https://github.com/Gavin-530/MediaScope', '_blank')" style="cursor: pointer;">MediaScope 0.2.2</span></span>
       </footer>
     </main>
   </body>

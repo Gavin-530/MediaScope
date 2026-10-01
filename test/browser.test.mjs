@@ -211,6 +211,34 @@ scenario('[compact-task] an actual missing-file failure never reuses a hidden ph
   assert.doesNotMatch(await page.locator('#island-brief-text').textContent(),/阶段\s*\d/);
 });
 
+scenario('[theme] theme toggle overrides the system, survives reload and returns to following the system',async({page})=>{
+  const toggle=page.locator('#theme-toggle'),html=page.locator('html');
+  const background=()=>page.locator('body').evaluate(el=>getComputedStyle(el).backgroundColor);
+  assert.equal(await html.getAttribute('data-theme'),null);
+  assert.equal(await page.locator('#theme-icon-system').isVisible(),true);
+  const dark=await background();
+  await toggle.click();
+  assert.equal(await html.getAttribute('data-theme'),'light');
+  assert.equal(await page.locator('#theme-icon-light').isVisible(),true);
+  const light=await background();assert.notEqual(light,dark);
+  await toggle.click();
+  assert.equal(await html.getAttribute('data-theme'),'dark');
+  assert.equal(await page.locator('#theme-icon-dark').isVisible(),true);
+  await page.emulateMedia({colorScheme:'light'});
+  assert.equal(await background(),dark,'explicit dark mode overrides a light system');
+  await page.reload();
+  await page.waitForFunction(()=>document.querySelector('#environment')?.textContent.includes('ffmpeg version'));
+  assert.equal(await html.getAttribute('data-theme'),'dark');
+  assert.equal(await page.locator('#theme-icon-dark').isVisible(),true);
+  assert.equal(await background(),dark);
+  await toggle.click();
+  assert.equal(await html.getAttribute('data-theme'),null);
+  assert.equal(await page.locator('#theme-icon-system').isVisible(),true);
+  assert.equal(await background(),light);
+  await page.emulateMedia({colorScheme:'dark'});
+  assert.equal(await background(),dark,'system mode responds to an operating-system theme change');
+});
+
 scenario('[theme] actual report text and enabled actions remain readable in each advertised theme',async({t,page,app,dir})=>{
   const supported=await page.locator('html').evaluate(el=>getComputedStyle(el).colorScheme);
   const modes=supportedThemeModes(supported);
