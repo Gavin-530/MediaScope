@@ -13,8 +13,8 @@
     },
     {
       "path": "evidence-archive",
-      "class": "protected",
-      "reason": "Original test evidence; keep permanently"
+      "class": "mixed",
+      "reason": "Independent closed records may be deleted individually; pending and incoming originals are protected from broad cleanup"
     },
     {
       "path": ".mediascope",

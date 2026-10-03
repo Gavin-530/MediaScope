@@ -183,17 +183,19 @@ Copy-Item -LiteralPath (Get-EvidenceRoot $sender) -Destination $badArchive -Recu
 $badCatalog=Get-Content (Join-Path $badArchive 'catalog.json') -Raw|ConvertFrom-EvidenceJson
 $badCatalog.records[0].checksumsSha256='0'*64
 [IO.File]::WriteAllText((Join-Path $badArchive 'catalog.json'),($badCatalog|ConvertTo-Json -Depth 10),$utf8)
-Reject {& $importer -Project $receiver -Batch bad-catalog -Contributor Carol -Apply} 'Received catalog checksum mismatch'
+$damaged=@(Get-EvidenceRecords $badArchive|Where-Object {(Get-EvidencePayload $_).relative -like 'runs/*'})[0]
+[IO.File]::AppendAllText((Join-Path (Get-EvidencePayload $damaged).source 'output.log'),'damaged original')
+Reject {& $importer -Project $receiver -Batch bad-catalog -Contributor Carol -Apply} 'Checksum mismatch'
 if((Get-FileHash $catalog).Hash -ne $stableHash){throw 'Bad donor catalog changed local ledger'}
-Write-Output 'PASS: donor catalog integrity is checked without replacing the local index'
+Write-Output 'PASS: damaged donor records are rejected independently of their optional catalog'
 
 $missingParent=Join-Path $root 'inbox/missing-catalog/records/evidence-archive'
 $null=New-Item -ItemType Directory -Path (Join-Path $missingParent 'tests/local') -Force
 $null=Copy-Received no-catalog $local
 Copy-Item -LiteralPath $local -Destination (Join-Path $missingParent ('tests/local/'+(Split-Path -Leaf $local))) -Recurse
-Reject {& $importer -Project $receiver -Batch missing-catalog -Contributor Carol -Apply} 'Received archive catalog missing'
+& $importer -Project $receiver -Batch missing-catalog -Contributor Carol -Apply | Out-Null
 if((Get-FileHash $catalog).Hash -ne $stableHash){throw 'Missing donor catalog changed local ledger'}
-Write-Output 'PASS: an incomplete whole archive is rejected instead of silently importing unregistered data'
+Write-Output 'PASS: valid independent records import without a donor cache or duplicate audit'
 
 # User workflow: drop the complete archive directly into inbox, with no batch
 # or records directories prepared by the receiver.
@@ -237,7 +239,9 @@ Copy-Item -LiteralPath (Get-EvidenceRoot $sender) -Destination $badDrop -Recurse
 $badIndex=Get-Content (Join-Path $badDrop 'catalog.json') -Raw|ConvertFrom-EvidenceJson
 $badIndex.records[0].checksumsSha256='0'*64
 [IO.File]::WriteAllText((Join-Path $badDrop 'catalog.json'),($badIndex|ConvertTo-Json -Depth 10),$utf8)
-Reject {& $importer -Project $directReceiver -Contributor 'Bad sender' -Apply} 'Received catalog checksum mismatch'
+$damaged=@(Get-EvidenceRecords $badDrop|Where-Object {(Get-EvidencePayload $_).relative -like 'runs/*'})[0]
+[IO.File]::AppendAllText((Join-Path (Get-EvidencePayload $damaged).source 'output.log'),'damaged original')
+Reject {& $importer -Project $directReceiver -Contributor 'Bad sender' -Apply} 'Checksum mismatch'
 if((Get-FileHash $directCatalog).Hash -ne $directHash -or !(Test-Path $badDrop) -or !(Test-Path $validDrop)){throw 'Invalid direct package mutated intake or ledger'}
 Reject {& $importer -Project $directReceiver -Folder '../escape'} 'ParameterArgumentValidationError'
 & $importer -Project $directReceiver -Folder 'renamed archive' -Contributor 'Other sender' -Apply | Out-Null
@@ -292,6 +296,6 @@ $missingIndexFile=Join-Path $missingIndexDrop 'catalog.json'
 $indexSnapshot=Join-Path $workRoot 'renamed-archive-catalog.json'
 foreach($fixturePath in @($missingIndexFile,$indexSnapshot)){if(!([IO.Path]::GetFullPath($fixturePath)).StartsWith($workRoot+'\',[StringComparison]::OrdinalIgnoreCase)){throw 'Index fixture outside sandbox'}}
 Move-Item -LiteralPath $missingIndexFile -Destination $indexSnapshot
-Reject {& $importer -Project $aliasReceiver -Folder renamed-archive -Contributor 'Broken sender' -Apply} 'Received archive catalog missing'
-if((Get-FileHash (Join-Path $aliasRoot 'catalog.json')).Hash -ne $aliasHash -or !(Test-Path $missingIndexDrop)){throw 'Renaming an archive bypassed its required index'}
-Write-Output 'PASS: renamed flat archives still require their catalog and cannot masquerade as manual records wrappers'
+& $importer -Project $aliasReceiver -Folder renamed-archive -Contributor 'Sender without cache' -Apply | Out-Null
+if((Test-Path $missingIndexDrop) -or (Test-EvidenceCatalog $aliasRoot) -ne 7){throw 'Import without optional cache lost independent records'}
+Write-Output 'PASS: renamed flat archives import their independently validated records without a catalog dependency'

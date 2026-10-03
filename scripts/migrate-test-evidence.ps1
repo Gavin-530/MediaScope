@@ -48,7 +48,12 @@ try {
     $updated=@{schema=2;records=$entries;legacyCatalogSha256=($inventory|Where-Object {$_.path -eq 'catalog.json'}).sha256}|ConvertTo-Json -Depth 8
     $candidate=Join-Path $pending ('catalog.json.'+[guid]::NewGuid().ToString('N')+'.tmp')
     [IO.File]::WriteAllText($candidate,$updated,(New-Object Text.UTF8Encoding($false)))
-    [IO.File]::Replace($candidate,(Join-Path $root 'catalog.json'),[NullString]::Value)
+    # Windows scanners can briefly hold the destination. Keep the atomic swap
+    # and preserve the candidate on a lasting failure; never delete the index.
+    for($attempt=0;$attempt -lt 4;$attempt++){
+      try{[IO.File]::Replace($candidate,(Join-Path $root 'catalog.json'),[NullString]::Value);break}
+      catch{if($attempt -eq 3){throw};Start-Sleep -Milliseconds (150*($attempt+1))}
+    }
     $verified=Test-EvidenceCatalog $root
     if($verified -ne $before+$count){throw 'Migration record count mismatch'}
   }catch{

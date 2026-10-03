@@ -11,7 +11,7 @@ if(!(Test-Path -LiteralPath $testRoot)){throw 'No test-work directory to archive
 if((Get-Item -LiteralPath $testRoot -Force).Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Linked test-work root is forbidden'}
 
 function Is-GeneratedDirectory([string]$Name) {
-  return ($Name -match '^(bitdepth|server-reports|trial|trial-libaom-av1|trial-libx265|trials-expanded)$' -or
+  return ($Name -match '^(bitdepth|server-reports|trial|trial-libaom-av1|trial-libx265|trials-expanded|startup-desktop)$' -or
     $Name -match '^(metrics-equivalence|reference-cache|siti-parallel|structure-equivalence|vfr-equivalence)-[A-Za-z0-9]{6}$')
 }
 

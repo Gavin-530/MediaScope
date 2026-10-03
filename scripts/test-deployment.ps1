@@ -1,4 +1,11 @@
-param([string]$Archive,[switch]$Online,[string]$ResultPath)
+param([string]$Archive,[switch]$Online,[string]$ResultPath,[switch]$ManagedEvidence)
+# Direct invocations use the same recorder and cleanup as package verification.
+if(!$ManagedEvidence){
+  if($Online -and !$Archive){throw 'Online deployment recording requires -Archive'}
+  $kind=if($Online){'OnlineDeployment'}elseif($Archive){'Package'}else{'Deployment'}
+  & (Join-Path $PSScriptRoot 'record-test.ps1') -Kind $kind -Archive $Archive -ResultPath $ResultPath
+  exit $LASTEXITCODE
+}
 . (Join-Path $PSScriptRoot 'deployment.ps1')
 $script:checks=@()
 function Save-DeploymentResult([string]$Outcome,[string]$Failure) {

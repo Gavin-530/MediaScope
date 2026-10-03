@@ -16,18 +16,21 @@ $rows=@(foreach($record in Get-EvidenceRecords $root){
     $inner=Get-EvidencePayload $entry
     $mp=Join-Path $inner.source 'manifest.json'
     $app=if(Test-Path -LiteralPath $mp){Get-Content -LiteralPath $mp -Raw -Encoding UTF8| ConvertFrom-EvidenceJson}else{$null}
-    $product=($app -and $app.kind -in @('App','Package','OnlineDeployment','Custom'))
+    $product=($app -and $app.kind -in @('App','Package','Deployment','OnlineDeployment','Custom'))
+    $originPath=Join-Path $inner.source 'origin.json'
+    $ciStep=if($cloud){$m.testStepOutcome}elseif($app.github -and (Test-Path -LiteralPath $originPath)){(Get-Content -LiteralPath $originPath -Raw|ConvertFrom-EvidenceJson).testStepOutcome}else{$null}
     $started=if($app.startedAt){$app.startedAt}elseif($app.startedAtUtc){$app.startedAtUtc}elseif($app.createdAtUtc){$app.createdAtUtc}elseif($app.createdUtc){$app.createdUtc}else{$null}
     $beijing=Format-EvidenceBeijingTime $started
-    $precision=if($envelope.identifierTimePrecision){$envelope.identifierTimePrecision}else{'not-recorded'}
+    $precision=if($envelope.identifierTimePrecision){$envelope.identifierTimePrecision}elseif($app.evidenceRevision -eq 2){(Get-EvidenceRunTime $app.runId).precision}else{'not-recorded'}
+    $identifier=if($app.evidenceRevision -eq 2){Get-EvidenceRunTime $app.runId}else{$null}
     $passed=$null;$failed=$null
     if($product -and $app.testSummary){$passed=$app.testSummary.passed;$failed=$app.testSummary.failed}
     elseif($product -and $app.summary){$passed=if($null -ne $app.summary.passed){$app.summary.passed}else{$app.summary.pass};$failed=if($null -ne $app.summary.failed){$app.summary.failed}else{$app.summary.fail}}
-    [pscustomobject]@{Time=$beijing;IdentifierTime=$envelope.identifierTime;TimePrecision=$precision;TimeSource=$envelope.identifierTimeSource;Origin=$(if($app.github -or $cloud){'github-actions'}else{'local'});Version=$(if($product){$app.version}else{'n/a'});Kind=$(if($app){$app.kind}elseif($envelope){$envelope.kind}else{'legacy'});Outcome=$(if($product -and $app.outcome){$app.outcome}elseif($envelope){$envelope.outcome}else{'archived'});Passed=$passed;Failed=$failed;Scope=$app.scope;Validation=$app.validation.status;ValidationMode=$app.validation.mode;Run=$app.runId;GitHubRun=$app.github.runId;Attempt=$app.github.runAttempt;Path=$record.relative;Original=$inner.source}
+    [pscustomobject]@{Time=$beijing;IdentifierTime=$(if($identifier){$identifier.value}else{$envelope.identifierTime});TimePrecision=$precision;TimeSource=$(if($identifier){'run-identifier'}else{$envelope.identifierTimeSource});Origin=$(if($app.github -or $cloud){'github-actions'}else{'local'});Version=$(if($product){$app.version}else{'n/a'});Kind=$(if($app){$app.kind}elseif($envelope){$envelope.kind}else{'legacy'});Outcome=$(if($product -and $app.outcome){$app.outcome}elseif($envelope){$envelope.outcome}else{'archived'});CIStep=$ciStep;Passed=$passed;Failed=$failed;Scope=$app.scope;Validation=$app.validation.status;ValidationMode=$app.validation.mode;Run=$app.runId;GitHubRun=$app.github.runId;Attempt=$app.github.runAttempt;Path=$record.relative;Original=$inner.source}
   }
 })
 $rows=@($rows | Where-Object {(!$Origin -or $_.Origin -eq $Origin) -and (!$Version -or $_.Version -eq $Version) -and (!$Outcome -or $_.Outcome -eq $Outcome)} | Sort-Object Time,Path)
 if($Json){ConvertTo-Json -InputObject $rows -Depth 5}else{
-  $rows | Select-Object Time,TimePrecision,Origin,Version,Kind,Outcome,Passed,Failed,Scope,Validation,ValidationMode,Path | Format-Table -AutoSize | Out-String -Width 300 | Write-Output
+  $rows | Select-Object Time,TimePrecision,Origin,Version,Kind,Outcome,CIStep,Passed,Failed,Scope,Validation,ValidationMode,Path | Format-Table -AutoSize | Out-String -Width 300 | Write-Output
   Write-Output 'Run npm run evidence:verify to check integrity. pending/ is preserved separately.'
 }

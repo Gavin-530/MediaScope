@@ -6,12 +6,12 @@ $project=[IO.Path]::GetFullPath($Work).TrimEnd('\')
 if(!$project.StartsWith((Join-Path $sourceProject 'test-work')+'\',[StringComparison]::OrdinalIgnoreCase)){throw 'Protocol fixture outside test sandbox'}
 New-Item -ItemType Directory -Force -Path $project | Out-Null
 
-# Load the real path/snapshot validators without invoking the cleanup CLI.
+# Load the real path/cleanup validators without invoking the cleanup CLI.
 # This deliberately never disables its process guard or deletes any evidence.
 $tokens=$null;$parseErrors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $sourceProject 'scripts/local-data.ps1'),[ref]$tokens,[ref]$parseErrors)
 if($parseErrors){throw 'Invalid maintenance script'}
-foreach($name in @('Assert-Contained','Get-SafeFiles','Assert-TestGeneratedArchived')){
+foreach($name in @('Assert-Contained','Get-SafeFiles','Assert-CleanTarget','Test-GeneratedName','Test-GeneratedFileName')){
   $function=$ast.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name},$true)
   if(!$function){throw "Missing validator: $name"}
   . ([scriptblock]::Create($function.Extent.Text))
@@ -22,32 +22,19 @@ function Assert-Throws($Body,$Pattern){
 }
 
 $fixtureRoot=Join-Path $project 'test-work'
-$archiveRoot=Join-Path $project 'legacy-protocol-archive'
-$rules=@{'test-work'=@{path=$fixtureRoot};'evidence-archive'=@{path=$archiveRoot}}
-New-Item -ItemType Directory -Force -Path (Join-Path $fixtureRoot 'bitdepth'),$archiveRoot | Out-Null
-[IO.File]::WriteAllText((Join-Path $fixtureRoot 'bitdepth/protocol.txt'),'filesystem evidence protocol')
-[IO.File]::WriteAllText((Join-Path $fixtureRoot 'psnr.log'),'filesystem fixture, not a media measurement')
-foreach($name in @('bitdepth','psnr.log')){
-  $snapshot=Join-Path $archiveRoot ('generated-fixtures-'+$name.Replace('.','-'))
-  New-Item -ItemType Directory -Path $snapshot | Out-Null
-  $files=@(Get-SafeFiles (Join-Path $fixtureRoot $name) | ForEach-Object {@{path=$_.FullName.Substring($fixtureRoot.Length+1).Replace('\','/');bytes=$_.Length;sha256=(Get-FileHash -LiteralPath $_.FullName).Hash}})
-  $manifest=@{schema=1;kind='generated-fixture-snapshot';items=@($name);files=$files}
-  [IO.File]::WriteAllText((Join-Path $snapshot 'manifest.json'),($manifest | ConvertTo-Json -Depth 5))
-  Write-EvidenceChecksums $snapshot
-  Add-EvidenceCatalogRecord $archiveRoot @{source=$snapshot;relative=(Split-Path -Leaf $snapshot)}
-}
-$null=Test-EvidenceCatalog $archiveRoot
-$candidates=@(@{path=(Join-Path $fixtureRoot 'bitdepth')},@{path=(Join-Path $fixtureRoot 'psnr.log')})
-Assert-TestGeneratedArchived $candidates
-Write-Output 'PASS: different complete snapshots jointly cover separate candidates'
-[IO.File]::WriteAllText((Join-Path $fixtureRoot 'bitdepth/protocol.txt'),'filesystem evidence PROTOCOL')
-Assert-Throws {Assert-TestGeneratedArchived $candidates} 'not covered'
-Write-Output 'PASS: same-size changed content is rejected'
-[IO.File]::WriteAllText((Join-Path $fixtureRoot 'bitdepth/protocol.txt'),'filesystem evidence protocol')
-[IO.File]::WriteAllText((Join-Path $fixtureRoot 'bitdepth/new.txt'),'new')
-Assert-Throws {Assert-TestGeneratedArchived $candidates} 'not covered'
-Write-Output 'PASS: extra files are rejected before any cleanup'
-if(!(Test-Path (Join-Path $fixtureRoot 'psnr.log'))){throw 'Validation must not delete candidates'}
+$acceptance=Join-Path $fixtureRoot 'acceptance-20260921'
+$rules=@{'test-work'=@{path=$fixtureRoot;class='mixed'};'acceptance'=@{path=$acceptance;class='protected'}}
+$null=New-Item -ItemType Directory -Path (Join-Path $fixtureRoot 'bitdepth'),$acceptance -Force
+[IO.File]::WriteAllText((Join-Path $fixtureRoot 'bitdepth/protocol.txt'),'filesystem protocol input')
+if(!(Test-GeneratedName 'bitdepth') -or !(Test-GeneratedFileName 'psnr.log')){throw 'Known generated inputs were not recognized'}
+$null=Assert-CleanTarget (Join-Path $fixtureRoot 'bitdepth')
+Write-Output 'PASS: recognized generated inputs do not require historical snapshots'
+Assert-Throws {Assert-CleanTarget $acceptance} 'Protected data'
+if(Test-GeneratedName 'acceptance-20260921'){throw 'Acceptance became a generated candidate'}
+Write-Output 'PASS: protected acceptance data is excluded from cleanup'
+Assert-Throws {Assert-Contained (Split-Path -Parent $project)} 'Outside MediaScope'
+if(Test-GeneratedName 'unknown-important-data'){throw 'Unknown directory became a generated candidate'}
+Write-Output 'PASS: workspace boundaries and unknown data remain protected'
 
 $record=Join-Path $project 'record'
 New-Item -ItemType Directory -Path $record | Out-Null

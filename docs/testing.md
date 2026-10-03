@@ -12,7 +12,7 @@ npm run test:browser
 npm run test:release
 ```
 
-- `npm test` 验证当前版本完整回归：非零实际检查、零失败/取消/跳过/TODO、全部功能映射通过。通过条件与 Actions 一致；本地开发允许未提交修改，并保存源码快照。
+- `npm test` 验证当前版本完整回归：非零实际检查、零失败/取消/跳过/TODO、全部功能映射通过。通过条件与 Actions 一致；本地开发允许未提交修改，并记录源码身份及未提交状态。
 - `core`、`browser` 是部分范围。退出码 0 只表示所执行检查通过，输出明确标为部分验证；出现跳过或 TODO 则标为验证不完整，不能替代完整回归或发布验证。
 - `npm run test:release` 等同于 `node scripts/test.mjs --release`，在上述完整回归条件之外要求干净的当前工作区；这是与 Actions 完全对应的本地入口。不能与部分范围或 `--source-ref` 合用。兼容入口为 `scripts/record-test.ps1 -Kind App -Release`。
 - `--source-ref <提交>` 只读取指定提交，不切换分支；应用与当前测试系统的身份分别保存。历史对比允许明确标为不适用的功能，但输出不得称为当前版本完整验收；`--require-clean` 仅检查工作区，不等同于发布验收。
@@ -42,18 +42,13 @@ npm run test:release
 
 ## 证据与维护
 
-每次应用测试从独立源码快照运行，成功、失败和前置阻塞都保留记录。运行沙箱及证据位于 evidence-archive/pending；校验并登记正式归档后才回收本次沙箱。新的统一目录包裹 original 原始记录，不改写原 schema。
-归档封装与产品 manifest 是独立 schema：新封装 schema 3 记录编号时间的来源、精度和时区，并兼容旧封装 schema 1/2。毫秒、秒、日期和未知时间按来源保存，不补造精度；目录编号时间不是产品运行耗时或时钟准确度证明。具体规则见[归档说明](evidence-archive.md)。
+每次应用测试从独立临时源码工作区运行；成功、失败和前置阻塞都保存本次独立记录。校验后发布到 records，随后回收本次沙箱，不归档源码或项目文档。新的产品记录使用 evidenceRevision 2，省去 original/record.json 双层封装；旧格式继续原样读取。
 
-| 记录 | 保留内容 |
-| --- | --- |
-| App（manifest schema 3） | 源码 ZIP/摘要、程序身份、逐项结果、功能映射、gzip 原始事件与输出、实际报告/指标日志/CSV/失败截图、生成素材摘要 |
-| Package / OnlineDeployment（schema 2，新记录 evidenceRevision 1） | 确切 ZIP 的摘要与大小、验证脚本及运行时锁快照、结构化部署断言、必要状态/报告/日志；成功必须有非零实际断言 |
-| Custom | 指定程序的命令、输出和退出码；须填写 `-Executable`、`-Arguments`、`-Label`，不自动解释为完整产品验收 |
+App 保存源码与验证器身份、逐项结果、功能状态、执行日志，以及实际测量和按需失败诊断。包、源码部署和联网部署保存 Git/包身份、验证器摘要、结构化部署断言及日志，成功必须有非零实际检查。Custom 仅记录指定命令和退出码，不自动称为完整产品验收。数据结构与独立性规则统一见[测试归档说明](evidence-archive.md)。
 
-新 App 使用 `evidenceRevision: 1`；功能记录使用 schema 2。旧记录按原 schema 解读，不补造缺失信息。串行/并行测量结果与已有指标日志先保留，再由运行器归档；程序、上游 ZIP 和可重建媒体不重复进入新应用证据。
+直接执行 scripts/test-deployment.ps1 也会进入记录器，结束后保存必要数据并回收本次部署环境；内部 -ManagedEvidence 由记录器和包验证器使用。旧 pending 不自动清理。
 
-日志默认以 16 MiB 为保存上限，必要时压缩；仍超限则保留完整沙箱并报错，不截断。App 用 `--max-log-mib` 调整，兼容入口用 `-MaxLogMiB`。总证据默认超过 1 GiB 提醒，不自动删除。
+日志默认无损压缩，压缩后以 16 MiB 为保存上限；仍超限则保留完整沙箱并报错，不截断。实际测量也以压缩 JSON 保存，逐项结果与计数保留直接可读 JSON。App 用 `--max-log-mib` 调整，兼容入口用 `-MaxLogMiB`。总证据默认超过 1 GiB 提醒，不自动删除。
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-test-evidence.ps1
@@ -61,8 +56,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/list-test-evidence.p
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/recover-test-evidence.ps1 -RunId <编号>
 ```
 
-恢复前先确认进程已结束并审查 `evidence-archive/pending/test-run.lock`，不能直接删除锁。应用记录提交使用原子清单替换；登记失败保留待处理证据，恢复不增加产品测试通过数。包/部署或其他未完成记录须先审查暂存及日志。
+恢复前先确认进程已结束并审查 `evidence-archive/pending/test-run.lock`，不能直接删除锁。应用记录通过目录原子移动发布；记录校验或移动失败保留待处理证据，索引缓存故障不撤销已保存记录，恢复不增加产品测试通过数。包/部署或其他未完成记录须先审查暂存及日志。
 
 原生安装/卸载弹窗、全部响应式尺寸和媒体组合、真实首次联网下载仍按[发布规范](releasing.md)分别验收。归档结构、查询和校验见[测试归档说明](evidence-archive.md)，整个项目的目录保留与清理见[本地数据规范](local-data.md)。
 
-GitHub 自动执行使用同一完整发布入口，远端运行身份、证据范围及本地长期导入见 [GitHub 自动测试](github-actions.md)。本地证据不会自动上传；云端证据必须下载并校验后才能称为本地永久归档。使用 npm run evidence:sync 同步；npm start/npm test 的包装入口会尝试补同步，网络失败不会改变应用测试结果。直接调用测试脚本不自动同步。
+GitHub 自动执行使用同一完整发布入口，远端运行身份、证据范围及本地独立导入见 [GitHub 自动测试](github-actions.md)。本地证据不会自动上传；云端证据必须下载并校验后才能称为本地已保存记录。使用 npm run evidence:sync 同步；测试和启动入口不再自动同步历史记录；显式 evidence:sync 可补下载，删除本地记录后执行同步可能重新下载。

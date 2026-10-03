@@ -62,7 +62,7 @@ test('[test-system] missing current UI features fail; only explicit historical s
   assert.deepEqual(supportedThemeModes('dark',{historical:true}),['dark']);
   assert.deepEqual(supportedThemeModes('normal',{historical:true}),[]);
 });
-test('[test-system] real filesystem validators reject changed fixtures, malformed identities and missing verifier evidence',async()=>{
+test('[test-system] real filesystem validators protect cleanup boundaries and reject malformed legacy evidence',async()=>{
   await mkdir('test-work',{recursive:true});
   const work=await mkdtemp(path.resolve('test-work/test-system-'));
   const output=execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',path.resolve('test/helpers/evidence-protocol.ps1'),'-Work',work],{encoding:'utf8',windowsHide:true,timeout:30000});

@@ -36,7 +36,7 @@ function Expand-GitHubEvidenceZip($Archive,$Destination) {
 function Test-GitHubEvidenceBundle($Root) {
   $null=Test-EvidenceChecksums $Root
   $m=Get-Content -LiteralPath (Join-Path $Root 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson
-  if($m.schema -ne 1 -or $m.kind -ne 'github-actions-evidence' -or $m.bundleId -notmatch ('^'+(Get-EvidenceIdentifierPattern)+'$') -or
+  if($m.schema -notin @(1,2) -or $m.kind -ne 'github-actions-evidence' -or $m.bundleId -notmatch ('^'+(Get-EvidenceIdentifierPattern)+'$') -or
      $m.github.repository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' -or $m.github.runId -notmatch '^[1-9]\d*$' -or
      $m.github.runAttempt -notmatch '^[1-9]\d*$' -or $m.github.sha -notmatch '^[a-f0-9]{40}$' -or
      $m.testStepOutcome -notin @('success','failure','cancelled','skipped')){throw 'Invalid GitHub evidence identity'}
@@ -63,15 +63,18 @@ function Test-GitHubEvidenceBundle($Root) {
     if($app.schema -ne 3 -or $app.outcome -ne 'passed' -or !$app.releaseCheck.requested -or !$app.releaseCheck.ready -or
        $app.harness.commit -ne $m.github.sha -or $app.source.commit -ne $m.github.sha){throw 'Successful CI is missing strict release evidence'}
   }
+  if($m.schema -eq 2 -and ($records.Count -ne 1 -or $app.evidenceRevision -ne 2 -or (Test-Path -LiteralPath (Join-Path $Root 'pending')))) {throw 'Independent cloud bundle requires one revision 2 record'}
   return $m
 }
 
 function Get-ArchivedGitHubEvidence($Root,$Repository,$RunId,$Attempt) {
   foreach($record in Get-EvidenceRecords $Root){
-    $payload=Get-EvidencePayload $record
-    if($payload.relative -notmatch '^github-actions-'){continue}
-    $m=Get-Content -LiteralPath (Join-Path (Get-EvidencePayload $record).source 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson
-    if($m.kind -eq 'github-actions-evidence' -and $m.github.repository -eq $Repository -and $m.github.runId -eq $RunId -and $m.github.runAttempt -eq $Attempt){return $record}
+    try{
+      $payload=Get-EvidencePayload $record
+      if($payload.relative -notmatch '^(github-actions-|runs/)'){continue}
+      $m=Get-Content -LiteralPath (Join-Path $payload.source 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson
+    }catch{continue} # A damaged unrelated manifest cannot block another run's import.
+    if($m.kind -in @('github-actions-evidence','App') -and $m.github.repository -eq $Repository -and $m.github.runId -eq $RunId -and $m.github.runAttempt -eq $Attempt){return $record}
   }
 }
 
@@ -81,15 +84,16 @@ function Import-GitHubEvidence($Project,$Archive,$Repository,$RunId,$Attempt,[st
   New-Item -ItemType Directory -Force -Path $build | Out-Null
   $gate=[IO.File]::Open((Get-EvidenceLockPath $Project),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
   $staging=$null
+  $outer=$null
   try {
     $root=Initialize-EvidenceArchive $Project
-    if(Test-Path -LiteralPath (Join-Path $root 'catalog.json')){$null=Test-EvidenceCatalog $root}
-    elseif(@(Get-EvidenceRecords $root).Count){throw 'Existing archive catalog is missing'}
+
     $staging=Assert-GitHubEvidencePath $Project (Join-Path $build ('github-evidence-import/'+[guid]::NewGuid().ToString('N')))
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $staging) | Out-Null
     Expand-GitHubEvidenceZip $Archive $staging
     $transport=$Archive
     if(!(Test-Path -LiteralPath (Join-Path $staging 'manifest.json')) -and (Test-Path -LiteralPath (Join-Path $staging 'bundle.zip'))){
+      $outer=$staging
       $transport=Join-Path $staging 'bundle.zip'
       $inner=$staging+'-inner'
       Expand-GitHubEvidenceZip $transport $inner
@@ -97,6 +101,39 @@ function Import-GitHubEvidence($Project,$Archive,$Repository,$RunId,$Attempt,[st
     }
     $m=Test-GitHubEvidenceBundle $staging
     if($m.github.repository -ne $Repository -or ($RunId -and $m.github.runId -ne $RunId) -or ($Attempt -and $m.github.runAttempt -ne $Attempt) -or ($Commit -and $m.github.sha -ne $Commit)){throw 'Downloaded evidence does not match requested repository/run/attempt'}
+    if($m.schema -eq 2){
+      $incoming=@(Get-EvidenceRecords (Join-Path $staging 'records'))
+      if($incoming.Count -ne 1){throw 'Independent cloud transport requires one run'}
+      $payload=Get-EvidencePayload $incoming[0]
+      $app=Get-Content -LiteralPath (Join-Path $payload.source 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson
+      if($app.evidenceRevision -ne 2){throw 'Independent cloud transport contains legacy evidence'}
+      $originalSum=(Get-FileHash -LiteralPath (Join-Path $payload.source 'SHA256SUMS.txt')).Hash
+      $existing=Get-ArchivedGitHubEvidence $root $Repository $m.github.runId $m.github.runAttempt
+      if($existing){
+        $null=Test-EvidenceRecord $existing.source $existing.relative
+        $savedPayload=(Get-EvidencePayload $existing).source
+        $originPath=Join-Path $savedPayload 'origin.json'
+        if(Test-Path -LiteralPath $originPath){
+          $origin=Get-Content -LiteralPath $originPath -Raw|ConvertFrom-EvidenceJson
+          $savedSum=$origin.originalChecksumsSha256
+          if($origin.testStepOutcome -ne $m.testStepOutcome){throw 'Existing GitHub run differs; overwrite refused'}
+        }else{$savedSum=(Get-FileHash (Join-Path $savedPayload 'SHA256SUMS.txt')).Hash}
+        if($savedSum -ne $originalSum){throw 'Existing GitHub run differs; overwrite refused'}
+        $null=Assert-GitHubEvidencePath $Project $staging
+        Remove-Item -LiteralPath $staging -Recurse -Force
+        if($outer){$null=Assert-GitHubEvidencePath $Project $outer;$null=Get-EvidenceFiles $outer;Remove-Item -LiteralPath $outer -Recurse -Force}
+        return $existing.source
+      }
+      # Retain CI execution status and transport identity, not the transport bytes.
+      $origin=@{schema=1;kind='github-actions';testStepOutcome=$m.testStepOutcome;originalChecksumsSha256=$originalSum;transportSha256=(Get-FileHash -LiteralPath $Archive).Hash}
+      [IO.File]::WriteAllText((Join-Path $payload.source 'origin.json'),($origin|ConvertTo-Json -Depth 5),(New-Object Text.UTF8Encoding($false)))
+      Write-EvidenceChecksums $payload.source
+      $destination=Publish-EvidenceRecord $Project $payload.source $payload.relative
+      $null=Assert-GitHubEvidencePath $Project $staging
+      Remove-Item -LiteralPath $staging -Recurse -Force
+      if($outer){$null=Assert-GitHubEvidencePath $Project $outer;$null=Get-EvidenceFiles $outer;Remove-Item -LiteralPath $outer -Recurse -Force}
+      return $destination
+    }
     $existing=Get-ArchivedGitHubEvidence $root $Repository $m.github.runId $m.github.runAttempt
     if($existing){
       if((Get-FileHash -LiteralPath (Join-Path (Get-EvidencePayload $existing).source 'SHA256SUMS.txt')).Hash -ne (Get-FileHash -LiteralPath (Join-Path $staging 'SHA256SUMS.txt')).Hash){throw 'Existing GitHub run differs; overwrite refused'}
@@ -106,7 +143,7 @@ function Import-GitHubEvidence($Project,$Archive,$Repository,$RunId,$Attempt,[st
     }
     $relative='github-actions-'+$m.bundleId
     $destination=Publish-EvidenceRecord $Project $staging $relative $transport $Archive
-    $null=Test-EvidenceCatalog $root
+
     return $destination
   } catch {
     if($staging -and (Test-Path -LiteralPath $staging)){Write-Warning "Import failed; diagnostic copy retained: $staging"}

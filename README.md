@@ -21,7 +21,7 @@ Windows 本地媒体结构与质量分析工具。原生 Node.js + 浏览器 + F
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/manage.ps1 -Action External -NodePath "C:\tools\node.exe" -FFmpegPath "C:\tools\ffmpeg.exe" -FFprobePath "C:\tools\ffprobe.exe"
 ```
 
-首次选择已有环境不会下载私有运行时。所选程序必须可信；校验会执行这些程序。自动化或无人值守脚本可传入 `-NonInteractive`，跳过弹窗并按推荐私有环境安装；交互式启动只在用户明确选择后才切换。锁定来源与许可证见 `licenses/RUNTIME-SOURCES.md`。
+首次选择已有环境不会下载私有运行时。所选程序必须可信；校验会执行这些程序。自动化或无人值守脚本可传入 `-NonInteractive`，跳过弹窗并按推荐私有环境安装；交互式启动只在用户明确选择后才切换。`npm start` 和测试入口不再自动同步历史测试档案；证据同步通过 `npm run evidence:sync` 显式执行。锁定来源与许可证见 `licenses/RUNTIME-SOURCES.md`。
 
 ## 工作流程
 
@@ -85,13 +85,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/manage.ps1 -Action E
 
 ## 开发与维护
 
-源码开发先运行 `npm ci --ignore-scripts`，使用已安装的 Microsoft Edge 执行 `npm test`。当前版本完整回归与 Actions 使用相同通过条件，不允许跳过；`npm run test:release` 另要求干净源码，与 Actions 入口一致。快速检查使用 `test:core` / `test:browser`，结果明确标为部分范围。测试在独立快照中运行，自动归档后回收沙箱；素材不使用用户媒体。
+源码开发先运行 `npm ci --ignore-scripts`，使用已安装的 Microsoft Edge 执行 `npm test`。当前版本完整回归与 Actions 使用相同通过条件，不允许跳过；`npm run test:release` 另要求干净源码，与 Actions 入口一致。快速检查使用 `test:core` / `test:browser`，结果明确标为部分范围。测试在独立临时工作区运行，仅归档必要结果、测量和诊断，再回收沙箱；每份记录可独立复制或删除，旧格式继续读取；素材不使用用户媒体。
 
 | 文档 | 内容 |
 | --- | --- |
 | [测试规范](docs/testing.md) | 日常/发布测试入口、覆盖、结果和恢复 |
 | [GitHub 自动测试](docs/github-actions.md) | 自动执行时机、远端运行、证据范围与本地长期归档 |
-| [本地数据规范](docs/local-data.md) | 命名、永久保留、Git 范围和清理 |
+| [本地数据规范](docs/local-data.md) | 目录分类、用户数据保护、Git 范围和清理 |
 | [测试归档说明](docs/evidence-archive.md) | 归档目录、接收整包、校验、迁移和时间规则 |
 | [发布规范](docs/releasing.md) | 版本、附件、验收和 Release 正文 |
 

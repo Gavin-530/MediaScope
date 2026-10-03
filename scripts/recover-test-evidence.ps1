@@ -22,13 +22,17 @@ try {
   if($found.Count+$candidates.Count+[int](Test-Path -LiteralPath $raw) -ne 1){throw 'Ambiguous or missing recovery evidence'}
   if($found.Count -or $candidates.Count){
     $src=if($found.Count){$found[0].source}else{$candidates[0].FullName}
-    $r=Get-Content -LiteralPath (Join-Path $src 'record.json') -Raw -Encoding UTF8|ConvertFrom-Json
-    $relative=$r.path
+    if(Test-Path -LiteralPath (Join-Path $src 'record.json')){
+      $r=Get-Content -LiteralPath (Join-Path $src 'record.json') -Raw -Encoding UTF8|ConvertFrom-EvidenceJson
+      $relative=$r.path
+    }else{
+      $m=Get-Content -LiteralPath (Join-Path $src 'manifest.json') -Raw -Encoding UTF8|ConvertFrom-EvidenceJson
+      $relative='records/'+(Convert-EvidenceRunName $m.runId)
+    }
     $null=Test-EvidenceRecord $src $relative
     $dest=Assert-EvidencePath $project (Join-Path $root $relative)
     if($src -ne $dest){[IO.Directory]::Move($src,$dest)}
-    $catalog=Get-Content -LiteralPath (Join-Path $root 'catalog.json') -Raw -Encoding UTF8|ConvertFrom-Json
-    if(!@($catalog.records | Where-Object {$_.path -eq $relative}).Count){Add-EvidenceCatalogRecord $root @{source=$dest;relative=$relative}}
+    Update-EvidenceCatalogCache $root
   }else{
     $m=Get-Content -LiteralPath (Join-Path $raw 'manifest.json') -Raw -Encoding UTF8|ConvertFrom-Json
     if($m.runId -ne $RunId){throw 'Recovery identity mismatch'}
@@ -37,7 +41,7 @@ try {
     $null=Test-EvidenceRecord $raw $relative
     $dest=Publish-EvidenceRecord $project $raw $relative
   }
-  $null=Test-EvidenceCatalog $root
+  $null=Test-EvidenceRecord $dest ('records/'+(Split-Path -Leaf $dest))
   $id=[DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ')+'-'+[guid]::NewGuid().ToString('N').Substring(0,8)
   $audit=Join-Path $pending ('staging/recovery-'+$id)
   $null=New-Item -ItemType Directory -Path $audit -Force

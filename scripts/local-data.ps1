@@ -18,10 +18,10 @@ foreach($rule in $policy.rules){
   if(!$full.StartsWith($project+'\',[StringComparison]::OrdinalIgnoreCase) -or $rules.ContainsKey($name)){throw "Invalid local data rule: $name"}
   $rules[$name]=@{path=$full;class=$rule.class;reason=$rule.reason}
 }
-foreach($name in @('evidence-archive','.mediascope','releases','test-work\acceptance-20260921')){
+foreach($name in @('.mediascope','releases','test-work\acceptance-20260921')){
   if(!$rules.ContainsKey($name) -or $rules[$name].class -ne 'protected'){throw "Required protected rule missing: $name"}
 }
-foreach($name in @('test-work','.build','.build\downloads','evidence-archive\pending')){
+foreach($name in @('evidence-archive','test-work','.build','.build\downloads','evidence-archive\pending')){
   if(!$rules.ContainsKey($name)){throw "Required local data rule missing: $name"}
 }
 
@@ -77,8 +77,8 @@ function Assert-CleanTarget([string]$Path) {
 }
 
 function Test-GeneratedName([string]$Name) {
-  return ($Name -match '^(bitdepth|server-reports|trial|trial-libaom-av1|trial-libx265|trials-expanded)$' -or
-    $Name -match '^(metrics-equivalence|reference-cache|siti-parallel|structure-equivalence|vfr-equivalence)-[A-Za-z0-9]{6}$')
+  return ($Name -match '^(bitdepth|server-reports|trial|trial-libaom-av1|trial-libx265|trials-expanded|startup-desktop)$' -or
+    $Name -match '^(metrics-equivalence|reference-cache|siti-parallel|structure-equivalence|vfr-equivalence|archive-layout|local-import|github-evidence|test-system|independent-evidence)-[A-Za-z0-9]{6}$')
 }
 
 function Test-GeneratedFileName([string]$Name) {
@@ -173,43 +173,6 @@ function Get-Candidates([string]$Kind) {
   return $found
 }
 
-function Assert-TestGeneratedArchived($Candidates) {
-  $root=$rules['test-work'].path.TrimEnd('\')+'\'
-  $snapshots=@(Get-EvidenceRecords $rules['evidence-archive'].path | ForEach-Object {Get-EvidencePayload $_})
-  $records=@()
-  foreach($snapshot in $snapshots){
-    $manifestPath=Join-Path $snapshot.source 'manifest.json'
-    if(!(Test-Path -LiteralPath $manifestPath)){continue}
-    $manifest=Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    if($manifest.kind -ne 'generated-fixture-snapshot' -or $manifest.schema -ne 1){continue}
-    $records+=@{name=$snapshot.relative;manifest=$manifest}
-  }
-  # Old directory and top-level-file snapshots can jointly cover cleanup.
-  # Each individual candidate must still match one complete snapshot exactly.
-  foreach($candidate in $Candidates){
-    $name=[IO.Path]::GetFileName($candidate.path)
-    $current=@(Get-SafeFiles $candidate.path | ForEach-Object {@{path=$_.FullName.Substring($root.Length).Replace('\','/');bytes=$_.Length;sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash}})
-    $matched=$false
-    foreach($record in $records){
-      $manifest=$record.manifest
-      $names=if($manifest.items){@($manifest.items)}else{@($manifest.directories)}
-      if($name -notin $names){continue}
-      $expected=@{}
-      foreach($file in $manifest.files | Where-Object {$_.path -eq $name -or $_.path.StartsWith($name+'/',[StringComparison]::Ordinal)}){
-        if($expected.ContainsKey($file.path)){throw 'Duplicate fixture snapshot path'}
-        $expected[$file.path]=$file
-      }
-      if($current.Count -ne $expected.Count){continue}
-      $match=$true
-      foreach($file in $current){
-        if(!$expected.ContainsKey($file.path) -or $expected[$file.path].bytes -ne $file.bytes -or $expected[$file.path].sha256 -ne $file.sha256){$match=$false;break}
-      }
-      if($match){$matched=$true;Write-Output "Generated candidate $name matched verified snapshot: $($record.name)";break}
-    }
-    if(!$matched){throw "Generated candidate $name is not covered by an identical verified snapshot. Run scripts/archive-test-generated.ps1 first."}
-  }
-}
-
 if($Action -eq 'Status'){
   if($Category -or $Apply){throw 'Status does not accept -Category or -Apply'}
   $rows=foreach($name in @($rules.Keys | Sort-Object)){
@@ -250,7 +213,7 @@ try {
     try {$gate=[IO.File]::Open($lock,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)}
     catch {throw 'Evidence recording is active; cleanup refused'}
     if($Category -eq 'TestGenerated'){Assert-NoActiveTests}
-    Verify-ProtectedData
+    Verify-Acceptance
   }
   $candidates=@(Get-Candidates $Category)
   if(!$candidates.Count){Write-Output "No eligible $Category directories.";exit 0}
@@ -260,7 +223,6 @@ try {
     $size=Get-Size $target
     $checked+=@{path=$target;why=$candidate.why;bytes=$size.bytes}
   }
-  if($Apply -and $Category -eq 'TestGenerated'){Assert-TestGeneratedArchived $candidates}
   foreach($candidate in $checked){
     $mib=[math]::Round($candidate.bytes/1MB,2)
     if($Apply){

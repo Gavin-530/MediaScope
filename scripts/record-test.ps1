@@ -1,9 +1,10 @@
 param(
-  [Parameter(Mandatory=$true)][ValidateSet('App','Package','OnlineDeployment','Custom')][string]$Kind,
+  [Parameter(Mandatory=$true)][ValidateSet('App','Package','Deployment','OnlineDeployment','Custom')][string]$Kind,
   [string]$Archive,
   [string]$Executable,
   [string[]]$Arguments=@(),
   [string]$Label,
+  [string]$ResultPath,
   [ValidateRange(1,256)][int]$MaxLogMiB=16,
   [ValidateRange(1,1048576)][int]$WarnTotalMiB=1024,
   [switch]$RequireClean,
@@ -24,18 +25,23 @@ if($Kind -eq 'App'){
 }
 . (Join-Path $PSScriptRoot 'evidence-lib.ps1')
 $root=Get-EvidenceRoot $project
+$requestedResultPath=$ResultPath
+if($ResultPath){
+  if($Kind -notin @('Package','Deployment','OnlineDeployment')){throw '-ResultPath is only valid for deployment checks'}
+  $requestedResultPath=Assert-EvidencePath $project ([IO.Path]::GetFullPath($ResultPath))
+  if($requestedResultPath.StartsWith($root+'\',[StringComparison]::OrdinalIgnoreCase)){throw 'ResultPath must not overwrite the evidence archive'}
+}
 try {$gate=[IO.File]::Open((Get-EvidenceLockPath $project),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)}
 catch {throw 'Another evidence recording is already running'}
 try {
 $null=Initialize-EvidenceArchive $project
 $catalogPath=Join-Path $root 'catalog.json'
-if(Test-Path -LiteralPath $catalogPath){$null=Test-EvidenceCatalog $root}
-elseif(@(Get-EvidenceRecords $root).Count){throw "Evidence catalog missing: $catalogPath"}
+
 $version=(Get-Content -LiteralPath (Join-Path $project 'package.json') -Raw -Encoding UTF8 | ConvertFrom-Json).version
 if($version -notmatch '^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(-(alpha|beta|rc)(\.(?:0|[1-9][0-9]*))?)?$'){throw 'Invalid package version'}
 $package=$null
 if($Kind -in @('Package','OnlineDeployment')){
-  if(!$Archive){throw '-Archive is required for package and deployment tests'}
+  if(!$Archive){throw '-Archive is required for package and online deployment tests'}
   $archivePath=(Resolve-Path -LiteralPath $Archive).Path
   Add-Type -AssemblyName System.IO.Compression.FileSystem
   $zip=[IO.Compression.ZipFile]::OpenRead($archivePath)
@@ -60,6 +66,7 @@ $runtime=$null
 $start=(Get-Date).ToUniversalTime()
 switch($Kind){
   'Package' {$Executable=(Get-Command powershell.exe -CommandType Application).Source;$Arguments=@('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $project 'scripts/verify-release.ps1'),'-Archive',$archivePath,'-Deployment')}
+  'Deployment' {$Executable=(Get-Command powershell.exe -CommandType Application).Source;$Arguments=@('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $project 'scripts/test-deployment.ps1'))}
   'OnlineDeployment' {$Executable=(Get-Command powershell.exe -CommandType Application).Source;$Arguments=@('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $project 'scripts/test-deployment.ps1'),'-Archive',$archivePath,'-Online')}
   'Custom' {
     if(!$Executable){throw '-Executable is required for custom tests'}
@@ -71,18 +78,16 @@ switch($Kind){
 
 New-Item -ItemType Directory -Force -Path $staging | Out-Null
 $harness=$null
-if($Kind -in @('Package','OnlineDeployment')){
-  # Preserve the exact verifier sources even for a dirty checkout.
-  $harnessRoot=Join-Path $staging 'harness'
-  New-Item -ItemType Directory -Path $harnessRoot | Out-Null
-  Copy-Item -LiteralPath (Join-Path $project 'scripts') -Destination $harnessRoot -Recurse
-  Copy-Item -LiteralPath (Join-Path $project 'runtime-lock.json') -Destination $harnessRoot
-  $harnessFiles=@(Get-EvidenceFiles $harnessRoot | ForEach-Object {@{path=$_.path;bytes=$_.bytes;sha256=(Get-FileHash -LiteralPath $_.full -Algorithm SHA256).Hash}})
-  [IO.File]::WriteAllText((Join-Path $staging 'harness-manifest.json'),($harnessFiles | ConvertTo-Json -Depth 5),(New-Object Text.UTF8Encoding($false)))
-  [IO.Compression.ZipFile]::CreateFromDirectory($harnessRoot,(Join-Path $staging 'harness.zip'),[IO.Compression.CompressionLevel]::Optimal,$false)
-  Remove-Item -LiteralPath $harnessRoot -Recurse -Force
-  $harness=@{archive='harness.zip';files='harness-manifest.json';commit=$gitCommit;workingTree=$gitStatus}
+if($Kind -in @('Package','Deployment','OnlineDeployment')){
+  # Retain verifier identity without duplicating its source files.
+  $harnessFiles=@(Get-EvidenceFiles (Join-Path $project 'scripts') | ForEach-Object {@{path='scripts/'+$_.path;bytes=$_.bytes;sha256=(Get-FileHash -LiteralPath $_.full -Algorithm SHA256).Hash}})
+  $harnessFiles+=@{path='runtime-lock.json';bytes=(Get-Item (Join-Path $project 'runtime-lock.json')).Length;sha256=(Get-FileHash (Join-Path $project 'runtime-lock.json')).Hash}
+  $identityBytes=[Text.Encoding]::UTF8.GetBytes(($harnessFiles|ConvertTo-Json -Compress -Depth 5))
+  $hashAlgorithm=[Security.Cryptography.SHA256]::Create()
+  try{$harnessHash=([BitConverter]::ToString($hashAlgorithm.ComputeHash($identityBytes))).Replace('-','')}finally{$hashAlgorithm.Dispose()}
+  $harness=@{sha256=$harnessHash;commit=$gitCommit;workingTree=$gitStatus}
   $Arguments+=@('-ResultPath',(Join-Path $staging 'deployment-results.json'))
+  if($Kind -ne 'Package'){$Arguments+='-ManagedEvidence'}
 }
 $buildRoot=[IO.Path]::GetFullPath((Join-Path (Get-EvidencePendingRoot $project) 'deployment-runs')).TrimEnd('\')
 New-Item -ItemType Directory -Path $buildRoot -Force | Out-Null
@@ -107,15 +112,16 @@ if($harness){
   }
 }
 $sandboxEvidence=@()
-if($Kind -in @('Package','OnlineDeployment')){
+if($Kind -in @('Package','Deployment','OnlineDeployment')){
   foreach($dir in Get-ChildItem -LiteralPath $buildRoot -Directory -Force | Where-Object {$_.FullName -notin $buildBefore -and $_.Name -match '^(deployment-test|verify)-[a-f0-9]{32}$'}){
     $full=[IO.Path]::GetFullPath($dir.FullName)
     if((Split-Path -Parent $full) -ne $buildRoot){throw 'Sandbox outside build root'}
     $all=@(Get-EvidenceFiles $full) # Rejects links, including every descendant.
     $kept=@()
     foreach($file in $all){
+      if($exitCode -eq 0){continue}
       if($file.path -match '(^|/)(runtimes|node_modules|licenses)(/|$)'){continue}
-      if([IO.Path]::GetExtension($file.path) -ne '.log' -and [IO.Path]::GetFileName($file.path) -notin @('MANIFEST.json','current.json','report.json','failure.json','job-input.json','selected-environment.json')){continue}
+      if([IO.Path]::GetExtension($file.path) -ne '.log' -and [IO.Path]::GetFileName($file.path) -notin @('report.json','failure.json')){continue}
       $dest=Join-Path $staging ('sandbox-diagnostics/'+$dir.Name+'/'+$file.path)
       New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dest) | Out-Null
       Copy-Item -LiteralPath $file.full -Destination $dest
@@ -129,7 +135,7 @@ if($Kind -in @('Package','OnlineDeployment')){
 $rawBytes=(Get-Item -LiteralPath $log).Length
 $logText=(Get-Content -LiteralPath $log -Tail 100 -Encoding UTF8) -join "`n"
 $logName='output.log';$compression='none'
-if($rawBytes -gt $MaxLogMiB*1MB){
+if($compression -eq 'none'){
   $gzip=Join-Path $staging 'output.log.gz'
   $inputStream=[IO.File]::OpenRead($log);$outputStream=[IO.File]::Create($gzip)
   try {$zipStream=New-Object IO.Compression.GzipStream($outputStream,[IO.Compression.CompressionMode]::Compress);try{$inputStream.CopyTo($zipStream)}finally{$zipStream.Dispose()}}finally{$inputStream.Dispose();$outputStream.Dispose()}
@@ -138,7 +144,7 @@ if($rawBytes -gt $MaxLogMiB*1MB){
   $logName='output.log.gz';$compression='gzip'
 }
 $summary=$null
-if($Kind -in @('Package','OnlineDeployment')){
+if($Kind -in @('Package','Deployment','OnlineDeployment')){
   $resultPath=Join-Path $staging 'deployment-results.json'
   if(Test-Path -LiteralPath $resultPath){
     $deployment=Get-Content -LiteralPath $resultPath -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -146,7 +152,10 @@ if($Kind -in @('Package','OnlineDeployment')){
     $failed=@($deployment.checks | Where-Object {$_.status -eq 'failed'}).Count
     if($deployment.schema -ne 1 -or ($exitCode -eq 0 -and ($deployment.outcome -ne 'passed' -or $passed -le 0 -or $failed))){throw 'Invalid structured deployment results; evidence staging preserved'}
     $summary=@{method='structured deployment checks';passed=$passed;failed=$failed;file='deployment-results.json'}
-  }elseif($exitCode -eq 0){throw 'No structured deployment results; successful exit cannot pass'}
+  }elseif($exitCode -eq 0){throw 'No structured deployment results; successful exit cannot pass'}else{
+    [IO.File]::WriteAllText($resultPath,(@{schema=1;outcome='failed';online=($Kind -eq 'OnlineDeployment');checks=@();failure='Execution failed before structured checks were saved'}|ConvertTo-Json -Depth 5),(New-Object Text.UTF8Encoding($false)))
+    $summary=@{method='structured deployment checks';passed=0;failed=0;file='deployment-results.json'}
+  }
 }
 if(!$summary -and $Kind -in @('Package','OnlineDeployment') -and $logText){
   $totals=[regex]::Matches($logText,'(?m)^Deployment verification:\s+(\d+) passed')
@@ -165,14 +174,19 @@ $manifest=[ordered]@{
   command=@{executable=$Executable;arguments=$Arguments;workingDirectory=$project}
   host=@{os=[Environment]::OSVersion.VersionString;processorArchitecture=$env:PROCESSOR_ARCHITECTURE;process64Bit=[Environment]::Is64BitProcess;powershell=$PSVersionTable.PSVersion.ToString()}
   runtime=$runtime;runtimeLockSha256=(Get-FileHash -LiteralPath (Join-Path $project 'runtime-lock.json') -Algorithm SHA256).Hash;package=$package
-  evidenceRevision=$(if($harness){1}else{0});harness=$harness
+  evidenceRevision=2;harness=$harness
   summary=$summary
-  sandboxes=$sandboxEvidence
+  data=@{sandboxes=$sandboxEvidence.Count}
   log=@{file=$logName;compression=$compression;originalBytes=$rawBytes;storedBytes=(Get-Item -LiteralPath (Join-Path $staging $logName)).Length;sha256=(Get-FileHash -LiteralPath (Join-Path $staging $logName) -Algorithm SHA256).Hash;maximumStoredMiB=$MaxLogMiB}
-  retention='permanent-local-evidence; no automatic deletion'
+  retention='independent record; user may delete after execution; no automatic deletion'
 }
 [IO.File]::WriteAllText((Join-Path $staging 'manifest.json'),($manifest | ConvertTo-Json -Depth 12), (New-Object Text.UTF8Encoding($false)))
 $localRun=& (Join-Path $PSScriptRoot 'test-storage.ps1') -Action Commit -Source $staging -Destination $localRun
+if($requestedResultPath){
+  $null=Assert-EvidencePath $project $requestedResultPath
+  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $requestedResultPath) | Out-Null
+  Copy-Item -LiteralPath (Join-Path $localRun 'deployment-results.json') -Destination $requestedResultPath
+}
 foreach($sandbox in $sandboxEvidence){
   $target=[IO.Path]::GetFullPath($sandbox.path)
   if((Split-Path -Parent $target) -ne $buildRoot -or (Split-Path -Leaf $target) -notmatch '^(deployment-test|verify)-[a-f0-9]{32}$'){throw 'Invalid sandbox cleanup target'}

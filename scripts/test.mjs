@@ -6,6 +6,7 @@ import {createHash,randomUUID} from 'node:crypto';
 import {gzipSync} from 'node:zlib';
 import os from 'node:os';
 import {featureResults,releaseReadiness,regressionAssessment} from '../test/helpers/test-results.mjs';
+import {saveMeasurements,compactResults} from './test-evidence.mjs';
 
 // Application bytes and harness bytes are captured independently. No source rewriting.
 const project=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
@@ -36,9 +37,10 @@ const lock=await fs.open(lockPath,'wx').catch(()=>{throw Error('Another test run
 await lock.writeFile(JSON.stringify({pid:process.pid,runId:id,started:new Date().toISOString()}));
 let gate,exitCode=2,version=JSON.parse(await fs.readFile(path.join(project,'package.json'),'utf8')).version,output='',events=[],preflight={},command;
 const started=new Date().toISOString();
-const manifest={schema:3,evidenceRevision:1,kind:'App',runId:id,startedAt:started,scope:suite,invocation:{executable:process.execPath,args:process.argv.slice(1),cwd:process.cwd()},releaseCheck:{requested:release,ready:false,reasons:['Not evaluated']},host:{platform:process.platform,architecture:process.arch,release:os.release()},source:{},harness:{},outcome:'blocked',exitCode:2};
-if(process.env.GITHUB_ACTIONS==='true')manifest.github={repository:process.env.GITHUB_REPOSITORY,runId:process.env.GITHUB_RUN_ID,runAttempt:process.env.GITHUB_RUN_ATTEMPT,sha:process.env.GITHUB_SHA,ref:process.env.GITHUB_REF,event:process.env.GITHUB_EVENT_NAME};
+const manifest={schema:3,evidenceRevision:2,kind:'App',runId:id,startedAt:started,scope:suite,invocation:{executable:process.execPath,args:process.argv.slice(1),cwd:process.cwd()},releaseCheck:{requested:release,ready:false,reasons:['Not evaluated']},host:{platform:process.platform,architecture:process.arch,release:os.release()},source:{},harness:{},outcome:'blocked',exitCode:2};
+if(process.env.GITHUB_ACTIONS==='true')manifest.github={repository:process.env.GITHUB_REPOSITORY,runId:process.env.GITHUB_RUN_ID,runAttempt:process.env.GITHUB_RUN_ATTEMPT,sha:process.env.GITHUB_SHA,job:process.env.GITHUB_JOB,ref:process.env.GITHUB_REF,event:process.env.GITHUB_EVENT_NAME};
 try {
+  await json(path.join(evidence,'manifest.json'),{...manifest,version,blockedReason:'Execution has not completed'});
   gate=spawn('powershell.exe',psArgs('Lock'),{windowsHide:true,stdio:['pipe','pipe','pipe']});
   gate.stdin.on('error',()=>{});
   await new Promise((resolve,reject)=>{let message='';const timer=setTimeout(()=>reject(Error('Evidence lock timeout')),180000);gate.stdout.on('data',b=>{message+=b;if(message.includes('READY')){clearTimeout(timer);resolve()}});gate.stderr.on('data',b=>message+=b);gate.once('error',e=>{clearTimeout(timer);reject(e)});gate.once('exit',()=>{clearTimeout(timer);reject(Error('Evidence lock/verification failed: '+message))})});
@@ -64,16 +66,16 @@ try {
   if(ref)execFileSync('powershell.exe',['-NoProfile','-Command',"$p=$env:MEDIASCOPE_HARNESS_TARGET; $root=$env:MEDIASCOPE_SANDBOX; if([IO.Path]::GetFullPath($p).StartsWith([IO.Path]::GetFullPath($root)+'\\')){if(Test-Path -LiteralPath $p){Remove-Item -LiteralPath $p -Recurse -Force}}else{throw 'Invalid harness target'}"],{env:{...process.env,MEDIASCOPE_HARNESS_TARGET:path.join(source,'test'),MEDIASCOPE_SANDBOX:work},windowsHide:true});
   await copy(path.join(project,'test'),path.join(source,'test'));
   await copy(path.join(project,'scripts','check-environment.mjs'),path.join(source,'scripts','check-environment.mjs'));
-  const harnessScripts=['test.mjs','test-storage.ps1','evidence-lib.ps1','local-data.ps1','github-evidence-lib.ps1','import-github-test-evidence.ps1','run-ci-tests.ps1','export-github-test-evidence.ps1','sync-github-test-evidence.mjs','migrate-test-evidence.ps1','organize-test-evidence.ps1','list-test-evidence.ps1','verify-test-evidence.ps1'];
+  const harnessScripts=['test.mjs','test-evidence.mjs','test-storage.ps1','evidence-lib.ps1','local-data.ps1','github-evidence-lib.ps1','import-github-test-evidence.ps1','run-ci-tests.ps1','export-github-test-evidence.ps1','sync-github-test-evidence.mjs','migrate-test-evidence.ps1','organize-test-evidence.ps1','list-test-evidence.ps1','verify-test-evidence.ps1'];
   for(const name of harnessScripts)await copy(path.join(project,'scripts',name),path.join(source,'scripts',name));
   const importerPath='evidence-archive/tools/import-local-test-evidence.ps1';
   await copy(path.join(project,importerPath),path.join(source,importerPath));
   await copy(path.join(project,'docs','evidence-archive.md'),path.join(source,'docs','evidence-archive.md'));
   await copy(path.join(project,'package-lock.json'),path.join(source,'harness-package-lock.json'));
   const sourceFiles=[];for(const file of await files(source)){const b=await fs.readFile(file);sourceFiles.push({path:path.relative(source,file).replaceAll('\\','/'),bytes:b.length,sha256:sha(b)})}
-  await json(path.join(evidence,'source-manifest.json'),sourceFiles);
-  manifest.harness.files=sourceFiles.filter(x=>x.path.startsWith('test/')||[...harnessScripts.map(x=>'scripts/'+x),importerPath,'scripts/check-environment.mjs','harness-package-lock.json','docs/evidence-archive.md'].includes(x.path));
-  ps('Zip','-Source',source,'-Destination',path.join(evidence,'source.zip'));
+  // Identity is retained; the isolated execution checkout is temporary, not an archive.
+  manifest.source.sha256=sha(JSON.stringify(sourceFiles));
+  manifest.harness.sha256=sha(JSON.stringify(sourceFiles.filter(x=>x.path.startsWith('test/')||[...harnessScripts.map(x=>'scripts/'+x),importerPath,'scripts/check-environment.mjs','harness-package-lock.json'].includes(x.path))));
   version=JSON.parse(await fs.readFile(path.join(source,'package.json'),'utf8')).version;
   if(!/^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-(?:alpha|beta|rc)(?:\.(?:0|[1-9][0-9]*))?)?$/.test(version))throw Error('Invalid application version');
   const runtime=JSON.parse(await fs.readFile(path.join(source,'runtime-lock.json'),'utf8'));
@@ -92,6 +94,7 @@ try {
     const {chromium}=await import('playwright-core');const browser=await chromium.launch({headless:true,...(process.env.MEDIASCOPE_BROWSER_PATH?{executablePath:process.env.MEDIASCOPE_BROWSER_PATH}:{channel:'msedge'})});
     try{preflight.browser={version:browser.version(),driver:JSON.parse(await fs.readFile(path.join(project,'node_modules','playwright-core','package.json'),'utf8')).version}}finally{await browser.close()}
   }
+  await json(path.join(evidence,'manifest.json'),{...manifest,version,environment:preflight,blockedReason:'Execution has not completed'});
   const testFiles=(await fs.readdir(path.join(source,'test'))).filter(x=>x.endsWith('.test.mjs')&&(suite==='full'||(suite==='browser')===(x==='browser.test.mjs'))).sort().map(x=>path.join(source,'test',x));
   if(!testFiles.length)throw Error('TEST_INFRA: empty suite');
   command={executable:process.execPath,args:['--test','--test-concurrency=1','--test-reporter=spec','--test-reporter-destination='+path.join(evidence,'output.log'),'--test-reporter='+pathToFileURL(path.join(source,'test','helpers','reporter.mjs')).href,'--test-reporter-destination='+path.join(evidence,'events.jsonl'),...testFiles],cwd:source};
@@ -105,10 +108,11 @@ try {
   const cases=events.filter(x=>['test:pass','test:fail'].includes(x.type)&&x.data.file).map(x=>({event:x.type,...x.data,file:path.relative(source,x.data.file).replaceAll('\\','/')}));
   const cause=(e)=>e?.cause?cause(e.cause):e;
   const failures=cases.filter(x=>x.event==='test:fail').map(x=>({...x,classification:cause(x.details?.error)?.code==='ERR_ASSERTION'?'assertion':/TEST_INFRA|hookFailed/.test(JSON.stringify(x.details?.error))?'infrastructure':'runtime-needs-review'}));
-  await json(path.join(evidence,'results.json'),{counts,cases,failures,summaries:summaries.map(x=>x.data)});
+  const classified=cases.map(item=>({...item,classification:failures.find(f=>f.file===item.file&&f.name===item.name)?.classification}));
+  await json(path.join(evidence,'results.json'),compactResults(counts,classified));
   const coverage=JSON.parse(await fs.readFile(path.join(source,'test','coverage.json'),'utf8'));
   const features=featureResults(coverage,cases,suite);
-  await json(path.join(evidence,'features.json'),{schema:2,scope:suite,features});
+  await json(path.join(evidence,'features.json'),{schema:3,scope:suite,features:features.map(({id,status,missingFiles})=>({id,status,missingFiles}))});
   manifest.releaseCheck={requested:release,...releaseReadiness(counts,features)};
   if(ref||suite!=='full'){
     manifest.releaseCheck.ready=false;
@@ -126,26 +130,23 @@ finally {
   try {
     Object.assign(manifest,{version,endedAt:new Date().toISOString(),exitCode,command});
     await json(path.join(evidence,'manifest.json'),manifest);
-    // Retain actual measurements and recipes, never reproducible encoded media/runtime copies.
-    const generated=path.join(source,'test-work');let artifacts=[];
-    try{artifacts=await files(generated)}catch(e){if(e.code!=='ENOENT')throw e}
-    const inventory=[];
-    for(const file of artifacts){const rel=path.relative(generated,file).replaceAll('\\','/'),b=await fs.readFile(file),retained=/\.(json|jsonl|log|txt|csv|png)$/.test(file);inventory.push({path:rel,bytes:b.length,sha256:sha(b),retained});if(!retained)continue;await fs.mkdir(path.dirname(path.join(evidence,'artifacts',rel)),{recursive:true});await fs.writeFile(path.join(evidence,'artifacts',rel+'.gz'),gzipSync(b))}
-    await json(path.join(evidence,'artifact-manifest.json'),inventory);
+    manifest.data=await saveMeasurements(path.join(source,'test-work'),evidence,{failed:exitCode!==0});
     let human='';try{human=await fs.readFile(path.join(evidence,'output.log'),'utf8')}catch{}
     const log=gzipSync(Buffer.from(output+human));await fs.mkdir(evidence,{recursive:true});await fs.writeFile(path.join(evidence,'output.log.gz'),log);
     if(log.length>maxLogMiB*1024*1024)throw Error('Compressed log exceeds size limit; full log retained in sandbox');
     await fs.unlink(path.join(evidence,'output.log')).catch(e=>{if(e.code!=='ENOENT')throw e});
-    try{const b=await fs.readFile(path.join(evidence,'events.jsonl'));await fs.writeFile(path.join(evidence,'events.jsonl.gz'),gzipSync(b));await fs.unlink(path.join(evidence,'events.jsonl'))}catch(e){if(e.code!=='ENOENT')throw e}
-    Object.assign(manifest,{version,endedAt:new Date().toISOString(),exitCode,command,environment:preflight,retention:manifest.github?'temporary GitHub runner; export/upload required; permanent only after verified local import':'permanent local evidence; no automatic deletion',log:{file:'output.log.gz',compression:'gzip',storedBytes:log.length,sha256:sha(log),maximumStoredMiB:maxLogMiB}});
+    await fs.unlink(path.join(evidence,'events.jsonl')).catch(e=>{if(e.code!=='ENOENT')throw e});
+    Object.assign(manifest,{version,endedAt:new Date().toISOString(),exitCode,command,environment:preflight,retention:'independent record; user may delete after execution; no automatic deletion',log:{file:'output.log.gz',compression:'gzip',storedBytes:log.length,sha256:sha(log),maximumStoredMiB:maxLogMiB}});
     await json(path.join(evidence,'manifest.json'),manifest);
     // A lock/ledger error is never bypassed with an unverified archive write.
     if(!gate||gate.exitCode!==null||gate.signalCode!==null)throw Error('Evidence lock unavailable; retained sandbox for recovery');
     const destination=path.join(project,'evidence-archive','runs',version,id);
     const archived=ps('Commit','-Source',evidence,'-Destination',destination).trim();
     console.log('Evidence: '+archived);console.log(ps('Clean','-Source',work).trim());
-    let totalBytes=0;for(const file of await files(path.join(project,'evidence-archive'),{excludeTopLevel:['inbox','received','tools']}))totalBytes+=(await fs.stat(file)).size;
-    if(totalBytes>warnTotalMiB*1024*1024)console.warn(`Evidence exceeds ${warnTotalMiB} MiB; records remain protected`);
+    try{
+      let totalBytes=0;for(const file of await files(path.join(project,'evidence-archive'),{excludeTopLevel:['inbox','received','tools']}))totalBytes+=(await fs.stat(file)).size;
+      if(totalBytes>warnTotalMiB*1024*1024)console.warn(`Evidence exceeds ${warnTotalMiB} MiB; review storage and completed records`);
+    }catch(error){console.warn('Optional storage estimate unavailable: '+error.message)}
   }catch(e){exitCode=2;console.error('Evidence/cleanup failed: '+e.stack+'\nRetained: '+work)}
   if(gate){gate.stdin.end('\n');if(gate.exitCode===null&&gate.signalCode===null)await new Promise(resolve=>gate.once('exit',resolve))}
   await lock.close();await fs.unlink(lockPath);

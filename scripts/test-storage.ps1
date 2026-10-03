@@ -20,8 +20,7 @@ switch($Action){
     try {
       $gate=[IO.File]::Open((Get-EvidenceLockPath $project),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
       $null=Initialize-EvidenceArchive $project
-      if(Test-Path -LiteralPath (Join-Path $root 'catalog.json')){$null=Test-EvidenceCatalog $root}
-      elseif(@(Get-EvidenceRecords $root).Count){throw 'Evidence catalog is missing'}
+
       Write-Output 'READY'
       $null=[Console]::In.ReadLine()
     } finally {if($gate){$gate.Dispose()}}
@@ -38,7 +37,7 @@ switch($Action){
     Write-EvidenceChecksums $src
     $relative=$dest.Substring($root.Length+1).Replace('\','/')
     $published=Publish-EvidenceRecord $project $src $relative
-    $null=Test-EvidenceCatalog $root
+
     Write-Output $published
   }
   Clean {

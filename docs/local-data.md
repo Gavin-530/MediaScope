@@ -1,30 +1,22 @@
 # MediaScope 本地数据规范
 
-[`local-data-policy.json`](../local-data-policy.json) 是目录分类规则，`scripts/local-data.ps1` 负责检查与清理。Git 忽略只表示不跟踪，不表示文件可以删除。
+local-data-policy.json 描述目录分类；scripts/local-data.ps1 负责检查与清理。Git 忽略不表示文件可以自动删除。
 
-## 分类与保留
-
-| 路径 | 分类与处理 |
+| 路径 | 处理 |
 | --- | --- |
-| `evidence-archive/` | 唯一长期测试/维护证据入口；永久保留，清理工具拒绝删除 |
-| `local-test-archive/` | 未迁移时仍保护；迁移后不再写入 |
-| `.mediascope/` | 用户报告、任务输入和失败资料；永久保留 |
-| `test-work/acceptance-20260921/` | 历史验收原始资料；永久保留 |
-| `releases/` | 本机历史版本 ZIP；永久保留 |
-| `.build/downloads/` | 可重建下载缓存；默认保留，须显式选择 Downloads 才清理 |
-| `.build/` | 构建缓存及可重建打包沙箱；对应发布包/诊断已保存后才清理；未知项保留 |
-| `test-work/` 已知生成项 | 完整快照验证一致后才能回收；验收资料和未知项保留 |
-| `node_modules/` | 锁定开发依赖，可由 npm ci --ignore-scripts 重建 |
+| evidence-archive/records | 独立测试和旧维护记录；用户可逐份复制或删除，程序不自动删除 |
+| evidence-archive/pending | 正在运行、中断的暂存和锁；清理前审查进程与运行状态 |
+| evidence-archive/inbox、received | 待接收原件、接收原件及回执；不由广泛清理操作删除 |
+| local-test-archive | 旧位置；显式迁移前保留原件 |
+| .mediascope | 用户报告、任务输入和失败资料；测试清理不得触及 |
+| test-work/acceptance-20260921 | 历史验收资料；排除在测试临时文件清理之外 |
+| test-work 的明确生成项 | 活动进程结束后可显式回收；无需先制作永久素材快照 |
+| releases | 本机版本包；测试清理不得触及 |
+| .build/downloads | 可重建但下载成本较高的缓存；仅显式选择 Downloads 时清理 |
+| .build | 构建沙箱和缓存；未知项保留 |
+| node_modules | 可通过锁文件和 npm ci --ignore-scripts 重建 |
 
-构建、测试活动停止后才清理其工作目录。运行日志和中断证据保存在受保护的 pending；不以“不是源码”为删除依据。永久保留资料、依赖、缓存和本地 ZIP 被 Git 忽略，不进入安装包。本机档案不自动上传。
-
-## 测试归档
-
-目录结构、接收整包、去重校验、历史迁移、编号时间及恢复规则统一由[测试归档说明](evidence-archive.md)维护，本文件只规定整个项目的目录保留和清理。
-
-非证据文件沿用现有命名：规则文档为 docs/<小写名称>.md；README 和 GitHub 模板沿用约定名称；Tag、标题、ZIP 见[发布规范](releasing.md)，用户导出见 README。
-
-## 检查与清理
+新测试入口先保留本次必要结果再回收自己创建的沙箱。已知可重建临时媒体、运行时和浏览器配置不作为每次永久档案；用户报告、未知目录和历史验收材料不得因“不属于源码”而删除。
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/local-data.ps1 -Action Status
@@ -32,9 +24,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/local-data.ps1 -Acti
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/local-data.ps1 -Action Clean -Category TestGenerated
 ```
 
-Clean 默认预览，核对后加 -Apply；其他类别为 BuildStages、Downloads。执行前检查项目边界、目录链接、永久保护、证据校验和记录锁。未知路径不自动删除。
+Clean 默认预览；核对后显式加 -Apply。保留项目路径边界、目录链接、受保护数据和活动进程检查。TestGenerated 只选择已知生成命名，未知项与验收目录保留，不再要求先归档全部生成素材。archive-test-generated.ps1 保留为特殊情况下的显式素材快照工具，不是清理前置要求。
 
-生成项必须与一份已登记快照的完整文件数、路径、大小和 SHA-256 一致；不同候选可分别匹配不同快照。有变化或无快照时先运行 scripts/archive-test-generated.ps1。scripts/maintain-build.ps1 的 -Apply 先归档诊断和清理清单，再回收已识别历史构建目录。
-
-
-永久保留是清理策略，不是备份。另行备份整个 evidence-archive、用户报告、验收资料和 releases；校验不能恢复磁盘损坏或误删。
+BuildStages、Downloads 是其他显式类别。maintain-build.ps1 的旧构建维护流程仍保留必要诊断后回收；不自动处理旧 pending 或修改旧测试记录。测试记录的独立格式、复制、校验、删除和历史兼容由 evidence-archive.md 统一说明。

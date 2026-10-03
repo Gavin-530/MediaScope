@@ -68,47 +68,27 @@ function Find-ReceivedRecords([string]$Path,[int]$Depth=0) {
   if(!(Test-Path -LiteralPath $full -PathType Container)){throw "Received directory missing: $full"}
   if(Test-Path -LiteralPath (Join-Path $full 'record.json') -PathType Leaf){
     Assert-ReceivedTree $full
-    $record=Get-Content -LiteralPath (Join-Path $full 'record.json') -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson
-    $null=Test-EvidenceRecord $full ([string]$record.path)
-    return @{source=$full;relative=[string]$record.path}
+    $r=Get-Content -LiteralPath (Join-Path $full 'record.json') -Raw -Encoding UTF8|ConvertFrom-EvidenceJson
+    $null=Test-EvidenceRecord $full ([string]$r.path)
+    return @{source=$full;relative=[string]$r.path}
   }
+  if(Test-Path -LiteralPath (Join-Path $full 'manifest.json') -PathType Leaf){
+    Assert-ReceivedTree $full
+    $m=Get-Content -LiteralPath (Join-Path $full 'manifest.json') -Raw -Encoding UTF8|ConvertFrom-EvidenceJson
+    if($m.evidenceRevision -ne 2){throw 'Received legacy records need sealed envelopes before import'}
+    $relative='records/'+(Convert-EvidenceRunName $m.runId)
+    $null=Test-EvidenceRecord $full $relative
+    return @{source=$full;relative=$relative}
+  }
+  # Cache presence, missing entries and old history references are not dependencies.
   $catalogFile=Join-Path $full 'catalog.json'
   if(Test-Path -LiteralPath $catalogFile -PathType Leaf){
     $null=Assert-EvidencePath $project $catalogFile
-    $catalog=Get-Content -LiteralPath $catalogFile -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson
-    if($catalog.schema -ne 2 -or $null -eq $catalog.records){throw 'Received catalog must describe a modern sealed archive'}
-    Test-EvidenceLegacyCatalog $full $catalog
-    $sourceRecords=@(Get-EvidenceRecords $full)
-    $registered=@{}
-    foreach($entry in @($catalog.records)){
-      if(!$entry.path -or $registered.ContainsKey($entry.path)){throw 'Duplicate or invalid received catalog entry'}
-      $registered[$entry.path]=$entry.checksumsSha256
-    }
-    if($sourceRecords.Count -ne $registered.Count){throw 'Received catalog record count mismatch'}
-    foreach($item in $sourceRecords){
-      if(!(Test-Path -LiteralPath (Join-Path $item.source 'record.json') -PathType Leaf)){throw 'Received legacy records need sealed envelopes before import'}
-      Assert-ReceivedTree $item.source
-      $entry=Get-EvidenceCatalogEntry $item
-      if(!$registered.ContainsKey($item.relative) -or $registered[$item.relative] -ne $entry.checksumsSha256){throw "Received catalog checksum mismatch: $($item.relative)"}
-      $registered.Remove($item.relative)
-      $item
-    }
-    if($registered.Count){throw 'Received catalog contains missing records'}
-    $sourceRelative=$full.Substring($records.Length).TrimStart('\').Replace('\','/')
-    $script:receivedCatalogs.Add(@{path=$(if($sourceRelative){$sourceRelative}else{'.'});sha256=(Get-FileHash -LiteralPath $catalogFile).Hash})
-    foreach($directory in Get-ChildItem -LiteralPath $full -Directory -Force){
-      if($directory.Name -in @('inbox','received','pending','tools','receipts','evidence-inbox')){
-        # Do not enumerate these trees: they may contain further received archives or links.
-        $script:receivedSkips.Add($directory.FullName.Substring($records.Length+1).Replace('\','/'))
-      }elseif($directory.Name -eq 'evidence-archive'){
-        Find-ReceivedRecords $directory.FullName ($Depth+1)
-      }elseif($directory.Name -notin @('records','tests','maintenance','fixtures','legacy')){throw "Unexpected directory in received archive: $($directory.Name)"}
-    }
-    if(@(Get-ChildItem -LiteralPath $full -File -Force | Where-Object {$_.Name -notin @('README.md','catalog.json')}).Count){throw 'Unexpected file in received archive'}
-    return
+    $script:receivedCatalogs.Add(@{path=$full.Substring($records.Length).TrimStart('\');sha256=(Get-FileHash -LiteralPath $catalogFile).Hash})
   }
-  if(@(Get-ChildItem -LiteralPath $full -Directory -Force | Where-Object {$_.Name -in @('records','tests','maintenance','fixtures')}).Count){throw 'Received archive catalog missing'}
-  if(@(Get-ChildItem -LiteralPath $full -File -Force).Count){throw 'Put complete record or archive directories inside records; loose files are not accepted'}
+  foreach($file in Get-ChildItem -LiteralPath $full -File -Force){
+    if($file.Name -notin @('README.md','catalog.json')){throw 'Put complete record or archive directories inside records; loose files are not accepted'}
+  }
   foreach($directory in Get-ChildItem -LiteralPath $full -Directory -Force | Sort-Object Name){
     if($directory.Name -in @('inbox','received','pending','tools','receipts','evidence-inbox')){
       $script:receivedSkips.Add($directory.FullName.Substring($records.Length+1).Replace('\','/'))
@@ -116,6 +96,11 @@ function Find-ReceivedRecords([string]$Path,[int]$Depth=0) {
     }
     Find-ReceivedRecords $directory.FullName ($Depth+1)
   }
+}
+function Get-ImportIdentity($Source) {
+  if(Test-Path -LiteralPath (Join-Path $Source 'record.json')){return (Get-Content -LiteralPath (Join-Path $Source 'record.json') -Raw -Encoding UTF8|ConvertFrom-EvidenceJson)}
+  $m=Get-Content -LiteralPath (Join-Path $Source 'manifest.json') -Raw -Encoding UTF8|ConvertFrom-EvidenceJson
+  return @{category='tests';origin=$(if($m.github){'github-actions'}else{'local'});originalRelative=('runs/'+$m.version+'/'+$m.runId);github=$m.github}
 }
 
 function Get-ReceivedPlan([string]$Records) {
@@ -125,14 +110,14 @@ function Get-ReceivedPlan([string]$Records) {
   $existing=@{}
   foreach($local in Get-EvidenceRecords $root){
     if($local.relative.StartsWith('legacy/')){continue}
-    $envelope=Get-Content -LiteralPath (Join-Path $local.source 'record.json') -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson
+    try{$envelope=Get-ImportIdentity $local.source}catch{continue}
     $identity=$envelope.category+'|'+$envelope.origin+'|'+$envelope.originalRelative
     if($existing.ContainsKey($identity)){throw "Conflicting local sealed identity: $identity"}
     $existing[$identity]=$local
   }
   foreach($item in @(Find-ReceivedRecords $Records)){
     $recordFile=Join-Path $item.source 'record.json'
-    $record=Get-Content -LiteralPath $recordFile -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson
+    $record=Get-ImportIdentity $item.source
     $relative=Get-EvidenceFlatLocation ([string]$item.relative)
     $identity=$record.category+'|'+$record.origin+'|'+$record.originalRelative
     $destination=Assert-EvidencePath $project (Join-Path $root $relative)
@@ -155,7 +140,7 @@ function Get-ReceivedPlan([string]$Records) {
     $seen[$identity]=$sum
     $seenTargets[$identity]=$relative
     $locations[$relative]=$identity
-    $manifestPath=Join-Path $item.source 'original/manifest.json'
+    $manifestPath=Join-Path (Get-EvidencePayload $item).source 'manifest.json'
     $manifest=if(Test-Path -LiteralPath $manifestPath){Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson}else{$null}
     $sourceRelative=$item.source.Substring($Records.Length).TrimStart('\').Replace('\','/')
     [pscustomobject]@{source=$item.source;folder=$(if($sourceRelative){$sourceRelative}else{'.'});relative=$relative;destination=$destination;checksumsSha256=$sum;action=$action;sourceCommit=$manifest.source.commit;github=$record.github}
@@ -193,11 +178,10 @@ try {
     catch{throw 'Evidence recording is active; import refused'}
     $null=Initialize-EvidenceArchive $project
   }
-  if(Test-Path -LiteralPath (Join-Path $root 'catalog.json')){$null=Test-EvidenceCatalog $root}
-  elseif(@(Get-EvidenceRecords $root).Count){throw 'Local archive catalog missing'}
+
   $plan=@(Get-ReceivedPlan $records)
   foreach($skipped in $script:receivedSkips){Write-Output "Skipped received subtree (original retained): $skipped"}
-  if(!$plan.Count){throw 'No sealed records in the selected batch'}
+  if(!$plan.Count){throw 'No sealed records in the selected batch; expected a modern sealed archive or independent record'}
   $plan | Select-Object action,relative | Format-Table -AutoSize
   $new=@($plan | Where-Object {$_.action -eq 'import'})
   if(!$Apply){Write-Output "Preview only: $($new.Count) new record(s). Use -Contributor <name> -Apply to import.";return}
@@ -243,8 +227,11 @@ try {
   [IO.File]::WriteAllText((Join-Path $transaction 'plan.json'),(@($staged) | ConvertTo-Json -Depth 8),$utf8)
 
   $catalogPath=Join-Path $root 'catalog.json'
-  $catalog=Get-Content -LiteralPath $catalogPath -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson
-  $catalog.records=@($catalog.records)+@($entries)
+  $known=@(foreach($existingRecord in Get-EvidenceRecords $root){
+    $existingSum=Join-Path $existingRecord.source 'SHA256SUMS.txt'
+    if(Test-Path -LiteralPath $existingSum -PathType Leaf){@{path=$existingRecord.relative;checksumsSha256=(Get-FileHash -LiteralPath $existingSum).Hash}}
+  })
+  $catalog=@{schema=2;layout='flat';role='cache';records=@($known)+@($entries)}
   $catalogNew=Join-Path $transaction 'catalog-new.json'
   [IO.File]::WriteAllText($catalogNew,($catalog | ConvertTo-Json -Depth 20),$utf8)
   foreach($item in $staged){
@@ -255,7 +242,7 @@ try {
     $moved+=@($item)
   }
   # Validate the complete proposed ledger before its atomic replacement.
-  $null=Test-EvidenceCatalogData $root $catalog
+  foreach($item in $staged){$null=Test-EvidenceRecord $item.destination $item.relative}
   [IO.File]::Replace($catalogNew,$catalogPath,(Join-Path $transaction 'catalog-before.json'))
   $committed=$true
   Save-ImportFiles $transaction $id

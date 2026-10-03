@@ -98,9 +98,17 @@ async function main(){
       if(artifact.digest&&artifact.digest!==digest)throw Error('Downloaded artifact digest mismatch');
       const output=execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',path.join(project,'scripts/import-github-test-evidence.ps1'),'-Archive',zip,'-Repository',repository,'-RunId',identity.runId,'-Attempt',identity.attempt,...(expectedCommit?['-Commit',expectedCommit]:[])],{encoding:'utf8',windowsHide:true,timeout:120000,maxBuffer:2*1024*1024});
       const saved=output.trim();
-      const record=JSON.parse(await fs.readFile(path.join(saved,'record.json'),'utf8'));
+      let record;
+      try{record=JSON.parse(await fs.readFile(path.join(saved,'manifest.json'),'utf8'))}
+      catch(error){if(error.code!=='ENOENT')throw error;record=JSON.parse(await fs.readFile(path.join(saved,'record.json'),'utf8'))}
       sync.artifacts[key]={artifactId:artifact.id,digest,path:saved,runHeadSha:remoteRun.head_sha,testedSha:record.github.sha,importedAt:new Date().toISOString()};
       sync.imported++;
+      // Downloads are transport, not a second permanent copy of a validated record.
+      if(record.evidenceRevision===2){
+        if(path.dirname(dir)!==path.join(pending,'downloads'))throw Error('Invalid download cleanup path');
+        execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',path.join(project,'scripts/test-storage.ps1'),'-Action','Validate','-Source',dir],{windowsHide:true,stdio:['ignore','pipe','pipe']});
+        await fs.rm(dir,{recursive:true});
+      }
     }
     sync.scanTruncated=truncated;
   }catch(e){sync.errors.push({reason:e.message});if(!automatic)process.exitCode=1}

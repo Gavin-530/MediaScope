@@ -28,7 +28,7 @@ if((Get-FileHash (Join-Path $preserved 'SHA256SUMS.txt')).Hash -ne $before -or (
 $legacyCatalog=Join-Path $root 'legacy/local-test-archive/catalog.json'
 $catalogBytes=[IO.File]::ReadAllBytes($legacyCatalog)
 [IO.File]::WriteAllText($legacyCatalog,'{}')
-Reject {Test-EvidenceCatalog $root} 'Legacy evidence catalog checksum mismatch'
+if((Test-EvidenceCatalog $root) -ne 2){throw 'A retired index became a record dependency'}
 [IO.File]::WriteAllBytes($legacyCatalog,$catalogBytes)
 $null=Test-EvidenceCatalog $root
 Write-Output 'PASS: actual migration preserves original bytes, old identity and catalog plus migration audit'
@@ -65,8 +65,9 @@ Reject {Get-EvidenceDestination $project 'runs/0.2.2/invalid'} 'UTC run identifi
 Write-Output 'PASS: pending evidence remains protected and malformed new identities are rejected'
 $extra=Join-Path $root 'unexpected'
 $null=New-Item -ItemType Directory -Path $extra
-Reject {Test-EvidenceCatalog $root} 'Unexpected archive root'
-Write-Output 'PASS: unclassified archive directories are rejected by catalog validation'
+$null=Test-EvidenceCatalog $root
+if(!(Test-Path $extra)){throw 'Unclassified directory was changed'}
+Write-Output 'PASS: unclassified directories are preserved outside independent record validation'
 
 # Inject a ledger failure only into this isolated filesystem fixture.
 $logical2='runs/0.2.2/20260930T123456789Z-87654321'
@@ -149,7 +150,7 @@ $ur.outcome='unknown'
 $historicCatalog=Join-Path $audit3.source 'original/original-legacy-catalog.json'
 $historicBytes=[IO.File]::ReadAllBytes($historicCatalog)
 [IO.File]::WriteAllText($historicCatalog,'{}')
-Reject {Test-EvidenceCatalog $organizedRoot} 'Historical evidence catalog checksum mismatch'
+Reject {Test-EvidenceRecord $audit3.source $audit3.relative} 'Checksum mismatch'
 [IO.File]::WriteAllBytes($historicCatalog,$historicBytes)
 Write-Output 'PASS: unknown historical results cannot become passed and retired catalogs remain protected'
 # Fault injection is confined to a copied script and a separate synthetic project.

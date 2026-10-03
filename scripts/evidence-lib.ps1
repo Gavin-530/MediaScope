@@ -35,7 +35,7 @@ function Get-EvidenceRecords($Root) {
   $records=@()
   $catalogPath=Join-Path $Root 'catalog.json'
   $modern=(Split-Path -Leaf $Root) -eq 'evidence-archive'
-  if(Test-Path -LiteralPath $catalogPath){$modern=$modern -or (Get-Content -LiteralPath $catalogPath -Raw -Encoding UTF8| ConvertFrom-EvidenceJson).schema -eq 2}
+  $modern=$modern -or (Test-Path -LiteralPath (Join-Path $Root 'records')) -or (Test-Path -LiteralPath (Join-Path $Root 'tests'))
   if($modern){
     foreach($path in @('records','tests/local','tests/github-actions','maintenance','fixtures')){
       $parent=Join-Path $Root $path
@@ -75,11 +75,16 @@ function Get-EvidenceFiles($Root) {
   if(!(Test-Path -LiteralPath $Root -PathType Container)){throw "Evidence directory missing: $Root"}
   if((Get-Item -LiteralPath $Root -Force).Attributes -band [IO.FileAttributes]::ReparsePoint){throw "Linked evidence root is forbidden: $Root"}
   $base=[IO.Path]::GetFullPath($Root).TrimEnd('\')+'\'
-  $items=@(Get-ChildItem -LiteralPath $Root -Recurse -Force)
-  foreach($item in $items){
-    if($item.Attributes -band [IO.FileAttributes]::ReparsePoint){throw "Linked evidence entry is forbidden: $($item.FullName)"}
+  $stack=New-Object 'System.Collections.Generic.Stack[string]'
+  $stack.Push($Root)
+  $items=New-Object Collections.ArrayList
+  while($stack.Count){
+    foreach($item in Get-ChildItem -LiteralPath $stack.Pop() -Force){
+      if($item.Attributes -band [IO.FileAttributes]::ReparsePoint){throw "Linked evidence entry is forbidden: $($item.FullName)"}
+      if($item.PSIsContainer){$stack.Push($item.FullName)}else{$null=$items.Add($item)}
+    }
   }
-  return @($items | Where-Object {-not $_.PSIsContainer} | ForEach-Object {
+  return @($items | ForEach-Object {
     @{path=$_.FullName.Substring($base.Length).Replace('\','/');full=$_.FullName;bytes=$_.Length}
   } | Sort-Object path)
 }
@@ -112,6 +117,15 @@ function Test-EvidenceChecksums($Root) {
 function Test-EvidenceRecord($Root,$Relative) {
   $null=Test-EvidenceChecksums $Root
   if(Test-Path -LiteralPath (Join-Path $Root 'record.json')){return (Test-EvidenceEnvelope $Root $Relative)}
+  if(Test-Path -LiteralPath (Join-Path $Root 'manifest.json')){
+    $direct=Get-Content -LiteralPath (Join-Path $Root 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson
+    if($direct.evidenceRevision -eq 2){
+      if($direct.kind -notin @('App','Package','Deployment','OnlineDeployment','Custom')){throw 'Invalid independent record kind'}
+      if(!$Relative.StartsWith('records/') -and !$Relative.StartsWith('runs/')){throw 'Invalid independent record location'}
+      if($Relative.StartsWith('records/') -and $Relative -ne ('records/'+(Convert-EvidenceRunName $direct.runId))){throw 'Independent record location mismatch'}
+      if($Relative.StartsWith('records/')){$Relative='runs/'+$direct.version+'/'+$direct.runId}
+    }
+  }
   $Relative=$Relative -replace '^legacy/local-test-archive/',''
   if(!$Relative.StartsWith('runs/',[StringComparison]::OrdinalIgnoreCase)){
     if($Relative -match '^github-actions-'){
@@ -136,11 +150,20 @@ function Test-EvidenceRecord($Root,$Relative) {
     if($manifest.outcome -ne 'blocked' -and (!$manifest.testSummary -or $manifest.testSummary.tests -le 0)){throw "Missing structured test results: $Relative"}
     if($manifest.outcome -eq 'passed' -and ($manifest.testSummary.failed -ne 0 -or $manifest.testSummary.cancelled -ne 0 -or $manifest.testSummary.passed -le 0)){throw "Passed run contains failures or no executed passes: $Relative"}
     if($manifest.outcome -ne 'blocked'){
-      $requiredFiles=@('results.json','source.zip','source-manifest.json')
+      $requiredFiles=if($manifest.evidenceRevision -eq 2){@('results.json','features.json')}else{@('results.json','source.zip','source-manifest.json')}
       if($manifest.evidenceRevision -eq 1){$requiredFiles+=@('features.json','events.jsonl.gz','artifact-manifest.json')}
       foreach($required in $requiredFiles){if(!(Test-Path -LiteralPath (Join-Path $Root $required) -PathType Leaf)){throw "Missing run evidence $required : $Relative"}}
       $results=Get-Content -LiteralPath (Join-Path $Root 'results.json') -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson
       foreach($field in @('tests','passed','failed','cancelled','skipped','todo')){if($results.counts.$field -ne $manifest.testSummary.$field){throw "Structured count mismatch ($field): $Relative"}}
+      if($manifest.evidenceRevision -eq 2){
+        $cases=@($results.cases)
+        if($cases.Count -ne $results.counts.tests){throw 'Independent result count mismatch'}
+        foreach($status in @('passed','failed','skipped','todo','cancelled')){
+          if(@($cases | Where-Object {$_.status -eq $status}).Count -ne $results.counts.$status){throw "Independent case status mismatch: $status"}
+        }
+        if(@($cases | Where-Object {$_.status -notin @('passed','failed','skipped','todo','cancelled') -or !$_.name -or !$_.file}).Count){throw 'Invalid independent test case'}
+        if(!$manifest.validation){throw 'Independent regression assessment missing'}
+      }
       # Older records retain their original interpretation. New records explicitly
       # distinguish a complete regression from successful checks of a narrower scope.
       if($manifest.validation){
@@ -169,6 +192,12 @@ function Test-EvidenceRecord($Root,$Relative) {
       if($deployment.schema -ne 1 -or $deployment.outcome -ne 'passed' -or $passed -le 0 -or @($deployment.checks | Where-Object {$_.status -ne 'passed'}).Count -or $passed -ne $manifest.summary.passed -or [bool]$deployment.online -ne ($manifest.kind -eq 'OnlineDeployment')){throw "Invalid deployment checks: $Relative"}
     }
   }
+  if($manifest.evidenceRevision -eq 2 -and $manifest.kind -in @('Package','Deployment','OnlineDeployment')){
+    $deployment=Get-Content -LiteralPath (Join-Path $Root 'deployment-results.json') -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson
+    if($deployment.schema -ne 1 -or [bool]$deployment.online -ne ($manifest.kind -eq 'OnlineDeployment')){throw 'Invalid independent deployment results'}
+    $passed=@($deployment.checks | Where-Object {$_.status -eq 'passed'}).Count
+    if($manifest.outcome -eq 'passed' -and ($deployment.outcome -ne 'passed' -or $passed -le 0 -or @($deployment.checks | Where-Object {$_.status -ne 'passed'}).Count -or $manifest.summary.passed -ne $passed)){throw 'Invalid deployment checks'}
+  }
   if($manifest.log.file -notin @('output.log','output.log.gz')){throw "Invalid run log path: $Relative"}
   $logPath=Join-Path $Root $manifest.log.file
   if(!(Test-Path -LiteralPath $logPath -PathType Leaf)){throw "Run log missing: $Relative"}
@@ -176,6 +205,12 @@ function Test-EvidenceRecord($Root,$Relative) {
   if(($null -ne $manifest.log.storedBytes -and (Get-Item -LiteralPath $logPath).Length -ne $manifest.log.storedBytes) -or
      ($manifest.log.sha256 -and (Get-FileHash -LiteralPath $logPath -Algorithm SHA256).Hash -ne $manifest.log.sha256)){throw "Run log metadata mismatch: $Relative"}
   if($manifest.package -and $manifest.package.manifestVersion -and $manifest.package.manifestVersion -ne $manifest.version){throw "Package version mismatch: $Relative"}
+  $originPath=Join-Path $Root 'origin.json'
+  if($manifest.evidenceRevision -eq 2 -and (Test-Path -LiteralPath $originPath)){
+    $origin=Get-Content -LiteralPath $originPath -Raw|ConvertFrom-EvidenceJson
+    if($origin.schema -ne 1 -or $origin.kind -ne 'github-actions' -or !$manifest.github -or $origin.testStepOutcome -notin @('success','failure','cancelled','skipped') -or $origin.originalChecksumsSha256 -notmatch '^[a-fA-F0-9]{64}$' -or $origin.transportSha256 -notmatch '^[a-fA-F0-9]{64}$'){throw 'Invalid cloud origin metadata'}
+    if($origin.testStepOutcome -eq 'success' -and ($manifest.outcome -ne 'passed' -or !$manifest.releaseCheck.requested -or !$manifest.releaseCheck.ready -or $manifest.scope -ne 'full')){throw 'Successful CI origin lacks strict release evidence'}
+  }
   return $true
 }
 
@@ -209,11 +244,10 @@ function Test-EvidenceLegacyCatalog($Root,$Catalog) {
 }
 
 function Test-EvidenceCatalog($Root) {
-  $catalogPath=Join-Path $Root 'catalog.json'
-  if(!(Test-Path -LiteralPath $catalogPath -PathType Leaf)){throw "Evidence catalog missing: $catalogPath"}
-  if((Get-Item -LiteralPath $catalogPath -Force).Attributes -band [IO.FileAttributes]::ReparsePoint){throw "Linked evidence catalog: $catalogPath"}
-  $catalog=Get-Content -LiteralPath $catalogPath -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson
-  return (Test-EvidenceCatalogData $Root $catalog)
+  # Directories are authoritative; stale or missing caches do not invalidate records.
+  $records=@(Get-EvidenceRecords $Root)
+  foreach($record in $records){$null=Test-EvidenceRecord $record.source $record.relative}
+  return $records.Count
 }
 
 function Test-EvidenceCatalogData($Root,$catalog) {
@@ -253,45 +287,36 @@ function Test-EvidenceCatalogData($Root,$catalog) {
 }
 
 function Add-EvidenceCatalogRecord($Root,$Record) {
-  $catalogPath=Join-Path $Root 'catalog.json'
-  if(Test-Path -LiteralPath $catalogPath -PathType Leaf){
-    $catalog=Get-Content -LiteralPath $catalogPath -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson
-    if($catalog.schema -notin @(1,2) -or $null -eq $catalog.records){throw 'Invalid evidence catalog'}
-    Test-EvidenceLegacyCatalog $Root $catalog
-    $known=@($catalog.records)
-    $actual=@(Get-EvidenceRecords $Root)
-    if($actual.Count -ne $known.Count+1 -or @($actual | Where-Object {$_.relative -eq $Record.relative}).Count -ne 1){throw 'Unexpected evidence records; catalog update refused'}
-    $existing=@($actual | Where-Object {$_.relative -ne $Record.relative})
-    if($existing.Count -ne $known.Count){throw 'Evidence catalog drift; update refused'}
-    foreach($entry in $known){
-      $matched=@($existing | Where-Object {$_.relative -eq $entry.path})
-      if($matched.Count -ne 1 -or (Get-EvidenceCatalogEntry $matched[0]).checksumsSha256 -ne $entry.checksumsSha256){throw "Evidence catalog drift: $($entry.path)"}
-    }
-  } else {
-    $known=@()
-    if(@(Get-EvidenceRecords $Root).Count -ne 1){throw 'Evidence catalog missing while existing records are present'}
-  }
-  $newEntry=Get-EvidenceCatalogEntry $Record
-  $schema=if($catalog){$catalog.schema}else{1}
-  $updated=[ordered]@{schema=$schema;records=@($known)+@($newEntry)}
-  if($catalog.layout){$updated.layout=$catalog.layout}
-  if($catalog.legacyCatalogSha256){$updated.legacyCatalogSha256=$catalog.legacyCatalogSha256}
-  if($catalog.historicalCatalogs){$updated.historicalCatalogs=@($catalog.historicalCatalogs)}
-  $tempParent=if($schema -eq 2){Join-Path $Root 'pending'}else{$Root}
-  $temp=Join-Path $tempParent ('catalog.json.'+[guid]::NewGuid().ToString('N')+'.tmp')
-  [IO.File]::WriteAllText($temp,($updated | ConvertTo-Json -Depth 5),(New-Object Text.UTF8Encoding($false)))
+  $null=Get-EvidenceCatalogEntry $Record
+  Update-EvidenceCatalogCache $Root
+}
+function Update-EvidenceCatalogCache($Root) {
+  # Publishing never verifies unrelated history. The cache is disposable.
   try {
-    if(Test-Path -LiteralPath $catalogPath){
-      # Keep the atomic replacement; scanners can briefly hold a Windows file.
-      for($attempt=0;$attempt -lt 4;$attempt++){
-        try {[IO.File]::Replace($temp,$catalogPath,[NullString]::Value);break}
-        catch {if($attempt -eq 3){throw};Start-Sleep -Milliseconds (150*($attempt+1))}
+    $entries=@(foreach($record in Get-EvidenceRecords $Root){
+      $sum=Join-Path $record.source 'SHA256SUMS.txt'
+      if(Test-Path -LiteralPath $sum -PathType Leaf){
+        if((Get-Item -LiteralPath $sum -Force).Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Linked checksum cache input'}
+        @{path=$record.relative;checksumsSha256=(Get-FileHash -LiteralPath $sum).Hash}
       }
-    }else{[IO.File]::Move($temp,$catalogPath)}
-  } finally {
-    # This is only our uncommitted catalog candidate, never an original record.
-    if(Test-Path -LiteralPath $temp){Remove-Item -LiteralPath $temp -Force}
-  }
+    })
+    $catalogPath=Join-Path $Root 'catalog.json'
+    $modern=(Split-Path -Leaf $Root) -eq 'evidence-archive' -or (Test-Path -LiteralPath (Join-Path $Root 'records'))
+    $catalog=@{schema=$(if($modern){2}else{1});role='cache';records=$entries}
+    if($modern){$catalog.layout='flat'}
+    # Historical metadata is compatibility information, never a dependency.
+    if(Test-Path -LiteralPath $catalogPath){
+      if((Get-Item -LiteralPath $catalogPath -Force).Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Linked catalog cache'}
+      try{$old=Get-Content -LiteralPath $catalogPath -Raw -Encoding UTF8|ConvertFrom-EvidenceJson
+        if($old.historicalCatalogs){$catalog.historicalCatalogs=$old.historicalCatalogs}
+        if($old.legacyCatalogSha256){$catalog.legacyCatalogSha256=$old.legacyCatalogSha256}
+      }catch{}
+    }
+    $temp=Join-Path $Root ('catalog.json.'+[guid]::NewGuid().ToString('N')+'.tmp')
+    [IO.File]::WriteAllText($temp,($catalog|ConvertTo-Json -Depth 8),(New-Object Text.UTF8Encoding($false)))
+    if(Test-Path -LiteralPath $catalogPath){[IO.File]::Replace($temp,$catalogPath,[NullString]::Value)}else{[IO.File]::Move($temp,$catalogPath)}
+  } catch {Write-Warning "Record saved; optional catalog cache could not be rebuilt: $($_.Exception.Message)"}
+  finally {if($temp -and (Test-Path -LiteralPath $temp)){Remove-Item -LiteralPath $temp -Force}}
 }
 
 # The storage envelope is independent of the original product evidence schema.
@@ -309,15 +334,13 @@ function Assert-EvidencePath($Project,$Value) {
 function Initialize-EvidenceArchive($Project) {
   $root=Get-EvidenceRoot $Project
   $catalog=Join-Path $root 'catalog.json'
-  $existing=if(Test-Path -LiteralPath $catalog){Get-Content -LiteralPath $catalog -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson}else{$null}
-  $directories=if($existing -and $existing.layout -ne 'flat'){@('tests/local','tests/github-actions','maintenance','fixtures','pending','legacy')}else{@('records','pending')}
+  $directories=@('records','pending')
   foreach($directory in $directories){
     $path=Assert-EvidencePath $Project (Join-Path $root $directory)
     $null=New-Item -ItemType Directory -Path $path -Force
   }
   if(!(Test-Path -LiteralPath $catalog)){
-    if(@(Get-EvidenceRecords $root).Count){throw 'Unregistered evidence exists; initialization refused'}
-    [IO.File]::WriteAllText($catalog,'{"schema":2,"layout":"flat","records":[]}',(New-Object Text.UTF8Encoding($false)))
+    Update-EvidenceCatalogCache $root
   }
   return $root
 }
@@ -333,6 +356,11 @@ function Get-EvidencePayload($Record) {
   $envelope=Join-Path $Record.source 'record.json'
   if(Test-Path -LiteralPath $envelope){
     return @{source=(Join-Path $Record.source 'original');relative=(Get-Content -LiteralPath $envelope -Raw -Encoding UTF8| ConvertFrom-EvidenceJson).originalRelative}
+  }
+  $manifestPath=Join-Path $Record.source 'manifest.json'
+  if(Test-Path -LiteralPath $manifestPath){
+    $m=Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson
+    if($m.evidenceRevision -eq 2){return @{source=$Record.source;relative=('runs/'+$m.version+'/'+$m.runId)}}
   }
   $relative=$Record.relative -replace '^legacy/local-test-archive/',''
   return @{source=$Record.source;relative=$relative}
@@ -417,6 +445,12 @@ function Publish-EvidenceRecord($Project,$Source,$OriginalRelative,[string]$Tran
   if(Test-Path -LiteralPath $destination){throw "Evidence destination exists: $destination"}
   if(!(Test-Path -LiteralPath (Join-Path $src 'SHA256SUMS.txt'))){Write-EvidenceChecksums $src}
   $null=Test-EvidenceRecord $src $OriginalRelative
+  if($manifest.evidenceRevision -eq 2){
+    $null=New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force
+    [IO.Directory]::Move($src,$destination)
+    Update-EvidenceCatalogCache $root
+    return $destination
+  }
   $pending=Get-EvidencePendingRoot $Project
   $candidate=Join-Path $pending ('publish-'+[guid]::NewGuid().ToString('N'))
   $null=New-Item -ItemType Directory -Path $candidate

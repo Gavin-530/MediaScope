@@ -30,13 +30,14 @@ jobs:
         id: regression
         timeout-minutes: 75
         run: ./scripts/run-ci-tests.ps1
-      - name: Export this run's original evidence
+      - name: Export independent results or interruption diagnostics
+        id: evidence_export
         if: always()
         env:
           TEST_STEP_OUTCOME: ${{ steps.regression.outcome }}
         run: ./scripts/export-github-test-evidence.ps1 -TestStepOutcome $env:TEST_STEP_OUTCOME
-      - name: Preserve this run's evidence
-        if: always()
+      - name: Upload this run's compact evidence
+        if: always() && steps.evidence_export.outcome == 'success'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: mediascope-test-evidence-${{ github.run_id }}-${{ github.run_attempt }}
