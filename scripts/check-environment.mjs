@@ -36,7 +36,7 @@ try {
   for(const metric of ['psnr','ssim','libvmaf=model=version=vmaf_v0.6.1'])
     run(ffmpeg,['-v','error','-i',path.join(temp,'libx264.mkv'),'-filter_complex',`split[a][b];[a][b]${metric}`,'-f','null','-']);
   // Probe an actual HTTP response before allowing the application pointer to change.
-  const child=spawn(process.execPath,[path.join(app,'server.mjs')],{cwd:app,windowsHide:true,env:{...process.env,PORT:'0',MEDIASCOPE_DATA_DIR:temp,FFMPEG_PATH:ffmpeg,FFPROBE_PATH:ffprobe}});
+  const child=spawn(process.execPath,[path.join(app,'server.mjs')],{cwd:app,windowsHide:true,env:{...process.env,MEDIASCOPE_STARTUP_RESULT:'',MEDIASCOPE_DESKTOP:'0',PORT:'0',MEDIASCOPE_DATA_DIR:temp,FFMPEG_PATH:ffmpeg,FFPROBE_PATH:ffprobe}});
   try {
     await new Promise((resolve,reject)=>{
       const timer=setTimeout(()=>{reject(Error('Application startup timed out'))},30000);

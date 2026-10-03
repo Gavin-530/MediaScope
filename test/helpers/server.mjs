@@ -2,10 +2,10 @@ import {spawn} from 'node:child_process';
 import {writeFile,mkdir} from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-export async function startServer(dataDirectory,{port=0,attempt=1}={}) {
+export async function startServer(dataDirectory,{port=0,attempt=1,env={}}={}) {
   await mkdir(dataDirectory,{recursive:true});
   const app=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../..');
-  const child=spawn(process.execPath,[path.join(app,'server.mjs')],{cwd:app,windowsHide:true,env:{...process.env,PORT:String(port),MEDIASCOPE_DATA_DIR:dataDirectory}});
+  const child=spawn(process.execPath,[path.join(app,'server.mjs')],{cwd:app,windowsHide:true,env:{...process.env,...env,PORT:String(port),MEDIASCOPE_DATA_DIR:dataDirectory}});
   let log='',logFile='server.log';child.stdout.on('data',value=>{log+=value});child.stderr.on('data',value=>{log+=value});
   const stop=async()=>{child.kill();await new Promise(resolve=>child.exitCode!==null||child.signalCode!==null?resolve():child.once('exit',resolve));await writeFile(path.join(dataDirectory,logFile),log)};
   const base=await new Promise((resolve,reject)=>{
@@ -22,7 +22,7 @@ export async function startServer(dataDirectory,{port=0,attempt=1}={}) {
     if(e.cause?.message==='bad port'){
       logFile=`server-rejected-port-${attempt}.log`;await stop();
       if(attempt>=10)throw Error('TEST_INFRA: no Fetch-compatible random HTTP port after 10 starts',{cause:e});
-      return startServer(dataDirectory,{attempt:attempt+1});
+      return startServer(dataDirectory,{attempt:attempt+1,env});
     }
     await stop();throw Error('TEST_INFRA: application HTTP/session startup failed',{cause:e});
   }

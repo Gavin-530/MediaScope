@@ -34,7 +34,7 @@ function Assert-InstallRootChoice($Root,$Source,$DefaultRoot,$AllowNested=$false
       $record=Read-Json $retained
       $isRetained=$record.schema -eq 1 -and $record.product -eq 'MediaScope' -and @($existing | Where-Object {$_.Name -notin @('retained.json','data','runtimes','runtime.lock')}).Count -eq 0
     }
-    $onlyRuntimeCache=@($existing | Where-Object {$_.Name -notin @('runtimes','staging','runtime.lock','deployment.lock')}).Count -eq 0
+    $onlyRuntimeCache=@($existing | Where-Object {$_.Name -notin @('runtimes','staging','runtime.lock','deployment.lock','launch-cache')}).Count -eq 0
     if($existing -and !$isDefault -and !$isRetained -and !$onlyRuntimeCache -and !(Test-Path -LiteralPath (Join-Path $rootPath 'current.json'))){
       throw 'Select an empty directory for a new installation'
     }

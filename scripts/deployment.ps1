@@ -20,13 +20,13 @@ function Safe-Path($Root,[string]$Relative) {
 function Assert-Hash($Path,$Hash) {
   if($Hash -notmatch '^[a-fA-F0-9]{64}$' -or (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash -ne $Hash){throw "SHA-256 mismatch: $Path"}
 }
-function Assert-NoLinks($Root) {
+function Assert-NoLinks($Root,[switch]$Shallow) {
   $item=Get-Item -LiteralPath $Root -Force
   while($item){
     if($item.Attributes -band [IO.FileAttributes]::ReparsePoint){throw "Linked installation paths are unsupported: $($item.FullName)"}
-    $item=$item.Parent
+    $item=if($item.PSIsContainer){$item.Parent}else{$item.Directory}
   }
-  foreach($item in Get-ChildItem -LiteralPath $Root -Recurse -Force){if($item.Attributes -band [IO.FileAttributes]::ReparsePoint){throw "Linked installation entry: $($item.FullName)"}}
+  if(!$Shallow){foreach($item in Get-ChildItem -LiteralPath $Root -Recurse -Force){if($item.Attributes -band [IO.FileAttributes]::ReparsePoint){throw "Linked installation entry: $($item.FullName)"}}}
 }
 function Expand-SafeZip($Archive,$Destination) {
   $zip=[IO.Compression.ZipFile]::OpenRead($Archive)
@@ -104,6 +104,7 @@ function Resolve-Program($Value,$Name) {
   return $p
 }
 function Test-Environment($App,$Paths,$InstallRoot) {
+  $before=Get-LaunchSnapshot $App $Paths
   $result=Join-Path $InstallRoot "staging/$([guid]::NewGuid().ToString('N')).json"
   foreach($name in @('node','ffmpeg','ffprobe')){
     $p=$Paths[$name];if(!(Test-Path -LiteralPath $p -PathType Leaf)){throw "Missing executable: $name ($p)"}
@@ -122,7 +123,8 @@ function Test-Environment($App,$Paths,$InstallRoot) {
   # Include adjacent dynamic libraries in the audit (external shared builds).
   $libraries=@($Paths.Values | ForEach-Object {Get-ChildItem -LiteralPath (Split-Path $_) -Filter '*.dll' -File} | Sort-Object FullName -Unique | ForEach-Object {@{path=$_.FullName;sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash}})
   Remove-Item -LiteralPath $result
-  return @{programs=$programs;libraries=$libraries;checkedAt=$check.checkedAt;compatibility=$check.compatibility}
+  if(!(Compare-LaunchSnapshot $before (Get-LaunchSnapshot $App $Paths))){throw 'Runtime changed during validation; restart MediaScope'}
+  return @{programs=$programs;libraries=$libraries;checkedAt=$check.checkedAt;compatibility=$check.compatibility;launchSnapshot=$before}
 }
 function Get-SelectedPaths($Selection,$App,$InstallRoot) {
   if(!$Selection -or $Selection.mode -eq 'private'){return Get-PrivateRuntime $App $InstallRoot}
@@ -130,4 +132,88 @@ function Get-SelectedPaths($Selection,$App,$InstallRoot) {
   $paths=@{};foreach($name in @('node','ffmpeg','ffprobe')){$paths[$name]=$Selection.validation.programs.$name.path}
   Write-Host 'Revalidating explicitly selected external environment; failures will not switch environments.'
   return $paths
+}
+
+# Launch receipts are scoped to one application directory. Normal launches read
+# the saved selection only; change detection is explicitly requested by a check.
+function Get-LaunchCachePath($App,$InstallRoot) {
+  $digest=[Security.Cryptography.SHA256]::Create()
+  try{$key=([BitConverter]::ToString($digest.ComputeHash([Text.Encoding]::UTF8.GetBytes([IO.Path]::GetFullPath($App).ToLowerInvariant())))).Replace('-','').ToLowerInvariant()}finally{$digest.Dispose()}
+  return Join-Path $InstallRoot "launch-cache/$key.json"
+}
+function Get-LaunchSnapshot($App,$Paths) {
+  $policy=@{}
+  foreach($name in @('runtime-lock.json','scripts/check-environment.mjs','scripts/deployment.ps1','scripts/validate-launch.ps1')){
+    $policy[$name]=(Get-FileHash -LiteralPath (Join-Path $App $name) -Algorithm SHA256).Hash
+  }
+  $files=@{}
+  $all=@($Paths.Values)+@($Paths.Values | ForEach-Object {Get-ChildItem -LiteralPath (Split-Path $_) -Filter '*.dll' -File | ForEach-Object FullName})
+  foreach($file in ($all | Sort-Object -Unique)){
+    Assert-NoLinks $file -Shallow
+    $item=Get-Item -LiteralPath $file
+    if($item.PSIsContainer){throw "Expected runtime file: $file"}
+    $files[$item.FullName]=@{bytes=$item.Length;modified=$item.LastWriteTimeUtc.Ticks.ToString();created=$item.CreationTimeUtc.Ticks.ToString()}
+  }
+  return @{policy=$policy;files=$files}
+}
+function Compare-LaunchSnapshot($Before,$After) {
+  foreach($group in @('policy','files')){
+    $left=$Before.$group;$right=$After.$group
+    $leftKeys=if($left -is [Collections.IDictionary]){@($left.Keys)}else{@($left.PSObject.Properties.Name)}
+    $rightKeys=if($right -is [Collections.IDictionary]){@($right.Keys)}else{@($right.PSObject.Properties.Name)}
+    if($leftKeys.Count -ne $rightKeys.Count){return $false}
+    foreach($key in $leftKeys){
+      if($key -notin $rightKeys){return $false}
+      if($group -eq 'policy'){if($left.$key -ne $right.$key){return $false}}
+      else {foreach($field in @('bytes','modified','created')){if($left.$key.$field -ne $right.$key.$field){return $false}}}
+    }
+  }
+  return $true
+}
+function Save-LaunchCache($App,$Paths,$Mode,$Validation,$InstallRoot) {
+  $snapshot=Get-LaunchSnapshot $App $Paths
+  if($Validation.launchSnapshot -and !(Compare-LaunchSnapshot $Validation.launchSnapshot $snapshot)){throw 'Runtime changed after validation; restart MediaScope'}
+  $cachePath=Get-LaunchCachePath $App $InstallRoot
+  New-Item -ItemType Directory -Force (Split-Path $cachePath) | Out-Null
+  Write-Json $cachePath @{schema=1;app=[IO.Path]::GetFullPath($App);mode=$Mode;validation=$Validation;snapshot=$snapshot}
+  if(Test-Path -LiteralPath ($cachePath+'.failed')){Remove-Item -LiteralPath ($cachePath+'.failed')}
+}
+function Read-LaunchCache($App,$InstallRoot,$Selection=$null,[switch]$CheckChanges) {
+  try {
+    $cachePath=Get-LaunchCachePath $App $InstallRoot
+    if($CheckChanges -and (Test-Path -LiteralPath ($cachePath+'.failed'))){return $null}
+    $cached=Read-Json $cachePath
+    if($cached.schema -ne 1 -or $cached.app -ne [IO.Path]::GetFullPath($App) -or $cached.mode -notin @('private','external')){return $null}
+    if(!$cached.validation.checkedAt){return $null}
+    $paths=@{};foreach($name in @('node','ffmpeg','ffprobe')){
+      $paths[$name]=$cached.validation.programs.$name.path
+      if($cached.validation.programs.$name.sha256 -notmatch '^[a-fA-F0-9]{64}$' -or !$cached.validation.programs.$name.version){return $null}
+      if($Selection -and ($cached.mode -ne $Selection.mode -or $paths[$name] -ne $Selection.validation.programs.$name.path)){return $null}
+    }
+    if(!$CheckChanges){return @{paths=$paths;mode=$cached.mode;validation=$cached.validation;needsValidation=$false}}
+    if($cached.validation.compatibility -ne (Read-Json (Join-Path $App 'runtime-lock.json')).compatibility){return $null}
+    $snapshot=Get-LaunchSnapshot $App $paths
+    # A changed Node or compatibility policy must be validated before it can host
+    # a page. Changed media tools can be checked behind the already-running UI.
+    foreach($name in $snapshot.policy.Keys){if($snapshot.policy[$name] -ne $cached.snapshot.policy.$name){return $null}}
+    $node=$paths.node
+    foreach($field in @('bytes','modified','created')){if($snapshot.files[$node].$field -ne $cached.snapshot.files.$node.$field){return $null}}
+    $nodeDir=Split-Path $node
+    $priorDlls=@($cached.snapshot.files.PSObject.Properties.Name | Where-Object {(Split-Path $_) -eq $nodeDir -and [IO.Path]::GetExtension($_) -eq '.dll'})
+    $currentDlls=@($snapshot.files.Keys | Where-Object {(Split-Path $_) -eq $nodeDir -and [IO.Path]::GetExtension($_) -eq '.dll'})
+    if($priorDlls.Count -ne $currentDlls.Count){return $null}
+    foreach($dll in $priorDlls){
+      if($dll -notin $currentDlls){return $null}
+      foreach($field in @('bytes','modified','created')){if($snapshot.files[$dll].$field -ne $cached.snapshot.files.$dll.$field){return $null}}
+    }
+    return @{paths=$paths;mode=$cached.mode;validation=$cached.validation;needsValidation=!(Compare-LaunchSnapshot $cached.snapshot $snapshot)}
+  } catch {return $null}
+}
+function Start-MediaScope($App,$Paths,$Mode,$Validation,$InstallRoot,$RuntimeRoot,[bool]$NeedsValidation=$false,[bool]$Desktop=$true,[string]$StatePath) {
+  $request=Join-Path $InstallRoot "staging/launch-$([guid]::NewGuid().ToString('N')).json"
+  Write-Json $request @{app=$App;paths=$Paths;mode=$Mode;validation=$Validation;installRoot=$InstallRoot;runtimeRoot=$RuntimeRoot;statePath=$StatePath;needsValidation=$NeedsValidation;desktop=$Desktop}
+  try {
+    & $Paths.node (Join-Path $App 'scripts/desktop.mjs') $request
+    if($LASTEXITCODE -ne 0){throw "Application exited with code $LASTEXITCODE"}
+  } finally {if(Test-Path -LiteralPath $request){Remove-Item -LiteralPath $request}}
 }

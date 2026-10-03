@@ -86,8 +86,8 @@ $gate=$null
 try {
   if(![Environment]::Is64BitOperatingSystem -or $env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or $env:PROCESSOR_ARCHITEW6432 -eq 'ARM64'){throw 'MediaScope supports Windows x64 only'}
   New-Item -ItemType Directory -Force $InstallRoot,$RuntimeRoot | Out-Null
-  Assert-NoLinks $InstallRoot
-  if($RuntimeRoot -ne $InstallRoot){Assert-NoLinks $RuntimeRoot}
+  Assert-NoLinks $InstallRoot -Shallow:($Action -eq 'Launch')
+  if($RuntimeRoot -ne $InstallRoot){Assert-NoLinks $RuntimeRoot -Shallow:($Action -eq 'Launch')}
   foreach($dir in @('apps','data','staging')){New-Item -ItemType Directory -Force (Join-Path $InstallRoot $dir) | Out-Null}
   foreach($dir in @('runtimes','staging')){New-Item -ItemType Directory -Force (Join-Path $RuntimeRoot $dir) | Out-Null}
   # Process lifetime lock: prevents upgrades or competing launches while this app is running.
@@ -138,6 +138,7 @@ try {
     $next=@{version=$manifest.version;environment=@{mode=$selected.mode;validation=$selected.validation}}
     $previous=if($state -and $state.current.version -ne $next.version){$state.current}elseif($state){$state.previous}else{$null}
     Write-Json $statePath @{current=$next;previous=$previous}
+    Save-LaunchCache $app $selected.paths $selected.mode $selected.validation $InstallRoot
     Save-InstallMarker
     $state=Read-Json $statePath
     if(!$NonInteractive){Register-MediaScopeInstall $InstallRoot $manifest.version}
@@ -149,7 +150,17 @@ try {
     $candidate=$state.previous
   } else {$candidate=$state.current}
   $app=Safe-Path (Join-Path $InstallRoot 'apps') $candidate.version
-  $null=Test-App $app
+  if($Action -ne 'Launch'){$null=Test-App $app}
+  if($Action -eq 'Launch'){
+    $cached=Read-LaunchCache $app $InstallRoot $candidate.environment
+    if($cached){
+      $env:MEDIASCOPE_DATA_DIR=Join-Path $InstallRoot 'data'
+      Write-Host 'Using the saved runtime; automatic environment checks skipped.'
+      Start-MediaScope $app $cached.paths $cached.mode $cached.validation $InstallRoot $RuntimeRoot $cached.needsValidation (!$NonInteractive -and $env:MEDIASCOPE_NO_BROWSER -ne '1') $statePath
+      exit 0
+    }
+  }
+  if($Action -eq 'Launch'){$null=Test-App $app}
   if($Action -eq 'External'){
     $explicit=Select-ExplicitEnvironment $app;$paths=$explicit.paths;$mode=$explicit.mode
   } elseif($Action -eq 'Recommended'){$paths=Get-PrivateRuntime $app $RuntimeRoot;$mode='private'}
@@ -159,13 +170,13 @@ try {
   $next=@{version=$candidate.version;environment=@{mode=$mode;validation=$selected.validation}}
   $previous=if($Action -eq 'Rollback'){$state.current}else{$state.previous}
   Write-Json $statePath @{current=$next;previous=$previous}
+  Save-LaunchCache $app $paths $mode $selected.validation $InstallRoot
   Save-InstallMarker
   if(!$NonInteractive -and $Action -in @('Launch','Rollback')){Register-MediaScopeInstall $InstallRoot $candidate.version}
   Write-Host "Verified $mode environment. Audit: $statePath"
   if($Action -eq 'Launch'){
     $env:FFMPEG_PATH=$paths.ffmpeg;$env:FFPROBE_PATH=$paths.ffprobe;$env:MEDIASCOPE_DATA_DIR=Join-Path $InstallRoot 'data'
-    & $paths.node (Join-Path $app 'server.mjs')
-    if($LASTEXITCODE -ne 0){throw "Application exited with code $LASTEXITCODE"}
+    Start-MediaScope $app $paths $mode $selected.validation $InstallRoot $RuntimeRoot $false (!$NonInteractive -and $env:MEDIASCOPE_NO_BROWSER -ne '1') $statePath
   }
 } catch {Write-Host "[MediaScope] $($_.Exception.Message)" -ForegroundColor Red;exit 1}
 finally {if($gate){$gate.Dispose()}}

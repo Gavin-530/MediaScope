@@ -1,5 +1,6 @@
 param(
-  [string]$InstallRoot=$(if($env:MEDIASCOPE_HOME){$env:MEDIASCOPE_HOME}else{Join-Path $env:LOCALAPPDATA 'MediaScope'})
+  [string]$InstallRoot=$(if($env:MEDIASCOPE_HOME){$env:MEDIASCOPE_HOME}else{Join-Path $env:LOCALAPPDATA 'MediaScope'}),
+  [switch]$CheckEnvironment
 )
 
 $ErrorActionPreference='Stop'
@@ -18,27 +19,32 @@ try {
   foreach($dir in @('runtimes','staging')){
     New-Item -ItemType Directory -Force (Join-Path $InstallRoot $dir) | Out-Null
   }
-  Assert-NoLinks $InstallRoot
+  Assert-NoLinks $InstallRoot -Shallow
   $gate=[IO.File]::Open((Join-Path $InstallRoot 'deployment.lock'),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
 
-  $paths=$null
+  if(!$env:MEDIASCOPE_DATA_DIR){$env:MEDIASCOPE_DATA_DIR=Join-Path $source '.mediascope'}
+  $cached=Read-LaunchCache $source $InstallRoot -CheckChanges:$CheckEnvironment
+  if($cached){
+    Write-Host 'Using the saved runtime; automatic environment checks skipped.'
+    Start-MediaScope $source $cached.paths $cached.mode $cached.validation $InstallRoot $InstallRoot $cached.needsValidation ($env:MEDIASCOPE_NO_BROWSER -ne '1')
+    exit 0
+  }
+  $paths=$null;$mode='external'
   try {
     $paths=@{node=(Resolve-Program $null 'node');ffmpeg=(Resolve-Program $null 'ffmpeg');ffprobe=(Resolve-Program $null 'ffprobe')}
-    $null=Test-Environment $source $paths $InstallRoot 2>$null
+    $validation=Test-Environment $source $paths $InstallRoot 2>$null
     Write-Host 'Using verified local Node.js, FFmpeg and FFprobe.'
   } catch {
     $reason=if($paths){'Local programs did not pass the compatibility check.'}else{$_.Exception.Message}
     Write-Host "No compatible local environment: $reason"
     Write-Host 'Preparing the private runtime; first launch requires internet (about 219 MiB).'
     $paths=Get-PrivateRuntime $source $InstallRoot
-    $null=Test-Environment $source $paths $InstallRoot
+    $mode='private'
+    $validation=Test-Environment $source $paths $InstallRoot
   }
 
-  $env:FFMPEG_PATH=$paths.ffmpeg
-  $env:FFPROBE_PATH=$paths.ffprobe
-  if(!$env:MEDIASCOPE_DATA_DIR){$env:MEDIASCOPE_DATA_DIR=Join-Path $source '.mediascope'}
-  & $paths.node (Join-Path $source 'server.mjs')
-  if($LASTEXITCODE -ne 0){throw "Application exited with code $LASTEXITCODE"}
+  Save-LaunchCache $source $paths $mode $validation $InstallRoot
+  Start-MediaScope $source $paths $mode $validation $InstallRoot $InstallRoot $false ($env:MEDIASCOPE_NO_BROWSER -ne '1')
 } catch {
   Write-Host "[MediaScope] $($_.Exception.Message)" -ForegroundColor Red
   exit 1

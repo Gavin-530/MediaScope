@@ -66,6 +66,7 @@ try {
   if(ref)execFileSync('powershell.exe',['-NoProfile','-Command',"$p=$env:MEDIASCOPE_HARNESS_TARGET; $root=$env:MEDIASCOPE_SANDBOX; if([IO.Path]::GetFullPath($p).StartsWith([IO.Path]::GetFullPath($root)+'\\')){if(Test-Path -LiteralPath $p){Remove-Item -LiteralPath $p -Recurse -Force}}else{throw 'Invalid harness target'}"],{env:{...process.env,MEDIASCOPE_HARNESS_TARGET:path.join(source,'test'),MEDIASCOPE_SANDBOX:work},windowsHide:true});
   await copy(path.join(project,'test'),path.join(source,'test'));
   await copy(path.join(project,'scripts','check-environment.mjs'),path.join(source,'scripts','check-environment.mjs'));
+  for(const name of ['desktop.mjs','deployment.ps1','validate-launch.ps1','manage.ps1','install-location.ps1','start-source.ps1'])await copy(path.join(project,'scripts',name),path.join(source,'scripts',name));
   const harnessScripts=['test.mjs','test-evidence.mjs','test-storage.ps1','evidence-lib.ps1','local-data.ps1','github-evidence-lib.ps1','import-github-test-evidence.ps1','run-ci-tests.ps1','export-github-test-evidence.ps1','sync-github-test-evidence.mjs','migrate-test-evidence.ps1','organize-test-evidence.ps1','list-test-evidence.ps1','verify-test-evidence.ps1'];
   for(const name of harnessScripts)await copy(path.join(project,'scripts',name),path.join(source,'scripts',name));
   const importerPath='evidence-archive/tools/import-local-test-evidence.ps1';
@@ -95,7 +96,8 @@ try {
     try{preflight.browser={version:browser.version(),driver:JSON.parse(await fs.readFile(path.join(project,'node_modules','playwright-core','package.json'),'utf8')).version}}finally{await browser.close()}
   }
   await json(path.join(evidence,'manifest.json'),{...manifest,version,environment:preflight,blockedReason:'Execution has not completed'});
-  const testFiles=(await fs.readdir(path.join(source,'test'))).filter(x=>x.endsWith('.test.mjs')&&(suite==='full'||(suite==='browser')===(x==='browser.test.mjs'))).sort().map(x=>path.join(source,'test',x));
+  const browserFiles=['browser.test.mjs','desktop-browser.test.mjs'];
+  const testFiles=(await fs.readdir(path.join(source,'test'))).filter(x=>x.endsWith('.test.mjs')&&(suite==='full'||(suite==='browser')===browserFiles.includes(x))).sort().map(x=>path.join(source,'test',x));
   if(!testFiles.length)throw Error('TEST_INFRA: empty suite');
   command={executable:process.execPath,args:['--test','--test-concurrency=1','--test-reporter=spec','--test-reporter-destination='+path.join(evidence,'output.log'),'--test-reporter='+pathToFileURL(path.join(source,'test','helpers','reporter.mjs')).href,'--test-reporter-destination='+path.join(evidence,'events.jsonl'),...testFiles],cwd:source};
   console.log(`Running ${suite} suite against ${ref||'the captured working tree'}…`);

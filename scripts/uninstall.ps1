@@ -98,6 +98,8 @@ try {
     }
     $stagePath=Join-Path $root 'staging'
     if(Test-Path -LiteralPath $stagePath){Remove-Item -LiteralPath $stagePath -Recurse -Force}
+    $launchCachePath=Safe-Path $root 'launch-cache'
+    if(Test-Path -LiteralPath $launchCachePath){Remove-Item -LiteralPath $launchCachePath -Recurse -Force}
     if((Test-Path -LiteralPath (Join-Path $root 'data')) -or (Test-Path -LiteralPath (Join-Path $root 'runtimes'))){
       Write-Json (Join-Path $root 'retained.json') @{schema=1;product='MediaScope';reason='Uninstall retained reports or runtime cache'}
     }

@@ -25,6 +25,8 @@ const $ = (s) =>
     ),
   token = $("meta[name=token]").content;
 let current = null,
+  environmentReady = false,
+  desktopSession = false,
   report = null,
   infoPath = null,
   hasVideo = false,
@@ -65,6 +67,25 @@ async function api(url, options = {}) {
   if (!r.ok) throw Error(d.error || "请求失败");
   return d;
 }
+function showStartup(s) {
+  environmentReady = !s.startup || s.startup.state === "ready";
+  desktopSession = !!s.desktop;
+  const status = $("#startup-status");
+  status.textContent = s.startup?.message || "运行环境已就绪";
+  status.classList.toggle("hidden", environmentReady);
+  status.classList.toggle("error", s.startup?.state === "error");
+  $("#environment").textContent = environmentReady ? s.versions.ffmpeg : status.textContent;
+  for (const box of document.querySelectorAll("[name=metric]")) {
+    box.disabled = !environmentReady || !s.metrics.includes(box.value);
+    if (environmentReady && box.disabled) box.checked = false;
+  }
+}
+window.addEventListener("beforeunload", (event) => {
+  if (desktopSession && latestJobs.some((j) => ["queued", "running"].includes(j.status))) {
+    event.preventDefault();
+    event.returnValue = "任务尚未完成，退出将停止分析。";
+  }
+});
 function progressValue(value) {
   return Number.isFinite(value)
     ? value.toLocaleString("zh-CN", { maximumFractionDigits: 2 })
@@ -164,7 +185,9 @@ function message(
   syncTaskBrief();
 }
 function busy(value) {
-  $("#analyze").disabled = !infoPath || !hasVideo;
+  $("#analyze").disabled = !environmentReady || !infoPath || !hasVideo;
+  for (const id of ["inspect", "enqueue-analyze", "compare", "enqueue-compare", "trial", "enqueue-trial"])
+    if ($("#" + id)) $("#" + id).disabled = !environmentReady;
   $("#import-report").disabled = value;
   $("#import-button").disabled = value;
 }
@@ -185,6 +208,7 @@ async function launch(data) {
   submitting = true;
   try {
     const j = await api("jobs", { method: "POST", body: JSON.stringify(data) });
+    latestJobs.push({ id: j.id, status: "queued" });
     if (!data.enqueue) autoOpen = j.id;
     message(data.enqueue ? "已加入队列，参数已保存" : "任务已提交");
     await poll();
@@ -313,6 +337,7 @@ async function poll() {
     const previous = current,
       s = await api("status"),
       running = s.jobs.find((j) => j.status === "running");
+    showStartup(s);
     current = running?.id ?? null;
     latestJobs = s.jobs;
     const pending = s.jobs.filter((j) =>
@@ -329,7 +354,7 @@ async function poll() {
       " · " +
       pending.filter((j) => j.status === "queued").length +
       " 项等待";
-    $("#queue-start").disabled = !s.jobs.some((j) => j.status === "queued");
+    $("#queue-start").disabled = !environmentReady || !s.jobs.some((j) => j.status === "queued");
     $("#queue-pause").disabled = !s.queueRunning;
     $("#queue-history-count").textContent = `已结束任务（${history.length}）`;
     const nextQueue = JSON.stringify(
@@ -1684,12 +1709,7 @@ function renderTrial(r) {
 }
 api("status")
   .then((s) => {
-    $("#environment").textContent = s.versions.ffmpeg;
-    for (const box of document.querySelectorAll("[name=metric]"))
-      if (!s.metrics.includes(box.value)) {
-        box.checked = false;
-        box.disabled = true;
-      }
+    showStartup(s);
     poll();
   })
   .catch((e) => message(e.message, true));

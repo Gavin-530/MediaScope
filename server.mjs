@@ -10,12 +10,14 @@ import { FF,FP,run,probe,video,scan,summarize,compare,normalizeMediaPath,decodeT
 import {allPackets,structure,traceStructure,mapStructure,metadataSummary,complexity,trial,trialOptions} from './analysis.mjs';
 import {makePortable,maxPortableBytes} from './public/portable.js';
 const root=path.dirname(fileURLToPath(import.meta.url)),token=randomBytes(24).toString('hex'),jobs=new Map();
+const appVersion=JSON.parse((await readFile(path.join(root,'package.json'),'utf8')).replace(/^\uFEFF/,'')).version;
 const port=Number(process.env.PORT||4317);let origin=`http://127.0.0.1:${port}`;
 const execFileAsync=promisify(execFile);
-let active=null,pickerActive=false,queueRunning=false;
+let active=null,pickerActive=false,pickerProcess=null,queueRunning=false,closing=false;
+const probes=new Set();
 const inputs=new Map();
 function pump(){
- if(active||!queueRunning)return;
+ if(active||!queueRunning||closing)return;
  const job=[...jobs.values()].find(j=>j.status==='queued');
  if(!job){queueRunning=false;return}
  active=job.id;job.status='running';job.startedAt=new Date().toISOString();job.message='准备分析';
@@ -23,9 +25,29 @@ function pump(){
  execute(job,input).catch(e=>{job.status=job.controller.signal.aborted?'cancelled':'error';job.message=e.message;job.finishedAt=new Date().toISOString()}).finally(()=>{active=null;pump()});
 }
 const versions={};
-for(const [key,exe] of [['ffmpeg',FF],['ffprobe',FP]]){try{versions[key]=(await run(exe,['-version'])).split('\n')[0]}catch(e){versions[key]=`不可用：${e.message}`}}
-let filters='';try{filters=await run(FF,['-hide_banner','-filters'])}catch{}
-const capabilities={versions,metrics:['psnr','ssim','vmaf'].filter(m=>filters.includes(m==='vmaf'?'libvmaf':m))};
+const startup={state:'checking',message:'正在检查运行环境，请稍候'};
+const capabilities={appVersion,versions,metrics:[]};
+let startupTimer;
+async function loadStartup(){
+  if(process.env.MEDIASCOPE_STARTUP_RESULT){
+    try {
+      const result=JSON.parse((await readFile(process.env.MEDIASCOPE_STARTUP_RESULT,'utf8')).replace(/^\uFEFF/,''));
+      if(!['ready','checking','error'].includes(result.state))throw Error('环境检查结果无效');
+      startup.state=result.state;startup.message=result.message||(result.state==='checking'?'正在后台检查运行环境，请稍候':result.state==='ready'?'运行环境已就绪':'运行环境检查失败');
+      if(result.state==='ready'){
+        for(const key of ['ffmpeg','ffprobe'])versions[key]=result.validation.programs[key].version;
+        capabilities.metrics=['psnr','ssim','vmaf'];clearInterval(startupTimer);
+      }else if(result.state==='error')clearInterval(startupTimer);
+    }catch(e){if(e.code==='ENOENT'){startup.state='error';startup.message='启动检查记录丢失，请重启软件';clearInterval(startupTimer)}}
+  }else{
+    for(const [key,exe] of [['ffmpeg',FF],['ffprobe',FP]]){try{versions[key]=(await run(exe,['-version'])).split('\n')[0]}catch(e){versions[key]=`不可用：${e.message}`}}
+    let filters='';try{filters=await run(FF,['-hide_banner','-filters'])}catch{}
+    capabilities.metrics=['psnr','ssim','vmaf'].filter(m=>filters.includes(m==='vmaf'?'libvmaf':m));
+    startup.state='ready';startup.message='运行环境已就绪';
+  }
+}
+// Bare node/server and test callers retain their original ready-at-listen contract.
+if(!process.env.MEDIASCOPE_STARTUP_RESULT)await loadStartup();
 function send(res,status,data){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data))}
 async function body(req,limit=16384){const chunks=[];let size=0;for await(const b of req){size+=b.length;if(size>limit)throw Error('请求过大');chunks.push(b)}return JSON.parse(Buffer.concat(chunks).toString('utf8')||'{}')}
 function normalizeInputPaths(input){
@@ -68,12 +90,16 @@ async function selectMediaFile(){
   const script=`[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false)\nAdd-Type -AssemblyName System.Windows.Forms\nAdd-Type -AssemblyName System.Drawing\nAdd-Type @'\nusing System;\nusing System.Runtime.InteropServices;\npublic static class MediaScopeWindow {\n  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);\n}\n'@\n$owner=New-Object System.Windows.Forms.Form\n$owner.ShowInTaskbar=$false\n$owner.TopMost=$true\n$owner.StartPosition=[System.Windows.Forms.FormStartPosition]::Manual\n$owner.Location=New-Object System.Drawing.Point(-32000,-32000)\n$owner.FormBorderStyle=[System.Windows.Forms.FormBorderStyle]::FixedToolWindow\n$owner.Size=New-Object System.Drawing.Size(1,1)\n$owner.Opacity=0.01\n$dialog=New-Object System.Windows.Forms.OpenFileDialog\n$dialog.Title='选择要分析的媒体文件'\n$dialog.Filter='媒体文件|*.mov;*.mp4;*.mkv;*.mxf;*.avi;*.webm;*.m4v;*.ts;*.mts;*.m2ts;*.wav;*.flac;*.aac;*.m4a;*.mp3;*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.exr|视频文件|*.mov;*.mp4;*.mkv;*.mxf;*.avi;*.webm;*.m4v;*.ts;*.mts;*.m2ts|所有文件|*.*'\n$dialog.Multiselect=$false\n$dialog.CheckFileExists=$true\n$dialog.RestoreDirectory=$true\ntry{$owner.Show();$owner.Activate();[MediaScopeWindow]::SetForegroundWindow($owner.Handle)|Out-Null;if($dialog.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK){[Console]::Write($dialog.FileName)}}finally{$dialog.Dispose();$owner.Close();$owner.Dispose()}`;
   const encoded=Buffer.from(script,'utf16le').toString('base64');
   let stdout;
-  try{({stdout}=await execFileAsync('powershell.exe',['-NoProfile','-STA','-EncodedCommand',encoded],{encoding:'utf8',windowsHide:false,maxBuffer:1024*1024,timeout:600000}))}
+  try{
+    const operation=execFileAsync('powershell.exe',['-NoProfile','-STA','-EncodedCommand',encoded],{encoding:'utf8',windowsHide:false,maxBuffer:1024*1024,timeout:600000});
+    pickerProcess=operation.child;({stdout}=await operation);
+  }
   catch(e){throw Error(`文件选择器未能完成：${e.stderr?.trim()||e.message}`)}
-  finally{pickerActive=false}
+  finally{pickerActive=false;pickerProcess=null}
   return stdout?normalizeMediaPath(stdout):null;
 }
 function createJob(input){
+  if(closing)throw Error('软件正在退出，无法提交新任务');
   const queuedAt=new Date().toISOString();
   const description=input.type==='analyze'?`视频轨道 ${input.stream==null?'自动':`#${input.stream}`}${input.complexity?' · SI/TI':''}`
     :input.type==='compare'?`轨道 #${input.refStream} → #${input.candidateStream} · ${(input.metrics||[]).join(' / ').toUpperCase()}`
@@ -162,7 +188,7 @@ async function execute(job,input){
     await writeFile(path.join(cwd,'report.json'),JSON.stringify(job.result,null,2));
     job.reportPath=path.join(cwd,'report.json');delete job.result;
     job.status='done';job.message='完成';job.progress={...(job.progress||{}),stage:'完成',detail:'报告已保存',completed:1,total:1,unit:'份报告',updatedAt:new Date().toISOString()};
-  }catch(e){job.status=job.controller.signal.aborted?'cancelled':'error';job.message=e.message;job.progress={...(job.progress||{}),stage:job.status==='cancelled'?'已取消':'任务未完成',detail:e.message,updatedAt:new Date().toISOString()};await writeFile(path.join(cwd,'failure.json'),JSON.stringify({status:job.status,error:e.message,commands:ctx.commands},null,2)).catch(()=>{});}
+  }catch(e){const status=job.controller.signal.aborted?'cancelled':'error';job.message=e.message;job.progress={...(job.progress||{}),stage:status==='cancelled'?'已取消':'任务未完成',detail:e.message,updatedAt:new Date().toISOString()};await writeFile(path.join(cwd,'failure.json'),JSON.stringify({status,error:e.message,commands:ctx.commands},null,2)).catch(()=>{});job.status=status;}
   finally{job.finishedAt=new Date().toISOString();}
 }
 const server=http.createServer(async(req,res)=>{
@@ -171,7 +197,14 @@ const server=http.createServer(async(req,res)=>{
     const url=new URL(req.url,origin);
     if(url.pathname.startsWith('/api/')){
       if(req.headers['x-mediascope-token']!==token||(req.headers.origin&&req.headers.origin!==origin)){send(res,403,{error:'访问校验失败，请刷新本机页面'});return}
-      if(req.method==='GET'&&url.pathname==='/api/status'){send(res,200,{...capabilities,queueRunning,jobs:[...jobs.values()].map(({controller,result,...j})=>j)});return}
+      if(closing&&url.pathname!=='/api/status'&&url.pathname!=='/api/desktop/shutdown'){send(res,503,{error:'软件正在退出'});return}
+      if(req.method==='GET'&&url.pathname==='/api/status'){send(res,200,{...capabilities,startup,desktop:process.env.MEDIASCOPE_DESKTOP==='1',queueRunning,jobs:[...jobs.values()].map(({controller,result,...j})=>j)});return}
+      if(req.method==='POST'&&url.pathname==='/api/desktop/shutdown'){
+        send(res,200,{ok:true});void shutdown();return;
+      }
+      if(req.method==='POST'&&startup.state!=='ready'&&['/api/jobs','/api/probe','/api/queue','/api/plans/import'].includes(url.pathname)){
+        send(res,503,{error:startup.message});return;
+      }
       if(req.method==='GET'&&url.pathname==='/api/plans'){
         const plans=[...jobs.values()].filter(j=>j.status==='queued').map(j=>{try{return {entryId:j.id,input:validatePlanInput(portableInput(inputs.get(j.id)))}}catch(e){throw Error(`待运行任务 ${j.id} 无法安全导出：${e.message}`)}});
         send(res,200,makePortable({plans}));return;
@@ -193,11 +226,17 @@ const server=http.createServer(async(req,res)=>{
       if(req.method==='POST'&&url.pathname==='/api/select-file'){send(res,200,{file:await selectMediaFile()});return}
       if(req.method==='POST'&&url.pathname==='/api/probe'){
         const input=await body(req),file=normalizeMediaPath(input.file);
-        const commands=[],result=await probe(file,{signal:AbortSignal.timeout(30000),commands,update:()=>{}});
-        send(res,200,{schema:'MediaScope/0.2',createdAt:new Date().toISOString(),type:'inspect',tools:versions,commands,...result,metadata:metadataSummary(result)});return;
+        if(closing){send(res,503,{error:'软件正在退出'});return}
+        const controller=new AbortController();probes.add(controller);
+        try{
+          const commands=[],result=await probe(file,{signal:AbortSignal.any([controller.signal,AbortSignal.timeout(30000)]),commands,update:()=>{}});
+          send(res,200,{schema:'MediaScope/0.2',createdAt:new Date().toISOString(),type:'inspect',tools:versions,commands,...result,metadata:metadataSummary(result)});
+        }finally{probes.delete(controller)}
+        return;
       }
       const retry=url.pathname.match(/^\/api\/jobs\/([a-f0-9-]+)\/retry$/);
       if(req.method==='POST'&&retry){
+        if(startup.state!=='ready'){send(res,503,{error:startup.message});return}
         const original=jobs.get(retry[1]);
         if(!original){send(res,404,{error:'任务不存在'});return}
         if(!['done','cancelled','error'].includes(original.status)){send(res,409,{error:'只能重新排队已完成、取消或失败的任务'});return}
@@ -219,10 +258,23 @@ const server=http.createServer(async(req,res)=>{
     }
     const files={'/':'index.html','/app.js':'app.js','/report.js':'report.js','/portable.js':'portable.js','/charts.js':'charts.js','/trial-model.js':'trial-model.js','/style.css':'style.css'};
     if(req.method!=='GET'||!files[url.pathname]){res.writeHead(404);res.end();return}
-    const name=files[url.pathname];let data=await readFile(path.join(root,'public',name));if(name==='index.html')data=Buffer.from(data.toString().replace('__TOKEN__',token));
+    const name=files[url.pathname];let data=await readFile(path.join(root,'public',name));if(name==='index.html')data=Buffer.from(data.toString().replace('__TOKEN__',token).replace('__APP_VERSION__',appVersion));
     res.writeHead(200,{'Content-Type':name.endsWith('.html')?'text/html; charset=utf-8':name.endsWith('.js')?'text/javascript; charset=utf-8':'text/css; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' blob:; object-src 'none'; frame-ancestors 'none'"});res.end(data);
   }catch(e){send(res,400,{error:e.message})}
 });
-server.listen(port,'127.0.0.1',()=>{origin=`http://127.0.0.1:${server.address().port}`;console.log(`MediaScope 已启动：${origin}\n保持窗口运行，浏览器打开以上地址。Ctrl+C 停止。\n${versions.ffmpeg}`)});
+server.listen(port,'127.0.0.1',()=>{
+  origin=`http://127.0.0.1:${server.address().port}`;
+  console.log(`MediaScope 已启动：${origin}\n${process.env.MEDIASCOPE_DESKTOP==='1'?'关闭 MediaScope 应用窗口即可退出。':'浏览器打开以上地址。Ctrl+C 停止。'}`);
+  if(process.env.MEDIASCOPE_STARTUP_RESULT){startupTimer=setInterval(()=>void loadStartup(),200);void loadStartup()}
+});
 server.on('error',e=>{console.error(e.message);process.exitCode=1});
-process.on('SIGINT',()=>{queueRunning=false;for(const j of jobs.values())j.controller.abort();server.close(()=>process.exit())});
+async function shutdown(){
+  if(closing)return;closing=true;clearInterval(startupTimer);queueRunning=false;
+  for(const j of jobs.values())j.controller.abort();
+  for(const controller of probes)controller.abort();pickerProcess?.kill();
+  server.close();server.closeIdleConnections();
+  const deadline=Date.now()+8000;
+  while(active&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,50));
+  process.exit(0);
+}
+process.on('SIGINT',()=>void shutdown());process.on('SIGTERM',()=>void shutdown());
