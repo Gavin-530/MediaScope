@@ -14,6 +14,7 @@
 
   --input-bg: rgba(255, 255, 255, 0.6);
   --input-border: rgba(0, 0, 0, 0.15);
+  --select-menu-bg: #ffffff;
   --button-bg: #e0e7ff;
   --button-hover: #c7d2fe;
   --accent-text: #ffffff;
@@ -54,6 +55,7 @@
 
   --input-bg: rgba(0, 0, 0, 0.2);
   --input-border: rgba(255, 255, 255, 0.15);
+  --select-menu-bg: #1f2937;
   --button-bg: #374151;
   --button-hover: #4b5563;
   --accent-text: #ffffff;
@@ -89,6 +91,7 @@
 
     --input-bg: rgba(0, 0, 0, 0.2);
     --input-border: rgba(255, 255, 255, 0.15);
+    --select-menu-bg: #1f2937;
     --button-bg: #374151;
     --button-hover: #4b5563;
     --accent-text: #ffffff;
@@ -340,6 +343,80 @@ select:focus {
   outline: 1px solid var(--accent);
 }
 
+/* Match native fallback menus to the theme, too. */
+select option {
+  background: var(--select-menu-bg);
+  color: var(--text);
+}
+
+/* Keep native selection/accessibility while styling the top-layer picker. */
+@supports (appearance: base-select) {
+  select,
+  select::picker(select) {
+    appearance: base-select;
+  }
+
+  select {
+    align-items: center;
+    gap: 12px;
+  }
+
+  select::picker-icon {
+    color: var(--muted);
+  }
+
+  select:open::picker-icon {
+    rotate: 180deg;
+  }
+
+  select::picker(select) {
+    background: var(--select-menu-bg);
+    color: var(--text);
+    border: 1px solid var(--input-border);
+    border-radius: 12px;
+    box-shadow: var(--panel-shadow);
+    padding: 6px;
+    margin-block: 6px;
+    min-width: anchor-size(width);
+    max-width: calc(100vw - 24px);
+    max-height: min(320px, 70vh);
+    overflow: auto;
+  }
+
+  select option {
+    gap: 12px;
+    min-height: 36px;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-weight: 500;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    cursor: pointer;
+  }
+
+  select option:checked {
+    background: var(--button-bg);
+    font-weight: 600;
+  }
+
+  select option:enabled:hover,
+  select option:enabled:focus {
+    background: var(--button-hover);
+  }
+
+  select option::checkmark {
+    order: 1;
+    margin-left: auto;
+    color: var(--accent);
+  }
+
+  select:disabled,
+  select option:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
 button {
   border: 0;
   border-radius: 5px;
@@ -563,6 +640,15 @@ canvas {
   gap: 12px;
   align-items: center;
   margin: 14px 0;
+}
+
+footer a {
+  color: inherit;
+  text-decoration: none;
+}
+
+footer a:hover {
+  text-decoration: underline;
 }
 
 footer {
