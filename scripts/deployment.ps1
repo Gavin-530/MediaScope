@@ -8,8 +8,24 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 function Read-Json($Path) { Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json }
 function Write-Json($Path,$Value) {
   $temp="$Path.$([guid]::NewGuid().ToString('N')).tmp"
-  $Value | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $temp -Encoding UTF8
-  if(Test-Path -LiteralPath $Path){[IO.File]::Replace($temp,$Path,[NullString]::Value)}else{[IO.File]::Move($temp,$Path)}
+  try {
+    $Value | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $temp -Encoding UTF8
+    for($attempt=0;;$attempt++){
+      try {
+        if(Test-Path -LiteralPath $Path){[IO.File]::Replace($temp,$Path,[NullString]::Value)}else{[IO.File]::Move($temp,$Path)}
+        return
+      } catch {
+        $failure=$_.Exception
+        while($failure.InnerException){$failure=$failure.InnerException}
+        $code=$failure.HResult -band 0xffff
+        # Keep atomic replacement; only transient sharing/delete errors may retry.
+        if($failure -isnot [IO.IOException] -or $code -notin @(32,33,1175) -or $attempt -ge 7){
+          throw "JSON update failed: $Path (Windows error $code). $($failure.Message)"
+        }
+        Start-Sleep -Milliseconds 125
+      }
+    }
+  } finally {if(Test-Path -LiteralPath $temp){Remove-Item -LiteralPath $temp -Force}}
 }
 function Safe-Path($Root,[string]$Relative) {
   if(!$Relative -or $Relative -match '(^[/\\]|:|(^|[/\\])\.\.?([/\\]|$)|[<>"|?*]|[. ]([/\\]|$))'){throw "Unsafe path: $Relative"}
