@@ -75,8 +75,9 @@ function Find-ReceivedRecords([string]$Path,[int]$Depth=0) {
   if(Test-Path -LiteralPath (Join-Path $full 'manifest.json') -PathType Leaf){
     Assert-ReceivedTree $full
     $m=Get-Content -LiteralPath (Join-Path $full 'manifest.json') -Raw -Encoding UTF8|ConvertFrom-EvidenceJson
-    if($m.evidenceRevision -ne 2){throw 'Received legacy records need sealed envelopes before import'}
-    $relative='records/'+(Convert-EvidenceRunName $m.runId)
+    if($m.evidenceRevision -ne 2 -and $m.archiveRevision -ne 1){throw 'Received legacy records need sealed envelopes or explicit compaction metadata before import'}
+    $identifier=if($m.archiveRevision -eq 1){$m.archive.identifier}else{$m.runId}
+    $relative='records/'+(Convert-EvidenceRunName $identifier)
     $null=Test-EvidenceRecord $full $relative
     return @{source=$full;relative=$relative}
   }
@@ -100,6 +101,7 @@ function Find-ReceivedRecords([string]$Path,[int]$Depth=0) {
 function Get-ImportIdentity($Source) {
   if(Test-Path -LiteralPath (Join-Path $Source 'record.json')){return (Get-Content -LiteralPath (Join-Path $Source 'record.json') -Raw -Encoding UTF8|ConvertFrom-EvidenceJson)}
   $m=Get-Content -LiteralPath (Join-Path $Source 'manifest.json') -Raw -Encoding UTF8|ConvertFrom-EvidenceJson
+  if($m.archiveRevision -eq 1){return @{category=$(if($m.archive.originalRelative.StartsWith('runs/')){'tests'}elseif($m.kind -eq 'generated-fixture-snapshot'){'fixtures'}else{'maintenance'});origin=$(if($m.github){'github-actions'}else{'local'});originalRelative=$m.archive.originalRelative;github=$m.github}}
   return @{category='tests';origin=$(if($m.github){'github-actions'}else{'local'});originalRelative=('runs/'+$m.version+'/'+$m.runId);github=$m.github}
 }
 
@@ -118,6 +120,7 @@ function Get-ReceivedPlan([string]$Records) {
   foreach($item in @(Find-ReceivedRecords $Records)){
     $recordFile=Join-Path $item.source 'record.json'
     $record=Get-ImportIdentity $item.source
+    if($record.github -and $project -eq [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..')).TrimEnd('\')){throw 'Received cloud evidence needs repository-bound github:import or reviewed archive merge; original retained, old cloud destination refused'}
     $relative=Get-EvidenceFlatLocation ([string]$item.relative)
     $identity=$record.category+'|'+$record.origin+'|'+$record.originalRelative
     $destination=Assert-EvidencePath $project (Join-Path $root $relative)

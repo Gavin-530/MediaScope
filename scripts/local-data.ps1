@@ -18,10 +18,10 @@ foreach($rule in $policy.rules){
   if(!$full.StartsWith($project+'\',[StringComparison]::OrdinalIgnoreCase) -or $rules.ContainsKey($name)){throw "Invalid local data rule: $name"}
   $rules[$name]=@{path=$full;class=$rule.class;reason=$rule.reason}
 }
-foreach($name in @('.mediascope','releases','test-work\acceptance-20260921')){
+foreach($name in @('releases','github-archive','local-notes','test-work\acceptance-20260921')){
   if(!$rules.ContainsKey($name) -or $rules[$name].class -ne 'protected'){throw "Required protected rule missing: $name"}
 }
-foreach($name in @('evidence-archive','test-work','.build','.build\downloads','evidence-archive\pending')){
+foreach($name in @('.mediascope','evidence-archive','test-work','.build','.build\downloads','evidence-archive\pending')){
   if(!$rules.ContainsKey($name)){throw "Required local data rule missing: $name"}
 }
 
@@ -77,7 +77,7 @@ function Assert-CleanTarget([string]$Path) {
 }
 
 function Test-GeneratedName([string]$Name) {
-  return ($Name -match '^(bitdepth|server-reports|trial|trial-libaom-av1|trial-libx265|trials-expanded|startup-desktop)$' -or
+  return ($Name -match '^(bitdepth|server-reports|trial|trial-libaom-av1|trial-libx265|trials-expanded|startup-desktop|runtime-data)$' -or
     $Name -match '^(metrics-equivalence|reference-cache|siti-parallel|structure-equivalence|vfr-equivalence|archive-layout|local-import|github-evidence|test-system|independent-evidence)-[A-Za-z0-9]{6}$')
 }
 
@@ -197,7 +197,7 @@ if($Action -eq 'Status'){
 if($Action -eq 'Verify'){
   if($Category -or $Apply){throw 'Verify does not accept -Category or -Apply'}
   Verify-ProtectedData
-  foreach($name in @('evidence-archive','.mediascope','releases','test-work\acceptance-20260921')){
+  foreach($name in @('evidence-archive','releases','test-work\acceptance-20260921')){
     if(Test-Path -LiteralPath $rules[$name].path){$size=Get-Size $rules[$name].path;Write-Output "Protected path scanned: $name ($($size.count) files)"}
   }
   exit 0

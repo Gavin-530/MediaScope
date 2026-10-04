@@ -117,8 +117,37 @@ function Test-EvidenceChecksums($Root) {
 function Test-EvidenceRecord($Root,$Relative) {
   $null=Test-EvidenceChecksums $Root
   if(Test-Path -LiteralPath (Join-Path $Root 'record.json')){return (Test-EvidenceEnvelope $Root $Relative)}
+  $compacted=$false
   if(Test-Path -LiteralPath (Join-Path $Root 'manifest.json')){
     $direct=Get-Content -LiteralPath (Join-Path $Root 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson
+    if($direct.archiveRevision -eq 1){
+      $a=$direct.archive
+      if($a.schema -ne 1 -or $a.operation -ne 'historical-compaction' -or $a.previousChecksumsSha256 -notmatch '^[a-fA-F0-9]{64}$' -or !$a.originalRelative -or $a.rerun -ne $false){throw 'Invalid historical compaction metadata'}
+      $time=Get-EvidenceRunTime $a.identifier
+      if($Relative.StartsWith('records/') -and $Relative -ne ('records/'+(Convert-EvidenceRunName $a.identifier))){throw 'Compacted record location mismatch'}
+      if($direct.kind -notin @('App','Package','OnlineDeployment','Custom','build-maintenance','pull-request-merge-audit','test-system-audit','generated-fixture-snapshot','historical-evidence-collection')){throw 'Invalid historical record kind'}
+      if($direct.runId -and $direct.runId -ne $a.identifier){throw 'Compacted run identity mismatch'}
+      $originalOutcome=if($direct.outcome){$direct.outcome}else{'archived'}
+      if($a.originalOutcome -ne $originalOutcome){throw 'Compacted outcome mismatch'}
+      if($direct.kind -in @('App','Package','OnlineDeployment','Custom') -and $a.originalRelative -ne ('runs/'+$direct.version+'/'+$direct.runId)){throw 'Compacted logical identity mismatch'}
+      $packed=Join-Path $Root 'historical-data.json.gz'
+      if($a.retention.retainedDataFiles -gt 0 -and !(Test-Path -LiteralPath $packed)){throw 'Historical attachments missing'}
+      if(Test-Path -LiteralPath $packed){
+        $stream=[IO.File]::OpenRead($packed);$gzip=New-Object IO.Compression.GzipStream($stream,[IO.Compression.CompressionMode]::Decompress);$reader=New-Object IO.StreamReader($gzip)
+        try{$data=$reader.ReadToEnd()|ConvertFrom-EvidenceJson}finally{$reader.Dispose();$gzip.Dispose();$stream.Dispose()}
+        if($data.schema -ne 1 -or $data.encoding -ne 'base64' -or @($data.entries).Count -ne $a.retention.retainedDataFiles){throw 'Invalid historical attachments'}
+        $names=@{}
+        foreach($entry in $data.entries){
+          if(!$entry.path -or $entry.path -match '(^/|[\\:]|(^|/)\.\.?(/|$))' -or $names.ContainsKey($entry.path.ToLowerInvariant())){throw 'Invalid historical attachment path'}
+          $names[$entry.path.ToLowerInvariant()]=$true
+          $bytes=[Convert]::FromBase64String($entry.base64);$hash=[Security.Cryptography.SHA256]::Create()
+          try{$digest=([BitConverter]::ToString($hash.ComputeHash($bytes))).Replace('-','')}finally{$hash.Dispose()}
+          if($bytes.Length -ne $entry.bytes -or $digest -ne $entry.sha256){throw 'Historical attachment bytes changed'}
+        }
+      }
+      $Relative=$a.originalRelative
+      $compacted=$true
+    }
     if($direct.evidenceRevision -eq 2){
       if($direct.kind -notin @('App','Package','Deployment','OnlineDeployment','Custom')){throw 'Invalid independent record kind'}
       if(!$Relative.StartsWith('records/') -and !$Relative.StartsWith('runs/')){throw 'Invalid independent record location'}
@@ -150,8 +179,8 @@ function Test-EvidenceRecord($Root,$Relative) {
     if($manifest.outcome -ne 'blocked' -and (!$manifest.testSummary -or $manifest.testSummary.tests -le 0)){throw "Missing structured test results: $Relative"}
     if($manifest.outcome -eq 'passed' -and ($manifest.testSummary.failed -ne 0 -or $manifest.testSummary.cancelled -ne 0 -or $manifest.testSummary.passed -le 0)){throw "Passed run contains failures or no executed passes: $Relative"}
     if($manifest.outcome -ne 'blocked'){
-      $requiredFiles=if($manifest.evidenceRevision -eq 2){@('results.json','features.json')}else{@('results.json','source.zip','source-manifest.json')}
-      if($manifest.evidenceRevision -eq 1){$requiredFiles+=@('features.json','events.jsonl.gz','artifact-manifest.json')}
+      $requiredFiles=if($manifest.evidenceRevision -eq 2){@('results.json','features.json')}elseif($compacted){@('results.json','source-manifest.json')}else{@('results.json','source.zip','source-manifest.json')}
+      if($manifest.evidenceRevision -eq 1){$requiredFiles+=@('features.json','events.jsonl.gz');if(!$compacted){$requiredFiles+=@('artifact-manifest.json')}}
       foreach($required in $requiredFiles){if(!(Test-Path -LiteralPath (Join-Path $Root $required) -PathType Leaf)){throw "Missing run evidence $required : $Relative"}}
       $results=Get-Content -LiteralPath (Join-Path $Root 'results.json') -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson
       foreach($field in @('tests','passed','failed','cancelled','skipped','todo')){if($results.counts.$field -ne $manifest.testSummary.$field){throw "Structured count mismatch ($field): $Relative"}}
@@ -185,7 +214,8 @@ function Test-EvidenceRecord($Root,$Relative) {
     }
   }
   if($manifest.evidenceRevision -eq 1 -and $manifest.kind -in @('Package','OnlineDeployment')){
-    foreach($required in @('harness.zip','harness-manifest.json')){if(!(Test-Path -LiteralPath (Join-Path $Root $required) -PathType Leaf)){throw "Missing verifier snapshot $required : $Relative"}}
+    $requiredSnapshots=if($compacted){@('harness-manifest.json')}else{@('harness.zip','harness-manifest.json')}
+    foreach($required in $requiredSnapshots){if(!(Test-Path -LiteralPath (Join-Path $Root $required) -PathType Leaf)){throw "Missing verifier snapshot $required : $Relative"}}
     if($manifest.outcome -eq 'passed'){
       $deployment=Get-Content -LiteralPath (Join-Path $Root 'deployment-results.json') -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson
       $passed=@($deployment.checks | Where-Object {$_.status -eq 'passed'}).Count
@@ -360,6 +390,7 @@ function Get-EvidencePayload($Record) {
   $manifestPath=Join-Path $Record.source 'manifest.json'
   if(Test-Path -LiteralPath $manifestPath){
     $m=Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson
+    if($m.archiveRevision -eq 1){return @{source=$Record.source;relative=$m.archive.originalRelative}}
     if($m.evidenceRevision -eq 2){return @{source=$Record.source;relative=('runs/'+$m.version+'/'+$m.runId)}}
   }
   $relative=$Record.relative -replace '^legacy/local-test-archive/',''
@@ -437,15 +468,24 @@ function Get-EvidenceDestination($Project,$OriginalRelative,$Manifest) {
   return (Assert-EvidencePath $Project (Join-Path $root ('records/'+$name)))
 }
 function Publish-EvidenceRecord($Project,$Source,$OriginalRelative,[string]$TransportArchive,[string]$ArtifactArchive) {
+  # The permanent local project must route cloud records through the bound platform archive.
+  # Hosted CI and explicitly isolated protocol/transport receivers remain temporary workspaces.
+  $permanentProject=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..')).TrimEnd('\')
+  $sourceManifest=Join-Path $Source 'manifest.json'
+  if([IO.Path]::GetFullPath($Project).TrimEnd('\') -eq $permanentProject -and $permanentProject -notmatch '[\\/]test-work[\\/](github-evidence|independent-evidence|archive-layout)-[A-Za-z0-9]{6}([\\/]|$)' -and (Test-Path -LiteralPath $sourceManifest)){
+    $incoming=Get-Content -LiteralPath $sourceManifest -Raw -Encoding UTF8|ConvertFrom-EvidenceJson
+    if($incoming.github -and !($env:GITHUB_ACTIONS -eq 'true' -and $env:RUNNER_ENVIRONMENT -eq 'github-hosted')){throw 'Cloud evidence must use github:import; old permanent evidence destination refused'}
+  }
   $root=Initialize-EvidenceArchive $Project
   $src=Assert-EvidencePath $Project $Source
   $manifestPath=Join-Path $src 'manifest.json'
   $manifest=if(Test-Path -LiteralPath $manifestPath){Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson}else{$null}
   $destination=Get-EvidenceDestination $Project $OriginalRelative $manifest
+  if($manifest.archiveRevision -eq 1){$destination=Join-Path $root ('records/'+(Convert-EvidenceRunName $manifest.archive.identifier))}
   if(Test-Path -LiteralPath $destination){throw "Evidence destination exists: $destination"}
   if(!(Test-Path -LiteralPath (Join-Path $src 'SHA256SUMS.txt'))){Write-EvidenceChecksums $src}
   $null=Test-EvidenceRecord $src $OriginalRelative
-  if($manifest.evidenceRevision -eq 2){
+  if($manifest.evidenceRevision -eq 2 -or $manifest.archiveRevision -eq 1){
     $null=New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force
     [IO.Directory]::Move($src,$destination)
     Update-EvidenceCatalogCache $root

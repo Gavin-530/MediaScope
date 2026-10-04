@@ -10,6 +10,8 @@ export function measurementFile(relative) {
   if(['browser','server-reports','chroma-assumption','portable','report-validation'].includes(top))return name==='report.json'||/^theme-.*\.json$/.test(name)||name==='sidebar-links.json';
   if(['trials-expanded','chart-model'].includes(top))return name==='measured-trial.json';
   if(top==='startup-desktop')return ['cache-result.json','page-timing.json'].includes(name);
+  if(top==='runtime-data')return /^measured-.*\.json$/.test(name);
+  if(top==='basic-properties')return name==='measured-properties.json';
   return false;
 }
 
@@ -21,7 +23,7 @@ export async function saveMeasurements(generated,evidence,{failed=false}={}) {
       if(item.isSymbolicLink())throw Error('Linked test measurement: '+relative);
       if(item.isDirectory()) {
         // Protocol fixture archives and browser profiles never contain product measurements.
-        if(relative.split('/').some(part=>['desktop-profile','node_modules','runtimes','evidence-archive'].includes(part)))continue;
+        if(relative.split('/').some(part=>['desktop-profile','node_modules','runtimes','evidence-archive','github-archive'].includes(part)))continue;
         if(relative.split('/')[0].match(/^(archive-layout|local-import|github-evidence|test-system|independent-evidence)-/))continue;
         await visit(file);
       } else if(measurementFile(relative)) {

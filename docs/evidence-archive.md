@@ -1,5 +1,9 @@
 # MediaScope 测试归档
 
+本文的正式记录范围为本地测试、维护和协作者资料。GitHub 平台及云端证据永久位置为 github-archive，见[平台档案规范](github-archive.md)。evidence:list/verify 默认本地范围；-Scope github 查看或校验平台记录，-Scope all 明确综合查看。复制迁移先保留旧云端源；显式 github:prune 经逐份原始字节、产品验证和实际恢复核对后可清理精确匹配的旧云端 records 副本。综合列表按运行身份优先显示新位置，不以清理完成推断独立存储备份已经完成。
+
+维护报告可以带有 GitHub 运行关联，但关联不等于整份报告是重复的云端产品证据。此类独有报告保留，默认本地列表以 `maintenance-with-github-association` 明示，综合列表不能仅凭相同 run/attempt 隐藏它；原来源和关联字段继续显示。
+
 每次测试命令执行对应 `records/<时间>-<唯一编号>/` 下一个独立文件夹。默认保存必要结果；有实测数据或失败诊断时才增加对应文件。记录之间不共享必需附件，不引用前置测试作为解读或校验条件。
 
 ## 新记录格式
@@ -54,7 +58,15 @@ npm run evidence:import -- -Contributor 'Alice' -Apply
 
 ## 历史兼容与维护
 
-旧 schema 和 evidenceRevision 0/1、record.json/original 封装、旧本地和 GitHub 目录继续原样读取、独立校验。更新程序不改写历史文件、不补造数值、不自动压缩或删除旧资料。新版较小的格式只应用于新运行。
+旧 schema 和 evidenceRevision 0/1、record.json/original 封装、旧本地和 GitHub 目录继续原样读取、独立校验。更新程序不自动改写、压缩或删除旧资料。新版产品格式只应用于新运行。
+
+显式运行 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/maintain-test-evidence.ps1` 预览历史整理；加 `-Apply` 执行。执行前检查活动进程并取得归档锁。每份历史记录先校验，再暂存、校验保留内容、替换原目录，最后回收已核对的冗余。中断时 `.build/evidence-maintenance-*` 保留事务日志供审查，不自动删除未知资料。
+
+整理后的历史档案使用 `archiveRevision: 1`，与产品 `evidenceRevision` 分开。它保留原清单的规格、运行身份、结果、测试计数和时间精度，添加 `archive` 迁移来源与原摘要；不会补造缺失功能映射、实测数值或当前完整验收结论。目录统一为 `records/<原始时间>-<唯一编号>`，无时间的混合资料仍用 `undated`。去掉 `record.json/README/original` 外层封装；真正的维护说明仍保留。
+
+源码/验证器 ZIP、模拟档案与回执、可重建媒体和浏览器/运行时副本可以显式回收；源码身份清单继续保留，已删除未提交源码时不能承诺精确重现。生成素材快照的旧逐文件/逐项源清单一并回收，移除的清单字段记录在 `archive.discardedManifestFields`，原快照摘要只作迁移来源。实际历史附件（包括素材 ZIP 内的测量日志）无损集中到 `historical-data.json.gz`，每项保存原路径、长度、SHA-256 和 base64 字节；解码可恢复原文件。独立验证同时检查压缩包内逐项字节、原结果和结构化计数，不能仅因有迁移标记就放宽结果验证。
+
+`pending` 不是已结束运行的永久位置。正常成功、失败或阻塞运行在保存并校验正式记录后回收自己的沙箱；归档失败才暂留恢复材料。上述显式维护可发布已有最终清单的阻塞记录，没有最终汇总的中断运行仅保存日志、事件、已有测量和中断说明，不计作完整产品通过。旧下载/导入包在永久平台档案中找到逐字节相同副本且校验整个快照后才删除；新版已丢弃传输 ZIP 时，须校验传输、原摘要和逐份产品文件字节一致，并验证永久产品与整个快照。空 `recording.lock` 是互斥锁载体，文件存在不代表进程正在运行；持有锁的状态由独占打开检查。
 
 migrate-test-evidence.ps1 和 organize-test-evidence.ps1 仅作为显式旧目录维护入口，不是新测试的前置步骤；进行目录迁移仍核对原始字节并保留必要恢复资料。旧记录的历史索引快照只是该次维护的材料，不是其他记录的依赖。中断记录由 recover-test-evidence.ps1 审查恢复，不能将暂存存在解释为测试成功。
 

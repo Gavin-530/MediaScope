@@ -1,5 +1,6 @@
 # Ignored does not mean disposable; see local-data-policy.json.
 .mediascope/
+.mediascope-saved-media/
 test-work/
 .build/
 node_modules/
@@ -10,4 +11,8 @@ node_modules/
 !/evidence-archive/tools/import-local-test-evidence.ps1
 # One-off audit reports stay local; permanent rules live in docs/.
 /TEST_SYSTEM_AUDIT.md
+# Local drafts and operation notes; permanent rules belong in docs/.
+/local-notes/
+/github-archive/
+/docs/github-archive-plan.md
 releases/**/*.zip

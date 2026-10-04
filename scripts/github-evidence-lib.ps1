@@ -18,6 +18,7 @@ function Expand-GitHubEvidenceZip($Archive,$Destination) {
   if(Test-Path -LiteralPath $Destination){throw 'Extraction destination already exists'}
   $zip=[IO.Compression.ZipFile]::OpenRead($Archive)
   try {
+    if($zip.Entries.Count -gt 100000){throw 'Evidence ZIP exceeds entry count limit'}
     $seen=@{};[long]$total=0
     foreach($entry in $zip.Entries){
       $name=$entry.FullName.Replace('\','/').TrimEnd('/')
@@ -26,9 +27,12 @@ function Expand-GitHubEvidenceZip($Archive,$Destination) {
       if(!$full.StartsWith([IO.Path]::GetFullPath($Destination).TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase)){throw "ZIP escapes destination: $name"}
       if($seen.ContainsKey($name)){throw "Duplicate ZIP entry: $name"};$seen[$name]=$true
       if(($entry.ExternalAttributes -shr 16 -band 0xF000) -eq 0xA000){throw 'ZIP links are forbidden'}
+      if($entry.ExternalAttributes -band 0x400){throw 'ZIP reparse links are forbidden'}
       $total+=$entry.Length
       if($total -gt 3GB){throw 'Evidence ZIP exceeds 3 GiB extraction limit'}
     }
+    $volume=New-Object IO.DriveInfo ([IO.Path]::GetPathRoot([IO.Path]::GetFullPath($Destination)))
+    if($volume.AvailableFreeSpace -lt $total+64MB){throw 'Insufficient evidence extraction space'}
     [IO.Compression.ZipFileExtensions]::ExtractToDirectory($zip,$Destination)
   } finally {$zip.Dispose()}
 }

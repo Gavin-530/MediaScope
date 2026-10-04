@@ -2,6 +2,16 @@
   "schema": 1,
   "rules": [
     {
+      "path": "local-notes",
+      "class": "protected",
+      "reason": "Local plans and operation notes; exclude from Git and general cleanup"
+    },
+    {
+      "path": "github-archive",
+      "class": "protected",
+      "reason": "Permanent GitHub platform history; no general cleanup or automatic expiration"
+    },
+    {
       "path": "evidence-archive/inbox",
       "class": "protected",
       "reason": "Incoming collaborator archives awaiting import; never clean automatically"
@@ -18,8 +28,8 @@
     },
     {
       "path": ".mediascope",
-      "class": "protected",
-      "reason": "Source-run user reports and failure records"
+      "class": "cache",
+      "reason": "Disposable runtime data; recent jobs limited to 10 and 100 MiB, browser profile cleaned on exit; user may clear the whole directory while stopped"
     },
     {
       "path": "releases",

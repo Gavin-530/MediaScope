@@ -42,6 +42,15 @@ test('[test-system] compact results distinguish skipped, TODO and cancelled case
   assert.deepEqual(result.cases.map(x=>x.status),['passed','skipped','todo','cancelled']);
 });
 
+test('[test-system] compacted history preserves original claims and rejects missing data, changed counts and fabricated precision',async()=>{
+  await fs.mkdir('test-work',{recursive:true});
+  const work=await fs.mkdtemp(path.resolve('test-work/independent-evidence-'));
+  try{
+    const output=execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',path.resolve('test/helpers/compacted-evidence.ps1'),'-Work',work],{encoding:'utf8',windowsHide:true,timeout:60000});
+    assert.match(output,/PASS: compacted historical identity/);
+  }finally{await fs.rm(work,{recursive:true,force:true})}
+});
+
 test('[test-system] records survive deletion, missing caches, isolated copies and actual import/export',async()=>{
   await fs.mkdir('test-work',{recursive:true});
   const work=await fs.mkdtemp(path.resolve('test-work/independent-evidence-'));
