@@ -7,8 +7,7 @@
 | [贡献规范](contributing.md) | 提交说明、作者、PR 和审阅 |
 | [测试规范](testing.md) | 本地与 GitHub 测试、覆盖和通过条件 |
 | [发布规范](releasing.md) | 版本、附件、发布步骤和说明 |
-| [数据与归档](data-and-archives.md) | 用户数据、目录保护、测试证据、平台档案和恢复 |
-| [视频基础属性](video-basic-properties.md) | 当前读取行为、字段解释和报告边界 |
+| [数据与归档](local-data.md) | 用户数据、目录保护、测试证据、平台档案和恢复 |
 
 ## 维护约定
 
