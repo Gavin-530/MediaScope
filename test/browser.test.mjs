@@ -7,6 +7,10 @@ import {makeMedia} from './helpers/real-media.mjs';
 import {startServer,waitForJob} from './helpers/server.mjs';
 import {parsePortable} from '../public/portable.js';
 import {requireFeature,supportedThemeModes} from './helpers/feature-policy.mjs';
+import {propertyValue} from '../public/properties.js';
+import {probe,FF,run} from '../engine.mjs';
+import {metadataSummary} from '../analysis.mjs';
+import {legacyFrameSample} from './helpers/basic-properties.mjs';
 
 const root=path.resolve('test-work/browser');
 let browser,media,sequence=0;
@@ -42,7 +46,7 @@ async function preview(page,file=media.source){
   const response=page.waitForResponse(r=>r.url().endsWith('/api/probe')&&r.request().method()==='POST');
   await page.locator('#inspect').click();
   const report=await(await response).json();
-  await page.locator('#inspect-details').getByRole('heading',{name:'轨道清单',exact:true}).waitFor();
+  await page.locator('#inspect-details').getByRole('heading',{name:'文件基本信息',exact:true}).waitFor();
   assert.equal(report.type,'inspect');return report;
 }
 async function runTask(page,app,button){
@@ -67,12 +71,96 @@ scenario('[startup] actual browser loads the complete app and the API rejects an
     assert.equal(await page.locator('#'+mode+'-panel').isVisible(),true);
   }
 });
+scenario('[basic-properties] actual preview omits automatic sampling and preserves old sample evidence on import',async({page,dir})=>{
+  const report=await preview(page),details=page.locator('#inspect-details');
+  assert.equal(await details.locator(':scope > .section').count(),1,'preview uses one basic information block');
+  assert.equal(await page.locator('#inspect-summary .card').count(),0,'container summary is not repeated');
+  assert.equal(await details.locator('.basic-info-extra').getAttribute('open'),null);
+  assert.equal(await details.locator('.basic-info-evidence').getAttribute('open'),null);
+  assert.equal(await details.locator('[data-track-main] [data-property="component-depth"] dd').innerText(),'8 bit');
+  await details.locator('.basic-info-extra > summary').click();
+  assert.match(await details.innerText(),/基础帧率（可能为估计）/);
+  assert.match(await details.innerText(),/报告帧数/);
+  assert.match(await details.innerText(),/报告编码样本位数/);
+  await details.locator('.basic-info-evidence > summary').click();
+  assert.equal(await details.getByRole('heading',{name:'开头样本核对',exact:true}).count(),0);
+  assert.equal(report.frameSampleRead.status,'not-requested');assert.equal(report.frameSample,null);
+  assert.ok(report.commands.every(c=>!c.args.includes('-show_frames')&&!c.args.includes('-read_intervals')));
+  const rateRow=details.locator('[data-track-extra] [data-property="r_frame_rate"]');
+  assert.equal(await rateRow.locator('dd').innerText(),propertyValue(report.raw.streams[0].r_frame_rate,'rate').text+' 帧/s');
+  const audio=report.raw.streams.find(s=>s.codec_type==='audio');
+  await details.locator('[data-basic-track]').selectOption(String(audio.index));
+  assert.equal(await details.locator('[data-track-main] [data-property="sample_rate"] dd').innerText(),audio.sample_rate+' Hz');
+  assert.equal(await page.locator('#stream').inputValue(),'0','viewing audio properties must not change the analysis target');
+  assert.equal(await details.locator('.basic-info-extra').getAttribute('open'),'','track switching preserves the expanded details');
+  assert.equal(await details.locator('[data-track-main] [data-property="component-depth"]').count(),0);
+  const file=path.join(dir,'properties-new.json'),saved=await download(page,'#inspect-export',file);
+  assert.deepEqual(saved.results[0].report,report);
+  await page.locator('#import-report').setInputFiles(file);
+  const restored=await download(page,'#inspect-export',path.join(dir,'properties-restored.json'));
+  assert.deepEqual(restored.results[0].report,report);
+  const timeoutCommands=[],timed=await probe(report.file,{probeSupplementTimeoutMs:1,commands:timeoutCommands});
+  const failed={...report,...timed,commands:timeoutCommands,metadata:metadataSummary(timed)},failedFile=path.join(dir,'properties-failed.json');
+  await writeFile(failedFile,JSON.stringify(failed));await page.locator('#import-report').setInputFiles(failedFile);
+  await page.waitForFunction(()=>document.querySelector('#inspect-details').textContent.includes('读取失败'));
+  assert.equal(await details.locator('.notice').filter({hasText:'读取失败'}).count(),1,'pixel descriptor failure stays visible outside folded evidence');
+  await details.locator('.basic-info-evidence > summary').click();
+  assert.match(await details.innerText(),/读取超时/);assert.doesNotMatch(await details.innerText(),/0 个实际样本/);
+  await page.screenshot({path:path.join(dir,'properties-failed.png'),fullPage:true});
+  const failedSaved=await download(page,'#inspect-export',path.join(dir,'properties-failed-restored.json'));
+  assert.deepEqual(failedSaved.results[0].report,failed);
+  const legacyCommands=[],sample=await legacyFrameSample(report.file,report.raw.streams,{commands:legacyCommands});
+  const legacy={...report,...sample,commands:[...report.commands,...legacyCommands]};legacy.metadata=metadataSummary(legacy);
+  const legacyFile=path.join(dir,'properties-with-samples.json');await writeFile(legacyFile,JSON.stringify(legacy));
+  await page.locator('#import-report').setInputFiles(legacyFile);
+  await page.waitForFunction(()=>document.querySelector('#inspect-details').textContent.includes('个实际样本'));
+  await details.locator('.basic-info-evidence > summary').click();
+  assert.match(await details.innerText(),new RegExp(`${sample.frameSampleRead.tracks[0].count} 个实际样本`));
+  assert.deepEqual((await download(page,'#inspect-export',path.join(dir,'legacy-samples-restored.json'))).results[0].report,legacy);
+  const old=structuredClone(report);old.schema='MediaScope/0.1';delete old.pixelFormats;delete old.frameSampleRead;delete old.frameSample;delete old.frameSampleScope;
+  const oldFile=path.join(dir,'properties-old.json');await writeFile(oldFile,JSON.stringify(old));await page.locator('#import-report').setInputFiles(oldFile);
+  await page.waitForFunction(()=>document.querySelector('#inspect-details').textContent.includes('旧报告未保存抽样结果'));
+  const oldSaved=await download(page,'#inspect-export',path.join(dir,'properties-old-restored.json'));
+  assert.deepEqual(oldSaved.results[0].report,old);
+});
+
+scenario('[basic-properties] real subtitles attachments chapters and narrow layout remain accessible without losing export data',async({page,dir})=>{
+  const subtitle=path.join(dir,'caption.srt'),attachment=path.join(dir,'notes.txt'),chapters=path.join(dir,'chapters.txt'),file=path.join(dir,'all-tracks.mkv');
+  await writeFile(subtitle,'1\n00:00:00,000 --> 00:00:01,000\n真实字幕样本\n');
+  await writeFile(attachment,'真实附件样本');
+  await writeFile(chapters,';FFMETADATA1\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=1000\ntitle=第一章\n');
+  const commands=[];
+  await run(FF,['-v','error','-y','-i',media.source,'-f','srt','-i',subtitle,'-f','ffmetadata','-i',chapters,'-map','0','-map','1','-map_metadata','2','-map_chapters','2','-c','copy','-attach',attachment,'-metadata:s:t','mimetype=text/plain','-metadata:s:t','filename=notes.txt','-metadata:s:s:0','language=zho',file],{commands});
+  const report=await preview(page,file),details=page.locator('#inspect-details');
+  await writeFile(path.join(dir,'fixture-recipe.json'),JSON.stringify({commands,report}));
+  const picker=details.locator('[data-basic-track]');
+  assert.equal(await picker.locator('option').count(),report.raw.streams.length);
+  for(const type of ['audio','subtitle','attachment']){
+    const stream=report.raw.streams.find(s=>s.codec_type===type);assert.ok(stream);
+    await picker.selectOption(String(stream.index));
+    assert.match(await details.locator('[data-track-main]').innerText(),new RegExp(stream.codec_name));
+  }
+  assert.match(await details.locator('[data-track-main]').innerText(),/notes\.txt/);
+  await details.locator('.basic-info-extra > summary').click();
+  await details.getByText('章节 · 1 项',{exact:true}).click();
+  assert.match(await details.innerText(),/第一章/);
+  await page.setViewportSize({width:390,height:844});
+  assert.equal(await details.locator('[data-basic-info]').evaluate(root=>root.scrollWidth>root.clientWidth),false);
+  await page.screenshot({path:path.join(dir,'properties-layout-mobile.png'),fullPage:true});
+  await page.setViewportSize({width:1440,height:900});
+  await picker.selectOption('0');
+  await page.screenshot({path:path.join(dir,'properties-layout-desktop.png'),fullPage:true});
+  const exported=await download(page,'#inspect-export',path.join(dir,'all-tracks-export.json'));
+  assert.deepEqual(exported.results[0].report,report);
+});
 
 scenario('[analysis] actual multi-audio file, frame scan, GOP, SI/TI and export match the server report',async({page,app,dir})=>{
   const info=await preview(page);assert.deepEqual(info.raw,media.info.raw);
   assert.equal(info.raw.streams.length,3);
   await page.locator('#complexity').check();await page.locator('#siti-workers').selectOption('8');
   const {report}=await runTask(page,app,'#analyze');
+  assert.deepEqual(await page.locator('#inspect-details > .section > h3').allTextContents(),['文件基本信息','帧结构与 GOP','视频码率 · 1 秒窗口','音轨码率 · 1 秒窗口','体积构成','SI/TI 内容复杂度']);
+  assert.equal(await page.locator('#inspect-details > .cards .card').count(),4);
   assert.equal(report.frames.length,12);assert.equal(report.tracks.filter(s=>s.type==='audio').length,2);
   assert.equal(report.content.points.length,report.frames.length);
   assert.equal(report.content.execution.requestedWorkers,8);

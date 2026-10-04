@@ -70,6 +70,7 @@ test('[desktop-startup] owned browser opens automatically, refresh keeps the ser
     const loaded=page.event('Page.loadEventFired');await page.call('Page.reload');await loaded;
     assert.equal((await fetch(base)).status,200);
     await page.evaluate('document.querySelector("#theme-toggle").click()');
+    await deadline(async()=>{const status=await(await fetch(base+'/api/status',{headers:{'x-mediascope-token':(await(await fetch(base)).text()).match(/name="token" content="([^"]+)"/)[1]}})).json();return status.settings.theme!=='system'});
     assert.equal(await page.evaluate('navigator.userActivation.hasBeenActive'),true);
     const token=(await(await fetch(base)).text()).match(/name="token" content="([^"]+)"/)[1];
     const response=await fetch(base+'/api/jobs',{method:'POST',headers:{'x-mediascope-token':token,'content-type':'application/json'},body:JSON.stringify({type:'inspect',file:path.join(dir,'waiting.mkv'),enqueue:true})});
@@ -95,6 +96,8 @@ test('[desktop-startup] owned browser opens automatically, refresh keeps the ser
     await assert.rejects(fetch(base));
     const failure=JSON.parse(await readFile(path.join(dir,activeJob.id,'failure.json'),'utf8'));
     assert.equal(failure.status,'cancelled','Closing the window must cancel and record its real encoding task');
+    await assert.rejects(readFile(path.join(dir,'desktop-profile','Local State')),e=>e.code==='ENOENT');
+    assert.notEqual(JSON.parse(await readFile(path.join(dir,'settings.json'),'utf8')).theme,'system');
     await writeFile(path.join(dir,'launcher.log'),output);
   } finally {
     await writeFile(path.join(dir,'launcher.log'),output);

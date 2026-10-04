@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="__LOCAL_THEME__">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
@@ -7,14 +7,6 @@
     <title>MediaScope · 媒体分析</title>
     <link rel="stylesheet" href="style.css" />
     <script src="/app.js" type="module"></script>
-    <script>
-      try {
-        var theme = localStorage.getItem("mediascope-theme");
-        if (theme && theme !== "system") {
-          document.documentElement.setAttribute("data-theme", theme);
-        }
-      } catch(e){}
-    </script>
   </head>
 
   <body>
@@ -72,6 +64,18 @@
         三个页签分别保留当前查看的报告；多份完成报告可从下方结果表切换。关闭后可导入
         JSON 恢复结果或任务计划（最大 256 MiB）。
       </p>
+      <details class="panel" id="local-data-panel">
+        <summary>本地数据</summary>
+        <p class="hint">近期任务自动保留最多 10 次、合计不超过 100 MiB，重启后可查看。长期保存请导出 JSON。浏览器运行缓存退出后清理。</p>
+        <p id="local-data-usage" role="status" aria-live="polite">展开后查看占用情况。</p>
+        <div class="row">
+          <label><input id="clear-on-exit" type="checkbox" />退出后清空近期记录</label>
+          <button id="local-data-refresh" class="secondary">刷新占用</button>
+          <button id="local-data-clear" class="secondary">清空近期记录</button>
+          <button id="local-cache-clear" class="secondary">清理运行缓存</button>
+        </div>
+        <p class="hint">运行中和等待中的任务继续保留。清空记录不会删除原视频、外部导出文件或测试归档。软件退出后也可手动删除整个运行数据目录。</p>
+      </details>
       <section class="panel" id="inspect-panel">
         <div class="panel-title">
           <h2>分析媒体</h2>
@@ -406,8 +410,13 @@
             VMAF（仅原生位深）</label
           ><label
             ><input type="checkbox" id="trial-keep" />
-            保留实验视频（默认完成或取消后清理）</label
+            保存实验视频到指定目录</label
           >
+        </div>
+        <div id="trial-save-row" class="row hidden">
+          <label for="trial-save-directory">视频保存目录</label>
+          <input id="trial-save-directory" placeholder="D:\Videos\MediaScope 实验" spellcheck="false" />
+          <button id="trial-save-picker" class="secondary">选择目录</button>
         </div>
         <p class="notice">
           测量 PSNR / SSIM、视频包体积与编码耗时，提供分组曲线和逐帧指标。相同

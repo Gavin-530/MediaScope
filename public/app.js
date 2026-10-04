@@ -1,5 +1,6 @@
 import { parsePortable, makePortable, maxPortableBytes } from "./portable.js";
 import { plot, gopOverview } from "./charts.js";
+import { basicInfoHTML, initBasicInfo } from "./basic-info.js";
 import {
   parseCrfs,
   rowLabel,
@@ -383,7 +384,7 @@ async function poll() {
         render(await api("jobs/" + completed.id + "/report"), false);
       if (!running)
         message(
-          completed.message,
+          completed.retentionMessage || completed.message,
           completed.status === "error",
           completed.progress,
           completed.startedAt,
@@ -617,6 +618,7 @@ function trialInput() {
       ? ["psnr", "ssim", "vmaf"]
       : ["psnr", "ssim"],
     keepFiles: $("#trial-keep").checked,
+    ...($("#trial-keep").checked ? {exportDirectory: clean($("#trial-save-directory").value)} : {}),
   };
 }
 function trialControls() {
@@ -720,11 +722,14 @@ async function portableExport() {
     );
     if (resultScope === "selected" && chosen.length !== selectedResults.size)
       throw Error("勾选的结果已变化，请重新确认导出范围");
-    for (const item of chosen)
-      results.push({
-        entryId: item.id,
-        report: item.report || (await api("jobs/" + item.id + "/report")),
-      });
+    const ids = chosen.filter(item => !item.report).map(item => item.id);
+    const hold = ids.length ? await api("local-data/export-hold", {method:"POST",body:JSON.stringify({ids})}) : null;
+    try {
+      for (const item of chosen)
+        results.push({entryId:item.id,report:item.report || (await api("jobs/" + item.id + "/report"))});
+    } finally {
+      if (hold) await api("local-data/export-release", {method:"POST",body:JSON.stringify({key:hold.key})});
+    }
   }
   if (planScope !== "none") {
     const saved = await api("plans"),
@@ -846,13 +851,16 @@ function download(text, name, type) {
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
-function cards(items) {
-  $("#summary").innerHTML = items
+function cardsHTML(items) {
+  return items
     .map(
       ([k, v]) =>
         `<div class="card"><span>${esc(k)}</span><strong>${esc(v)}</strong></div>`,
     )
     .join("");
+}
+function cards(items) {
+  $("#summary").innerHTML = cardsHTML(items);
 }
 function section(title, html) {
   return `<section class="section"><h3>${esc(title)}</h3>${html}</section>`;
@@ -898,25 +906,6 @@ function render(r, activate = true) {
     busy(!!current || importing);
   }
 }
-function metadataHTML(r) {
-  const data = r.metadata;
-  if (!data)
-    return raw(
-      { frameSample: r.frameSample, scope: r.frameSampleScope },
-      "旧版报告附加数据（重新分析可获得去重摘要）",
-    );
-  return (
-    `<p class="hint">${esc(data.note)} ${esc(data.scope)}</p>` +
-    (data.items.length
-      ? data.items
-          .map(
-            (item) =>
-              `<div class="evidence"><strong>${esc(item.name)}</strong><span>${esc(item.sources.join("、"))} · ${item.occurrences} 次相同记录</span>${raw(item.value, "查看此项数据")}</div>`,
-          )
-          .join("")
-      : '<p class="hint">本次探测范围未报告附加数据；不能据此认定全片不存在。</p>')
-  );
-}
 function renderMedia(r) {
   const streams = r.raw.streams,
     videos = streams.filter((s) => s.codec_type === "video");
@@ -937,79 +926,16 @@ function renderMedia(r) {
     $("#trial-file").value = r.file;
     $("#trial-stream").value = r.stream ?? videos[0]?.index ?? 0;
   }
-  cards([
-    ["文件大小", size(r.size)],
-    [
-      "容器时长",
-      r.raw.format.duration
-        ? `${fmt(Number(r.raw.format.duration))} s`
-        : "未报告",
-    ],
-    ["轨道数", streams.length],
-    ["容器", r.raw.format.format_name],
-  ]);
-  let html = `<p class="path">${esc(r.file)}</p>`;
-  html += section(
-    "轨道清单",
-    table(
-      [
-        "索引 / 类型",
-        "编码 / 标记",
-        "视频 / 音频属性",
-        "时长 / 起始秒",
-        "语言 / 默认",
-      ],
-      streams.map((s) => [
-        `${s.index} / ${s.codec_type}`,
-        `${s.codec_name ?? "?"} / ${s.codec_tag_string ?? "?"}`,
-        s.codec_type === "video"
-          ? `${s.width}×${s.height} · ${s.pix_fmt} · fps ${s.avg_frame_rate}`
-          : s.codec_type === "audio"
-            ? `${s.sample_rate} Hz · ${s.channels} ch · ${s.channel_layout ?? "布局未报告"} · ${s.sample_fmt}`
-            : "详见原始数据",
-        `${s.duration ?? "?"} / ${s.start_time ?? "?"}`,
-        `${s.tags?.language ?? "未标记"} / ${s.disposition?.default ? "是" : "否"}`,
-      ]),
-    ),
-  );
-  for (const s of videos)
-    html += section(
-      `视频 #${s.index} · 色彩与编码声明`,
-      table(
-        ["属性", "文件报告值"],
-        [
-          [
-            "Profile / 原始 Level 值",
-            `${s.profile ?? "?"} / ${s.level ?? "?"}`,
-          ],
-          [
-            "像素格式 / 有效位深",
-            `${s.pix_fmt ?? "?"} / ${s.bits_per_raw_sample ?? "参考像素格式"}`,
-          ],
-          [
-            "色原色 / 传递函数",
-            `${s.color_primaries ?? "未报告"} / ${s.color_transfer ?? "未报告"}`,
-          ],
-          [
-            "矩阵 / 范围 / 色度位置",
-            `${s.color_space ?? "未报告"} / ${s.color_range ?? "未报告"} / ${s.chroma_location ?? "未报告"}`,
-          ],
-          [
-            "时间基 / 声明帧率 / 平均帧率",
-            `${s.time_base} / ${s.r_frame_rate} / ${s.avg_frame_rate}`,
-          ],
-        ],
-      ) +
-        `<p class="hint">以上为声明值，不能证实实际画面色彩正确。附加数据已统一去重，见“元数据证据”。</p>`,
-    );
+  cards([]);
+  let html = basicInfoHTML(r);
   if (r.frames) {
     const gops = r.coding?.gops || legacyGops(r.frames);
-    cards([
+    html += `<div class="cards">${cardsHTML([
       ["显示帧数", r.frames.length],
       ["视频包数据量", size(r.packets.bytes)],
       ["GOP / 关键帧区间", gops.length],
       ["非递增时间戳", r.summary.nonIncreasing],
-    ]);
+    ])}</div>`;
     html += section(
       "帧结构与 GOP",
       `<p class="hint">显示顺序视图。I / P / B 是预测类型；IDR / CRA / BLA 是码流访问类型，二者不混用。GOP 以随机访问/关键帧区间呈现，不据此猜测开放或闭合。</p><div id="gop-overview"></div><div class="pager"><button id="gop-prev" class="secondary">上一 GOP</button><label>GOP #<input id="gop-index" type="number" min="0" max="${gops.length - 1}" value="0"></label><button id="gop-next" class="secondary">下一 GOP</button><span id="gop-info"></span></div><div id="frame-plot"></div><div id="frame-detail" class="frame-detail"></div><details><summary>逐帧列表 / CSV</summary><div class="pager"><button id="prev" class="secondary">上一页</button><span id="page"></span><button id="next" class="secondary">下一页</button><button id="csv" class="secondary">导出帧 CSV</button></div><div id="frames"></div></details>`,
@@ -1081,12 +1007,8 @@ function renderMedia(r) {
     } else if (r.content) html += notices([r.content.reason]);
     html += notices(r.warnings);
   }
-  html += section("元数据证据 · 去重与来源", metadataHTML(r));
-  html += section(
-    "原始探测与复现记录",
-    raw({ file: r.file, tools: r.tools, commands: r.commands, raw: r.raw }),
-  );
   $("#details").innerHTML = html;
+  initBasicInfo($("#details"), r);
   if (r.frames) {
     if (r.frames.length) initFrames(r);
     else $("#gop-overview").textContent = "报告中没有显示帧";
@@ -1943,7 +1865,7 @@ if (themeToggleBtn) {
     dark: document.getElementById("theme-icon-dark")
   };
   
-  let currentTheme = localStorage.getItem("mediascope-theme") || "system";
+  let currentTheme = document.documentElement.getAttribute("data-theme") || "system";
   
   function applyTheme() {
     if (currentTheme === "system") {
@@ -1962,7 +1884,32 @@ if (themeToggleBtn) {
   themeToggleBtn.onclick = () => {
     const idx = states.indexOf(currentTheme);
     currentTheme = states[(idx + 1) % states.length];
-    localStorage.setItem("mediascope-theme", currentTheme);
     applyTheme();
+    api("local-data/settings", {method:"POST",body:JSON.stringify({theme:currentTheme})}).catch(e=>message(e.message,true));
   };
 }
+
+$("#trial-keep").onchange = () => $("#trial-save-row").classList.toggle("hidden", !$("#trial-keep").checked);
+$("#trial-save-picker").onclick = async () => {
+  const button=$("#trial-save-picker");button.disabled=true;
+  try {const value=await api("select-directory",{method:"POST",body:"{}"});if(value.directory)$("#trial-save-directory").value=value.directory}
+  catch(e){message(e.message,true)}finally{button.disabled=false}
+};
+async function refreshLocalData(){
+  const value=await api("local-data"),mib=bytes=>(bytes/1024**2).toFixed(2);
+  $("#clear-on-exit").checked=value.settings.clearOnExit;
+  $("#local-data-usage").textContent=`近期记录 ${value.count} / ${value.limit} 次 · ${mib(value.recordBytes)} MiB；浏览器缓存 ${mib(value.profileBytes)} MiB；运行目录总计 ${mib(value.totalBytes)} MiB。${value.warnings.join('；')}`;
+}
+$("#local-data-panel").ontoggle=()=>{if($("#local-data-panel").open)refreshLocalData().catch(e=>message(e.message,true))};
+$("#local-data-refresh").onclick=()=>refreshLocalData().catch(e=>message(e.message,true));
+$("#clear-on-exit").onchange=async()=>{
+  const checkbox=$("#clear-on-exit");checkbox.disabled=true;
+  try{await api("local-data/settings",{method:"POST",body:JSON.stringify({clearOnExit:checkbox.checked})})}
+  catch(e){checkbox.checked=!checkbox.checked;message(e.message,true)}finally{checkbox.disabled=false}
+};
+for(const [id,category]of [["#local-data-clear","records"],["#local-cache-clear","cache"]])$(id).onclick=async()=>{
+  if(category==='records'&&!confirm('清空本地近期记录？需要长期保留的结果请先导出 JSON。'))return;
+  const button=$(id);button.disabled=true;
+  try{const value=await api("local-data/clean",{method:"POST",body:JSON.stringify({category})});await poll();await refreshLocalData();message(value.message)}
+  catch(e){message(e.message,true)}finally{button.disabled=false}
+};

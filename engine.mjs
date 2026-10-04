@@ -22,7 +22,9 @@ export async function run(exe,args,ctx={},line) {
     else p.stdout.on('data',b=>{out+=b;if(out.length>32*1024*1024){failure=Error('探测输出超过安全上限');p.kill();}});
     p.stderr.on('data',b=>{err=(err+b).slice(-16000)});
     if(ctx.stderrLine){const rl=createInterface({input:p.stderr});rl.on('line',s=>{try{ctx.stderrLine(s)}catch(e){failure=e;p.kill()}})}
-    p.on('error',reject);p.on('close',code=>{command.elapsedSeconds=(performance.now()-started)/1000;command.exitCode=code;failure?reject(failure):code===0&&!(args.includes('error')&&err.trim())?resolve(out):reject(Error(err||`进程退出 ${code}`));});
+    // Wait for close even on spawn/abort errors so command evidence is final
+    // before a caller serializes it and the owned child has finished cleanup.
+    p.on('error',e=>{failure??=e});p.on('close',code=>{command.elapsedSeconds=(performance.now()-started)/1000;command.exitCode=code;failure?reject(failure):code===0&&!(args.includes('error')&&err.trim())?resolve(out):reject(Error(err||`进程退出 ${code}`));});
   });
 }
 export function normalizeMediaPath(file){
@@ -38,9 +40,25 @@ export async function probe(file,ctx={}){
   file=normalizeMediaPath(file);
   const s=await stat(file);if(!s.isFile())throw Error('路径不是文件');
   const raw=JSON.parse(await run(FP,['-v','error','-show_format','-show_streams','-show_chapters','-of','json',file],ctx));
-  let frameSample=null;
-  if(raw.streams.some(s=>s.codec_type==='video'))frameSample=JSON.parse(await run(FP,['-v','error','-select_streams','v','-read_intervals','%+#32','-show_frames','-show_entries','frame=stream_index,color_range,color_space,color_transfer,color_primaries:frame_side_data','-of','json',file],ctx));
-  return {file,size:s.size,mtime:s.mtime.toISOString(),raw,frameSample,frameSampleScope:'开头最多 32 个读取包范围内的解码帧附加数据；仅抽样，不代表全片 HDR 动态元数据覆盖。'};
+  const pixelFormats=await readPixelFormats(ctx);
+  const frameSampleRead={status:raw.streams.some(s=>s.codec_type==='video')?'not-requested':'not-applicable',tracks:[],commands:[]};
+  return {file,size:s.size,mtime:s.mtime.toISOString(),raw,pixelFormats,frameSample:null,frameSampleRead};
+}
+async function optionalProbe(args,ctx,defaultTimeoutMs){
+  // Internal callers can use a shorter deadline; HTTP inputs never set this context.
+  const timeoutMs=ctx.probeSupplementTimeoutMs??defaultTimeoutMs;
+  if(!Number.isInteger(timeoutMs)||timeoutMs<1||timeoutMs>defaultTimeoutMs)throw Error('附加信息读取超时设置无效');
+  const commands=[],signal=ctx.signal?AbortSignal.any([ctx.signal,AbortSignal.timeout(timeoutMs)]):AbortSignal.timeout(timeoutMs);
+  try{
+    const raw=JSON.parse(await run(FP,args,{...ctx,commands,signal}));
+    return {status:'ok',raw,commands,timeoutSeconds:timeoutMs/1000};
+  }catch(e){
+    if(ctx.signal?.aborted)throw e;
+    return {status:'failed',raw:null,error:signal.aborted?`读取超时（${timeoutMs/1000} s）`:e.message,commands,timeoutSeconds:timeoutMs/1000};
+  }finally{ctx.commands?.push(...commands)}
+}
+export async function readPixelFormats(ctx={}){
+  return optionalProbe(['-v','error','-show_pixel_formats','-show_program_version','-show_library_versions','-of','json'],ctx,5000);
 }
 export function video(info,index){const s=info.raw.streams.find(s=>s.index===Number(index)&&s.codec_type==='video');if(!s)throw Error('请选择有效的视频轨道');return s}
 export async function scan(file,index,ctx={}){

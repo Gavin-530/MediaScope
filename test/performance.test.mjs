@@ -49,7 +49,11 @@ test('task reference cache preserves results, still checks candidates, rejects c
   const count=ctx.commands.length;
   const b=await compare(ref,ref,0,0,['psnr','ssim'],ctx);
   await writeFile(path.join(dir,'measured-cache.json'),JSON.stringify({first:a,second:b,commands:ctx.commands},null,2));
-  assert.deepEqual(b,a);
+  // Each fresh candidate probe now carries its own command durations. Keep
+  // every measurement, raw value and command argument/exit status comparison;
+  // independent wall-clock durations are not expected to be identical.
+  const withoutDurations=result=>JSON.parse(JSON.stringify(result,(key,value)=>key==='elapsedSeconds'?undefined:value));
+  assert.deepEqual(withoutDurations(b),withoutDurations(a));
   const second=ctx.commands.slice(count);
   assert.equal(second.filter(c=>c.args.includes('-show_frames')&&!c.args.includes('-read_intervals')).length,1,'candidate must still be scanned');
   assert.equal(second.filter(c=>c.args.includes('-show_format')).length,1,'candidate must still be probed');

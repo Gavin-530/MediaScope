@@ -13,7 +13,7 @@ New-Item -ItemType Directory -Force $stage,(Join-Path $stage 'scripts'),(Join-Pa
 foreach($item in @('analysis.mjs','siti.mjs','engine.mjs','server.mjs','package.json','README.md','start.cmd','Uninstall.cmd','runtime-lock.json','public','licenses')){
   Copy-Item -LiteralPath (Join-Path $project $item) -Destination $stage -Recurse
 }
-foreach($item in @('deployment.ps1','manage.ps1','install-location.ps1','uninstall.ps1','check-environment.mjs','desktop.mjs','validate-launch.ps1')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $item) -Destination (Join-Path $stage 'scripts')}
+foreach($item in @('deployment.ps1','manage.ps1','install-location.ps1','uninstall.ps1','check-environment.mjs','desktop.mjs','runtime-data.mjs','validate-launch.ps1')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $item) -Destination (Join-Path $stage 'scripts')}
 Write-Json (Join-Path $stage 'MANIFEST.json') @{schema=1;version=$Version;platform='win32-x64';files=@(Get-TreeRecords $stage)}
 $null=Test-App $stage
 Compress-Archive -LiteralPath $stage -DestinationPath $archive -CompressionLevel Optimal

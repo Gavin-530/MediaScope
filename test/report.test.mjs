@@ -4,6 +4,7 @@ import path from 'node:path';
 import {parseReport} from '../public/report.js';
 import {makeMedia} from './helpers/real-media.mjs';
 import {startServer,waitForJob} from './helpers/server.mjs';
+import {legacyFrameSample} from './helpers/basic-properties.mjs';
 let app,reports={};
 before(async()=>{
  const root=path.resolve('test-work/report-validation'),media=await makeMedia(path.join(root,'media'));
@@ -37,4 +38,23 @@ test('truncating real per-frame metrics or damaging measured GOP/time boundaries
 test('future nonmeasurement fields survive parsing and malformed JSON is rejected',()=>{
  const extended={...reports.inspect,futureField:{note:'parser preservation contract'}};
  assert.deepEqual(parseReport(JSON.stringify(extended)),extended);assert.throws(()=>parseReport('{'),/JSON/);
+});
+test('[basic-properties] new descriptors and explicit no-sampling status preserve legacy sample reports',async()=>{
+ const current=reports.inspect;assert.ok(current.pixelFormats.raw.pixel_formats.length);assert.equal(current.frameSample,null);
+ assert.equal(current.frameSampleRead.status,'not-requested');
+ assert.deepEqual(parseReport(JSON.stringify(current)),current);
+ const sample=await legacyFrameSample(current.file,current.raw.streams),legacy={...current,...sample};
+ assert.ok(legacy.frameSample.frames.length);assert.deepEqual(parseReport(JSON.stringify(legacy)),legacy);
+ for(const schema of ['MediaScope/0.1','MediaScope/0.2']){
+  const old=structuredClone(legacy);old.schema=schema;delete old.pixelFormats;delete old.frameSampleRead;
+  assert.deepEqual(parseReport(JSON.stringify(old)),old);
+ }
+ const damaged=structuredClone(legacy);damaged.frameSampleRead.tracks[0].count++;
+ assert.throws(()=>parseReport(JSON.stringify(damaged)),/frameSampleRead.tracks.count/);
+ const failed={...legacy,frameSample:null,frameSampleRead:{status:'failed',error:'Specified failure status for report parsing; not a measured failure',tracks:legacy.frameSampleRead.tracks.map(t=>({...t,status:'failed',count:0})),commands:[]}};
+ assert.deepEqual(parseReport(JSON.stringify(failed)),failed);
+ const contradictory=structuredClone(legacy);contradictory.frameSampleRead.tracks[0].status='empty';
+ assert.throws(()=>parseReport(JSON.stringify(contradictory)),/frameSampleRead.tracks.status/);
+ const falseNoSample={...current,frameSample:legacy.frameSample};
+ assert.throws(()=>parseReport(JSON.stringify(falseNoSample)),/frameSampleRead.status/);
 });

@@ -124,7 +124,7 @@ export function metadataSummary(info){
   const map=new Map();const add=(item,where)=>{const key=JSON.stringify(item),r=map.get(key);if(r){r.occurrences++;if(!r.sources.includes(where))r.sources.push(where)}else map.set(key,{name:item.side_data_type??'色彩声明',value:item,sources:[where],occurrences:1})};
   for(const s of info.raw.streams)for(const d of s.side_data_list||[])add(d,`轨道 #${s.index}`);
   for(const f of info.frameSample?.frames||[])for(const d of f.side_data_list||[])add(d,`轨道 #${f.stream_index} 开头抽样`);
-  return {items:[...map.values()],scope:info.frameSampleScope,note:'相同附加数据合并并标明来源；只保留元数据证据，不重复列出每帧相同的色彩标签。'};
+  return {items:[...map.values()],scope:info.frameSampleScope??'附加数据来自轨道报告；本次未执行帧级附加数据读取。',note:'相同附加数据合并并标明来源；只保留元数据证据，不重复列出每帧相同的色彩标签。'};
 }
 
 export async function complexity(file,stream,ctx={},frames=null){

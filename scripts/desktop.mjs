@@ -2,12 +2,15 @@ import {spawn} from 'node:child_process';
 import {readFile,writeFile,mkdir,unlink,access,rename} from 'node:fs/promises';
 import path from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
+import {acquireDataLease,removeOwned} from './runtime-data.mjs';
 
 const requestPath=process.argv[2];
 const config=JSON.parse((await readFile(requestPath,'utf8')).replace(/^\uFEFF/,''));
 const resultPath=requestPath+'.result.json';
 const started=performance.now();
 let server,validator,browser,browserCall,browserDisconnected=false,base,token,stopping=false,stopPromise;
+const dataRoot=path.resolve(process.env.MEDIASCOPE_DATA_DIR);
+let dataLease;
 const exited=child=>!child||!child.pid||child.exitCode!==null||child.signalCode!==null;
 async function writeStartup(value){await writeFile(resultPath+'.tmp',JSON.stringify(value));await rename(resultPath+'.tmp',resultPath)}
 const waitExit=async(child,timeout=10000)=>{
@@ -35,6 +38,11 @@ function stop(){
   if(browserCall&&!browserDisconnected)await browserCall('Browser.close').catch(()=>{});
   await waitExit(browser,3000);
   if(!exited(browser))browser.kill();
+  await waitExit(browser,3000);
+  if(dataLease){
+    if(exited(browser))await removeOwned(dataRoot,'desktop-profile').catch(e=>console.error('浏览器缓存清理未完成，下次启动重试：'+e.message));
+    if(exited(server)&&exited(browser))await dataLease.release();
+  }
   await unlink(resultPath).catch(()=>{});
   await unlink(resultPath+'.tmp').catch(()=>{});
   })();return stopPromise;
@@ -51,7 +59,7 @@ async function findBrowser(){
 }
 async function openWindow(){
   const exe=await findBrowser();
-  const profile=path.join(process.env.MEDIASCOPE_DATA_DIR,'desktop-profile');
+  const profile=path.join(dataRoot,'desktop-profile');
   await mkdir(profile,{recursive:true});
   // Chromium's inherited pipe gives this launcher an exclusive control channel;
   // no debugger TCP port is exposed and ordinary browser profiles are untouched.
@@ -60,6 +68,7 @@ async function openWindow(){
     // The test host restricts nested Windows sandbox tokens. This matches the
     // existing Playwright test setup; the normal application keeps its sandbox.
     ...(process.env.MEDIASCOPE_DESKTOP_HEADLESS==='1'?['--headless=new','--disable-gpu','--no-sandbox']:[])],{windowsHide:true,stdio:['ignore','ignore','pipe','pipe','pipe']});
+  if(browser.pid)await dataLease.browser(browser.pid);
   browser.stderr.resume();
   let sequence=0,buffer=Buffer.alloc(0),browserError;const pending=new Map();
   const disconnected=()=>{browserDisconnected=true;for(const entry of pending.values()){clearTimeout(entry.timer);entry.reject(browserError||Error('应用窗口已关闭'))}pending.clear()};
@@ -101,10 +110,13 @@ async function openWindow(){
   if(!seen&&!stopping)throw Error('应用窗口未能启动。请关闭上次未退出的 MediaScope 窗口后重试。');
 }
 try {
+  dataLease=await acquireDataLease(dataRoot);
+  await removeOwned(dataRoot,'desktop-profile');
   await writeStartup({state:config.needsValidation?'checking':'ready',validation:config.validation});
   const env={...process.env,FFMPEG_PATH:config.paths.ffmpeg,FFPROBE_PATH:config.paths.ffprobe,
     MEDIASCOPE_STARTUP_RESULT:resultPath,MEDIASCOPE_DESKTOP:config.desktop?'1':'0'};
   // Bootstrap flags must never leak into the compatibility check's HTTP probe.
+  env.MEDIASCOPE_DATA_LEASE=dataLease.token;
   server=spawn(process.execPath,[path.join(config.app,'server.mjs')],{cwd:config.app,windowsHide:true,env,stdio:['ignore','pipe','pipe']});
   let log='';server.stderr.on('data',b=>process.stderr.write(b));
   base=await new Promise((resolve,reject)=>{

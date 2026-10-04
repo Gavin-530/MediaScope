@@ -62,6 +62,42 @@ export function validateReport(r) {
     objects(r.raw.streams, "raw.streams");
     obj(r.raw.format, "raw.format");
     r.raw.streams.forEach((s) => index(s.index, "raw.streams.index"));
+    if (r.frameSample !== undefined && r.frameSample !== null) {
+      obj(r.frameSample, "frameSample");
+      if (r.frameSample.frames !== undefined) objects(r.frameSample.frames, "frameSample.frames");
+    }
+    if (r.pixelFormats !== undefined) {
+      obj(r.pixelFormats, "pixelFormats");
+      if (!['ok','failed'].includes(r.pixelFormats.status)) fail('pixelFormats.status');
+      if (r.pixelFormats.status === 'ok') {
+        obj(r.pixelFormats.raw, 'pixelFormats.raw');
+        objects(r.pixelFormats.raw.pixel_formats, 'pixelFormats.raw.pixel_formats');
+      } else if (typeof r.pixelFormats.error !== 'string') fail('pixelFormats.error');
+      objects(r.pixelFormats.commands, 'pixelFormats.commands');
+    }
+    if (r.frameSampleRead !== undefined) {
+      obj(r.frameSampleRead, 'frameSampleRead');
+      const read = r.frameSampleRead;
+      if (!['ok','failed','not-applicable','not-requested'].includes(read.status)) fail('frameSampleRead.status');
+      if (read.status === 'failed' && (typeof read.error !== 'string' || r.frameSample !== null)) fail('frameSampleRead.error');
+      if (read.status === 'ok' && !r.frameSample) fail('frameSample');
+      objects(read.tracks, 'frameSampleRead.tracks');
+      objects(read.commands, 'frameSampleRead.commands');
+      const videoIndices = r.raw.streams.filter(s => s.codec_type === 'video').map(s => s.index);
+      if (read.status === 'not-requested') {
+        if (!videoIndices.length || r.frameSample !== null || read.tracks.length || read.commands.length) fail('frameSampleRead.status');
+      } else if (read.tracks.length !== videoIndices.length || new Set(read.tracks.map(t => t.index)).size !== read.tracks.length) fail('frameSampleRead.tracks');
+      if (read.status === 'not-applicable' && (videoIndices.length || r.frameSample !== null)) fail('frameSampleRead.status');
+      for (const track of read.tracks) {
+        index(track.index, 'frameSampleRead.tracks.index');
+        index(track.count, 'frameSampleRead.tracks.count');
+        if (!['ok','empty','failed'].includes(track.status)) fail('frameSampleRead.tracks.status');
+        const count = (r.frameSample?.frames ?? []).filter(f => f.stream_index === track.index).length;
+        if (!videoIndices.includes(track.index) || track.count !== count) fail('frameSampleRead.tracks.count');
+        const expectedStatus = read.status === 'failed' ? 'failed' : count ? 'ok' : 'empty';
+        if (track.status !== expectedStatus) fail('frameSampleRead.tracks.status');
+      }
+    }
     if (r.metadata) {
       obj(r.metadata, "metadata");
       objects(r.metadata.items, "metadata.items");
