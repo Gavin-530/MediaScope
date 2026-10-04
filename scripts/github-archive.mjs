@@ -12,10 +12,15 @@ const project=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 function options(args){const result={command:args.shift()??'status'};while(args.length){const k=args.shift();if(k==='--offline'||k==='--json'||k==='--evidence')result[k.slice(2)]=true;else if(['--root','--archive','--source','--run','--attempt','--commit','--repository','--backup','--budget-minutes','--max-download-mib'].includes(k)){if(!args.length||args[0].startsWith('--'))throw Error('Missing option value');result[k.slice(2)]=args.shift()}else throw Error('Unknown archive option: '+k)}return result}
 async function mutableRoot(root){
   if(path.resolve(root)!==path.join(project,'github-archive'))throw Error('Online/migration/import writes are limited to this project github-archive root');await noLinks(root);
-  const tracked=execFileSync('git',['ls-files','--','github-archive','docs/github-archive-plan.md'],{cwd:project,encoding:'utf8',windowsHide:true}).trim();if(tracked)throw Error('Archive data or implementation plan is tracked by Git; stop and resolve explicitly');
+  const tracked=execFileSync('git',['ls-files','--','local-notes','github-archive','docs/github-archive-plan.md'],{cwd:project,encoding:'utf8',windowsHide:true}).trim();if(tracked)throw Error('Archive data or implementation plan is tracked by Git; stop and resolve explicitly');
   execFileSync('git',['check-ignore','--quiet','github-archive/protection-probe'],{cwd:project,windowsHide:true});
   const old=await latestInventory(project);if(old.remote.state!=='checked'||old.remote.identity.repositoryId!==TARGET.repositoryId)throw Error('Repository identity inventory required');
-  await initialize(root,TARGET);const readme=path.join(root,'README.md');if(!await exists(readme))await fs.copyFile(path.join(project,'docs/github-archive.md'),readme,1);
+  await initialize(root,TARGET);const readme=path.join(root,'README.md');if(!await exists(readme)){
+    const guide=await fs.readFile(path.join(project,'docs/data-and-archives.md'),'utf8');
+    const section=guide.match(/<!-- github-archive-readme:start -->\s*([\s\S]*?)\s*<!-- github-archive-readme:end -->/);
+    if(!section)throw Error('Offline archive guide section missing');
+    await fs.writeFile(readme,'# 平台档案使用说明\n\n本说明在档案初始化时从项目正式文档生成，供随资料离线保存；不代表之后的工具版本或远端状态。项目当前规范由 docs/data-and-archives.md 维护。\n\n'+section[1]+'\n',{flag:'wx'});
+  }
 }
 export async function main(args=process.argv.slice(2)){
   const opts=options([...args]),root=path.resolve(opts.root??path.join(project,'github-archive'));

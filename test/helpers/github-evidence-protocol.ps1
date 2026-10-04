@@ -116,7 +116,7 @@ $null=New-Item -ItemType Directory -Path $defaultScripts,$defaultDocs -Force
 foreach($script in @('evidence-lib.ps1','github-evidence-lib.ps1','import-github-test-evidence.ps1','export-github-test-evidence.ps1','migrate-test-evidence.ps1','organize-test-evidence.ps1')){
   Copy-Item -LiteralPath (Join-Path $sourceProject ('scripts/'+$script)) -Destination $defaultScripts
 }
-Copy-Item -LiteralPath (Join-Path $sourceProject 'docs/evidence-archive.md') -Destination $defaultDocs
+Copy-Item -LiteralPath (Join-Path $sourceProject 'docs/data-and-archives.md') -Destination $defaultDocs
 $defaultOutput=& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $defaultScripts 'import-github-test-evidence.ps1') -Archive $outer -Repository $identity.repository -RunId $identity.runId -Attempt $identity.runAttempt -Commit $identity.sha
 if($LASTEXITCODE -ne 0){throw 'Import CLI without Project failed'}
 $defaultPath=($defaultOutput -join [Environment]::NewLine).Trim()
@@ -132,7 +132,7 @@ $null=New-Item -ItemType Directory -Path (Join-Path $defaultExport 'scripts'),(J
 foreach($script in @('evidence-lib.ps1','github-evidence-lib.ps1','export-github-test-evidence.ps1')){
   Copy-Item -LiteralPath (Join-Path $sourceProject ('scripts/'+$script)) -Destination (Join-Path $defaultExport 'scripts')
 }
-Copy-Item -LiteralPath (Join-Path $sourceProject 'docs/evidence-archive.md') -Destination (Join-Path $defaultExport 'docs')
+Copy-Item -LiteralPath (Join-Path $sourceProject 'docs/data-and-archives.md') -Destination (Join-Path $defaultExport 'docs')
 $defaultStage=Join-Path (Get-EvidencePendingRoot $defaultExport) 'staging/app'
 $null=New-Item -ItemType Directory -Path (Split-Path -Parent $defaultStage) -Force
 Copy-Item -LiteralPath $record -Destination $defaultStage -Recurse

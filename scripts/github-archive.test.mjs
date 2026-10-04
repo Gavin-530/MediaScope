@@ -15,6 +15,37 @@ import {canonical,exists} from './github-archive-store.mjs';
 
 const owned=path.resolve('.build/github-archive-tests');
 async function fixture(t){await fs.mkdir(owned,{recursive:true});const dir=await fs.mkdtemp(path.join(owned,'case-'));await initialize(dir,TARGET);t.after(async()=>{inside(owned,dir);await fs.rm(dir,{recursive:true})});return dir}
+async function documentationProject(t){
+  const project=await fixture(t),scripts=path.join(project,'scripts');await fs.mkdir(scripts);
+  for(const name of (await fs.readdir('scripts')).filter(name=>/^github-archive.*\.mjs$/.test(name)&&!name.endsWith('.test.mjs')))await fs.copyFile(path.resolve('scripts',name),path.join(scripts,name));
+  await fs.mkdir(path.join(project,'docs'));await fs.copyFile(path.resolve('docs/data-and-archives.md'),path.join(project,'docs/data-and-archives.md'));
+  await fs.writeFile(path.join(project,'.gitignore'),'/local-notes/\n/github-archive/\n');
+  execFileSync('git',['init','--quiet',project],{windowsHide:true});
+  // Isolated protocol metadata only; no network or product verification claim.
+  const inventory=path.join(project,'.build/github-archive-implementation');
+  await writeJson(path.join(inventory,'protocol.json'),{target:TARGET,remote:{state:'checked',identity:TARGET},records:[]});
+  await writeJson(path.join(inventory,'latest-inventory.json'),{path:'protocol.json'});
+  return project;
+}
+test('real archive CLI initializes an offline guide from the consolidated document without removed source paths',async t=>{
+  const project=await documentationProject(t),entry=path.join(project,'scripts/github-archive.mjs');
+  execFileSync(process.execPath,[entry,'migrate'],{encoding:'utf8',windowsHide:true,timeout:30000});
+  const guide=await fs.readFile(path.join(project,'github-archive/README.md'),'utf8');
+  assert.match(guide,/1377031380/);assert.match(guide,/verification-tools/);assert.match(guide,/RestoreSource/);
+  assert.ok(!guide.includes('## 软件运行数据'));assert.ok(!guide.includes('github-archive-readme:start'));
+  assert.equal(await exists(path.join(project,'docs/github-archive.md')),false);
+  await fs.writeFile(path.join(project,'github-archive/README.md'),guide+'\nretained local reading note\n');
+  execFileSync(process.execPath,[entry,'migrate'],{encoding:'utf8',windowsHide:true,timeout:30000});
+  assert.equal(await fs.readFile(path.join(project,'github-archive/README.md'),'utf8'),guide+'\nretained local reading note\n');
+});
+test('real archive CLI refuses forced Git tracking of local notes before archive writes',async t=>{
+  const project=await documentationProject(t),note=path.join(project,'local-notes/private-plan.md');
+  await fs.mkdir(path.dirname(note));await fs.writeFile(note,'private protocol note');
+  execFileSync('git',['-C',project,'add','--force','--','local-notes/private-plan.md'],{windowsHide:true});
+  assert.throws(()=>execFileSync(process.execPath,[path.join(project,'scripts/github-archive.mjs'),'migrate'],{encoding:'utf8',windowsHide:true,timeout:30000,stdio:'pipe'}),error=>/implementation plan is tracked by Git/.test(error.stderr));
+  assert.equal(await exists(path.join(project,'github-archive')),false);
+  assert.equal(await fs.readFile(note,'utf8'),'private protocol note');
+});
 async function pruneFixture(t){
   const project=await fixture(t),root=path.join(project,'github-archive');await initialize(root,TARGET);
   const relative='records/protocol-cloud',source='evidence-archive/'+relative,dir=path.join(project,source);

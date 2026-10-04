@@ -4,5 +4,4 @@
 
 - [测试规范](../docs/testing.md)
 - [发布规范](../docs/releasing.md)
-- [本地数据规范](../docs/local-data.md)
-- [测试归档说明](../docs/evidence-archive.md)
+- [数据与归档](../docs/data-and-archives.md)

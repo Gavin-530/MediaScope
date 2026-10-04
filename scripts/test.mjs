@@ -51,17 +51,17 @@ try {
     const commit=git('rev-parse','--verify','--end-of-options',ref+'^{commit}');
     if(!/^[a-f0-9]{40}$/.test(commit))throw Error('Invalid source commit');
     const refFiles=git('ls-tree','-rz','--name-only',commit).split('\0').filter(Boolean);
-    if(refFiles.some(file=>/^(github-archive|\.mediascope|releases|local-test-archive)\//i.test(file)||/^evidence-archive\/(?!tools\/import-local-test-evidence\.ps1$)/i.test(file)||file.toLowerCase()==='docs/github-archive-plan.md'))throw Error('TEST_INFRA: historical Git tree contains protected local data');
+    if(refFiles.some(file=>/^(local-notes|github-archive|\.mediascope|releases|local-test-archive)\//i.test(file)||/^evidence-archive\/(?!tools\/import-local-test-evidence\.ps1$)/i.test(file)||file.toLowerCase()==='docs/github-archive-plan.md'))throw Error('TEST_INFRA: historical Git tree contains protected local data');
     manifest.source={kind:'git',commit,tree:git('rev-parse',commit+'^{tree}')};
     const zip=path.join(work,'application.zip');git('archive','--format=zip','--output='+zip,commit);
     execFileSync('tar.exe',['-xf',zip,'-C',source],{windowsHide:true});
     await files(source); // Refuse symlinks before overlaying the current test harness.
-    for(const name of ['github-archive','.mediascope','releases','local-test-archive'])if(await fs.stat(path.join(source,name)).catch(e=>{if(e.code==='ENOENT')return null;throw e}))throw Error('TEST_INFRA: historical source contains protected local data: '+name);
+    for(const name of ['local-notes','github-archive','.mediascope','releases','local-test-archive'])if(await fs.stat(path.join(source,name)).catch(e=>{if(e.code==='ENOENT')return null;throw e}))throw Error('TEST_INFRA: historical source contains protected local data: '+name);
   }else{
     manifest.source={kind:'working-tree',commit:manifest.harness.commit,workingTree:manifest.harness.workingTree};
     // Include new nonignored application modules in the working-tree snapshot.
     for(const file of git('ls-files','--cached','--others','--exclude-standard').split('\n').filter(Boolean)){
-      if(/^(github-archive|\.mediascope|releases|local-test-archive)\//i.test(file)||file.toLowerCase()==='docs/github-archive-plan.md')throw Error('TEST_INFRA: protected local data is tracked by Git: '+file);
+      if(/^(local-notes|github-archive|\.mediascope|releases|local-test-archive)\//i.test(file)||file.toLowerCase()==='docs/github-archive-plan.md')throw Error('TEST_INFRA: protected local data is tracked by Git: '+file);
       if(file.startsWith('evidence-archive/'))continue;
       if(file.startsWith('test/')||file.startsWith('scripts/'))continue;
       const from=path.join(project,file);try{await copy(from,path.join(source,file))}catch(e){if(e.code!=='ENOENT')throw e}
@@ -77,7 +77,7 @@ try {
   for(const name of (await fs.readdir(path.join(project,'scripts'))).filter(name=>name.startsWith('github-archive')&&/\.(mjs|ps1)$/.test(name)))await copy(path.join(project,'scripts',name),path.join(source,'scripts',name));
   const importerPath='evidence-archive/tools/import-local-test-evidence.ps1';
   await copy(path.join(project,importerPath),path.join(source,importerPath));
-  await copy(path.join(project,'docs','evidence-archive.md'),path.join(source,'docs','evidence-archive.md'));
+  await copy(path.join(project,'docs','data-and-archives.md'),path.join(source,'docs','data-and-archives.md'));
   await copy(path.join(project,'package-lock.json'),path.join(source,'harness-package-lock.json'));
   const sourceFiles=[];for(const file of await files(source)){const b=await fs.readFile(file);sourceFiles.push({path:path.relative(source,file).replaceAll('\\','/'),bytes:b.length,sha256:sha(b)})}
   // Identity is retained; the isolated execution checkout is temporary, not an archive.

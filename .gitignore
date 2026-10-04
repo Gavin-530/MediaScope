@@ -14,5 +14,4 @@ node_modules/
 # Local drafts and operation notes; permanent rules belong in docs/.
 /local-notes/
 /github-archive/
-/docs/github-archive-plan.md
 releases/**/*.zip
