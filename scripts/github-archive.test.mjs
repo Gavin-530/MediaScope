@@ -5,16 +5,33 @@ import path from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {TARGET,initialize,seal,verifySnapshot,verifyArchive,tree,inside,safeRelative,assertRoot,lock,hash,readJson,writeJson,insideCleanup} from './github-archive-store.mjs';
 import {GitHubReader,apiUrl,downloadUrl} from './github-archive-api.mjs';
-import {mergeCopy} from './github-archive-migration.mjs';
+import {mergeCopy,preparedRecord} from './github-archive-migration.mjs';
 import {repositoryGraphql} from './github-archive-graphql.mjs';
 import {sync,attachments} from './github-archive-collect.mjs';
 import {preparePrune,applyPrune,restorePrunedSource} from './github-archive-prune.mjs';
 import {evidenceIdentity} from './github-archive-migration.mjs';
 import {boundaryBaseline} from './github-archive-migration.mjs';
 import {canonical,exists} from './github-archive-store.mjs';
+import {capacityWarnings,capacityReport} from './github-archive-capacity.mjs';
 
 const owned=path.resolve('.build/github-archive-tests');
 async function fixture(t){await fs.mkdir(owned,{recursive:true});const dir=await fs.mkdtemp(path.join(owned,'case-'));await initialize(dir,TARGET);t.after(async()=>{inside(owned,dir);await fs.rm(dir,{recursive:true})});return dir}
+test('capacity warnings report storage pressure without removing sealed or pending data',async t=>{
+  assert.deepEqual(capacityWarnings({freeBytes:1024**3,formalBytes:0,pendingBytes:0}),[]);
+  assert.deepEqual(capacityWarnings({freeBytes:0,formalBytes:1024**3,pendingBytes:512*1024**2}),['free-space-below-1-GiB','formal-archive-at-least-1-GiB','pending-at-least-512-MiB']);
+  const root=await fixture(t);await seal(root,'actions/123',{'run.json':{id:123}});await fs.mkdir(path.join(root,'pending/test'));await fs.writeFile(path.join(root,'pending/test/keep.txt'),'pending original');
+  const before=await tree(root),report=await capacityReport(root);assert.equal(report.pendingBytes,16);assert.ok(report.formalBytes>0);assert.deepEqual(await tree(root),before);
+});
+test('transport result uses its structured record instead of diagnostic stdout and refuses escaping paths',async t=>{
+  const receiver=await fixture(t),record=path.join(receiver,'evidence-archive/records/protocol-record');await fs.mkdir(record,{recursive:true});
+  const resultFile=path.join(receiver,'prepared-record.json');
+  await writeJson(resultFile,{schema:1,record:'evidence-archive/records/protocol-record'});assert.equal(await preparedRecord(receiver),record);
+  for(const value of ['../outside','evidence-archive/records/../outside',record,'evidence-archive/records/protocol-record/nested']){
+    await writeJson(resultFile,{schema:1,record:value});await assert.rejects(preparedRecord(receiver),/Invalid prepared record/);
+  }
+  const outside=await fixture(t);await fs.rm(record,{recursive:true});await fs.symlink(outside,record,'junction');
+  await writeJson(resultFile,{schema:1,record:'evidence-archive/records/protocol-record'});await assert.rejects(preparedRecord(receiver),/Linked archive path/);
+});
 async function documentationProject(t){
   const project=await fixture(t),scripts=path.join(project,'scripts');await fs.mkdir(scripts);
   for(const name of (await fs.readdir('scripts')).filter(name=>/^github-archive.*\.mjs$/.test(name)&&!name.endsWith('.test.mjs')))await fs.copyFile(path.resolve('scripts',name),path.join(scripts,name));

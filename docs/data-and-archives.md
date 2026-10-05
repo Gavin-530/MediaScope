@@ -68,6 +68,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/local-data.ps1 -Acti
 
 新记录不另套 `record.json/README/original`，不保存整份源码、项目文档、模拟档案/回执或可重建媒体与运行环境。Git SHA、未提交状态和内容摘要识别测试输入；未保存的未提交源码不保证精确重现。若确需保留特殊输入，应放在该份目录并说明用途。证据体积不是通过条件，不为精简而丢测量或隐藏失败。
 
+以上新记录内容规范同时适用于本地和 Actions。正常完成的运行由云端导出器复制本次独立记录，不更改产品清单、测试结果或附件；初始化失败或强制中断则生成明确 blocked 的诊断记录，仅保留当时可取得的资料，不声明完整测量。传输用清单和 ZIP 属于上传封装。新版导入验证后只增加 `origin.json` 并重新生成校验清单，长期保留一份产品证据，不重复保存 `artifact.zip` 和 `bundle.zip`。平台档案的外层清单、任务日志和历史快照是仓库历史资料，不计作额外产品测试。旧版云端原件可能同时含两层 ZIP、解包内容及源码副本；其历史冗余不属于新记录规范，普通同步不自动精简原件。
+
 ```powershell
 npm run evidence:list
 npm run evidence:verify
@@ -113,9 +115,13 @@ npm run github:backup -- --backup 'E:\MediaScope-backups'
 
 `inventory` 先盘点本地身份、证据、发布包和远端能力/权限，回执在 `.build/github-archive-implementation`。写入前须有成功联网核对仓库身份的盘点；`migrate` 校验后复制可靠云端记录，保存映射并实际验证独立复制与原路径恢复，保留旧源。`sync` 每次完整分页并复核首页，默认 30 分钟、单次下载 3072 MiB，可用 `--budget-minutes`、`--max-download-mib` 降低或在支持范围内调整；到限额留下缺口/检查点，不删除历史。旧 `evidence:sync` 为兼容入口，启动和测试均不自动同步。
 
+`node scripts/github-archive.mjs capacity` 只读统计正式资料、暂存、缓存及剩余空间，同步命令完成时也输出这项统计。容量政策版本 1：可用空间低于 1 GiB、正式资料达到 1 GiB 或暂存达到 512 MiB 时在结果的 warnings 中告警，不自动删除。此统计不是首次迁移解包峰值，也不创建后台监控。
+
 鉴权依次使用 `GH_TOKEN`、`GITHUB_TOKEN`、现有 Git credential helper，禁用交互，不保存凭证。只接受核对过的存储重定向，不转发认证头。区分等待、权限不足、过期、未确认不存在、错误和内容缺口；不采用外来续传水位。遗留 `pending/archive.lock` 先核对进程和任务，不能据 PID 猜测自动删锁。
 
 手动导入用 `npm run github:import -- --archive <ZIP> --run <run-id> --attempt <attempt>`，联网核对仓库、运行、attempt、job、artifact 摘要及产品门槛，不执行下载程序。新版 transport schema 2 只留下验证后的独立记录及 `origin.json`，不保存重复 ZIP；schema 1 继续原样读取。CI 步骤状态与测试断言结果分别保留；整个工作流最终状态还须看平台。显式提供的原件不删除，未知来源或无对应平台摘要的外来声明不认证为可信云端测试。
+
+内部产物准备程序将接收目录内的记录位置写入 `prepared-record.json`，导入器校验版本、限定相对路径及目录链接后使用；控制台诊断不作为记录路径。
 
 ### 格式、身份和内容变化
 

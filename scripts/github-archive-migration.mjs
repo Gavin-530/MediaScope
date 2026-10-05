@@ -71,12 +71,19 @@ export async function migrate(project,root){
   receipt.completedAt=now();receipt.sourceRecords=sources.length;receipt.copied=receipt.records.filter(r=>r.state==='saved').length;receipt.deduplicated=receipt.records.filter(r=>r.state==='unchanged').length;receipt.oldBytesRetained=receipt.records.reduce((n,r)=>n+r.bytes,0);
   await seal(root,'migration-reports/'+receipt.startedAt.replace(/[-:]/g,''),{'report.json':receipt});await writeJson(journal,receipt);return receipt;
 }
+export async function preparedRecord(receiver){
+  const result=await readJson(path.join(receiver,'prepared-record.json'));
+  if(result.schema!==1||typeof result.record!=='string'||!/^evidence-archive\/records\/[A-Za-z0-9_.-]+$/.test(result.record))throw Error('Invalid prepared record result');
+  safeRelative(result.record);const record=inside(receiver,path.join(receiver,result.record));await noLinks(record);
+  if(!(await fs.stat(record)).isDirectory())throw Error('Prepared record is not a directory');
+  return record;
+}
 export async function importTransport(project,root,archive,identity,{reader,artifact}={}){
   if(identity.repository!==TARGET.repository||!/^\d+$/.test(identity.runId)||!/^\d+$/.test(identity.attempt))throw Error('Import requires explicit verified repository/run/attempt');
   const task=path.join(root,'pending','import-'+hash(identity.runId+'/'+identity.attempt+'/'+now()).slice(0,20));await fs.mkdir(task);await writeJson(path.join(task,'owner.json'),{owner:'mediascope-github-archive',state:'importing'});
   const receiver=path.join(task,'receiver');const args=['-NoProfile','-ExecutionPolicy','Bypass','-File',path.join(project,'scripts/github-archive-evidence.ps1'),'-Action','Prepare','-Project',receiver,'-Archive',archive,'-RunId',identity.runId,'-Attempt',identity.attempt,...identity.commit?['-Commit',identity.commit]:[]];
-  const output=execFileSync('powershell.exe',args,{encoding:'utf8',windowsHide:true,timeout:Math.min(120000,reader?.remaining()??120000),maxBuffer:4*1024**2}).trim();
-  const record=inside(receiver,output);const relative=path.relative(path.join(receiver,'evidence-archive'),record).replaceAll('\\','/');
+  execFileSync('powershell.exe',args,{encoding:'utf8',windowsHide:true,timeout:Math.min(120000,reader?.remaining()??120000),maxBuffer:4*1024**2});
+  const record=await preparedRecord(receiver);const relative=path.relative(path.join(receiver,'evidence-archive'),record).replaceAll('\\','/');
   const result=await storeEvidence(project,root,record,relative,{platformArtifact:artifact??null});reader?.remaining();await insideCleanup(root,task);return result;
 }
 export async function boundaryBaseline(project){

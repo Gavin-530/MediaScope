@@ -7,6 +7,7 @@ import {inventory,latestInventory} from './github-archive-inventory.mjs';
 import {migrate,boundaryBaseline,evidenceRecords,verifyEvidence,importTransport,mergeCopy} from './github-archive-migration.mjs';
 import {sync} from './github-archive-collect.mjs';
 import {GitHubReader} from './github-archive-api.mjs';
+import {capacityReport} from './github-archive-capacity.mjs';
 
 const project=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 function options(args){const result={command:args.shift()??'status'};while(args.length){const k=args.shift();if(k==='--offline'||k==='--json'||k==='--evidence')result[k.slice(2)]=true;else if(['--root','--archive','--source','--run','--attempt','--commit','--repository','--backup','--budget-minutes','--max-download-mib'].includes(k)){if(!args.length||args[0].startsWith('--'))throw Error('Missing option value');result[k.slice(2)]=args.shift()}else throw Error('Unknown archive option: '+k)}return result}
@@ -27,9 +28,10 @@ export async function main(args=process.argv.slice(2)){
   if(opts.repository&&opts.repository!==TARGET.repository)throw Error('Different repository refused');
   if(opts.command==='import'&&(!opts.archive||!/^\d+$/.test(opts.run??'')||!/^\d+$/.test(opts.attempt??'')))throw Error('Import requires --archive and numeric --run --attempt');
   if(opts.command==='inventory'){if(opts.root)throw Error('Inventory scope is fixed to this project');return inventory(project,{online:!opts.offline})}
-  if(!['status','list','verify','reindex','migrate','sync','import','merge','backup','boundary'].includes(opts.command))throw Error('Unknown github archive command');
+  if(!['status','capacity','list','verify','reindex','migrate','sync','import','merge','backup','boundary'].includes(opts.command))throw Error('Unknown github archive command');
   if(opts.command==='boundary'){const result=await boundaryBaseline(project);console.log(JSON.stringify(result,null,2));if(result.releaseChanges.length||result.oldEvidenceChanges.length)process.exitCode=1;return result}
   if(['migrate','sync','import','merge'].includes(opts.command))await mutableRoot(root);else await assertRoot(root);
+  if(opts.command==='capacity'){const result=await capacityReport(root);console.log(JSON.stringify(result,null,2));return result;}
   if(opts.command==='verify'){
     const result=await verifyArchive(root);
     for(const entry of await evidenceRecords(root)){
@@ -53,7 +55,7 @@ export async function main(args=process.argv.slice(2)){
     if(opts.command==='merge'){if(!opts.source)throw Error('Merge requires explicit --source archive copy');const source=path.resolve(opts.source);if(source===root)throw Error('Source copy must be independent');const result=await mergeCopy(root,source);console.log(JSON.stringify(result,null,2));return result}
     if(opts.command==='sync'){
       const minutes=Number(opts['budget-minutes']??30),mib=Number(opts['max-download-mib']??3072);if(!Number.isInteger(minutes)||minutes<1||minutes>120||!Number.isInteger(mib)||mib<1||mib>3072)throw Error('Invalid execution/storage budget');
-      const result=await sync(project,root,{budgetMs:minutes*60000,maxBytes:mib*1024**2});console.log(JSON.stringify({counts:result.counts,countScope:result.countScope,coverage:result.coverage,addedBytes:result.addedBytes,addedBytesScope:result.addedBytesScope,receipt:result.receipt,gaps:result.gaps,queue:result.queue},null,2));if(!result.coverage.scanComplete||result.counts.error)process.exitCode=1;return result;
+      const result=await sync(project,root,{budgetMs:minutes*60000,maxBytes:mib*1024**2});const capacity=await capacityReport(root);console.log(JSON.stringify({counts:result.counts,countScope:result.countScope,coverage:result.coverage,addedBytes:result.addedBytes,addedBytesScope:result.addedBytesScope,receipt:result.receipt,gaps:result.gaps,queue:result.queue,capacity},null,2));if(!result.coverage.scanComplete||result.counts.error)process.exitCode=1;return result;
     }
     if(opts.command==='import'){
       if(!opts.archive||!opts.run||!opts.attempt)throw Error('Import requires --archive --run --attempt');if(opts.repository&&opts.repository!==TARGET.repository)throw Error('Different repository refused');

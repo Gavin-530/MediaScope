@@ -31,5 +31,11 @@ if($Action -eq 'Inventory'){
   $null=Assert-GitHubEvidencePath (Split-Path -Parent $ownerRoot) $full
   if(!$RunId -or !$Attempt){throw 'Transport import requires verified run and attempt'}
   $destination=Import-GitHubEvidence $full ([IO.Path]::GetFullPath($Archive)) 'Gavin-530/MediaScope' $RunId $Attempt $Commit
+  $destination=Assert-GitHubEvidencePath $full $destination
+  $relative=$destination.Substring($full.Length+1).Replace('\','/')
+  if($relative -notmatch '^evidence-archive/records/[A-Za-z0-9_.-]+$'){throw 'Prepared record has an unexpected location'}
+  $resultPath=Join-Path $full 'prepared-record.json'
+  if(Test-Path -LiteralPath $resultPath){throw 'Prepared record result already exists'}
+  [IO.File]::WriteAllText($resultPath,(@{schema=1;record=$relative}|ConvertTo-Json -Compress),(New-Object Text.UTF8Encoding($false)))
   Write-Output $destination
 }
