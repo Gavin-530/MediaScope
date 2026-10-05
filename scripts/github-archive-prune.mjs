@@ -107,7 +107,7 @@ export async function applyPrune(project,root,plan,{validate=verifyEvidence,onSt
   const task=inside(path.join(root,'pending'),path.join(root,'pending',journal.task));await noLinks(task);
   if(journal.state==='completed'){
     for(const row of journal.records){await targetRecord(project,root,row,validate);if(await exists(sourcePath(project,row.source)))throw Error('Removed source reappeared; do not treat the old receipt as a new removal');}
-    if(!journal.receipt){journal.receipt=(await seal(root,'migration-reports/prune-'+journal.startedAt.replaceAll(':','-'),{'report.json':journal})).path;await writeJson(journalFile,journal);}
+    if(!journal.receipt){journal.receipt=(await seal(root,'migration-reports/prune-'+journal.startedAt.replace(/[-:]/g,''),{'report.json':journal})).path;await writeJson(journalFile,journal);}
     else{safeRelative(journal.receipt);const receipt=inside(root,path.join(root,journal.receipt));verifySnapshotLocation(root,receipt,await verifySnapshot(receipt));}
     if(await exists(task)){const remaining=await tree(task),owner=await readJson(path.join(task,'owner.json'));if(owner.owner!=='mediascope-github-archive'||owner.planSha256!==journal.planSha256||remaining.length!==1||remaining[0].path!=='owner.json')throw Error('Completed removal task contains unexpected files; retained');await insideCleanup(root,task);}
     return journal;
@@ -151,7 +151,7 @@ export async function applyPrune(project,root,plan,{validate=verifyEvidence,onSt
   for(const row of journal.records){if(await exists(sourcePath(project,row.source)))throw Error('Removed source reappeared');await targetRecord(project,root,row,validate);}
   journal.state='completed';journal.completedAt=now();journal.removedRecords=journal.records.length;journal.releasedSourceBytes=journal.records.reduce((n,r)=>n+r.bytes,0);journal.independentStorageBackupCompleted=false;
   await writeJson(journalFile,journal);
-  journal.receipt=(await seal(root,'migration-reports/prune-'+journal.startedAt.replaceAll(':','-'),{'report.json':journal})).path;
+  journal.receipt=(await seal(root,'migration-reports/prune-'+journal.startedAt.replace(/[-:]/g,''),{'report.json':journal})).path;
   await writeJson(journalFile,journal);await insideCleanup(root,task);return journal;
 }
 
@@ -175,7 +175,7 @@ async function main(){
   const gate=await lock(root,'prune-'+command);
   try{
     if(command==='prepare'){
-      const plan=await preparePrune(project,root),file=path.join(work,'prune-plan-'+now().replaceAll(':','-')+'.json');await writeJson(file,plan);
+      const plan=await preparePrune(project,root),file=path.join(work,'prune-plan-'+now({milliseconds:true}).replace(/[-:]/g,'')+'.json');await writeJson(file,plan);
       console.log(JSON.stringify({plan:file,records:plan.records.length,bytes:plan.records.reduce((n,r)=>n+r.bytes,0),removed:false}));
     }else{
       if(!planFile)throw Error('Explicit reviewed plan file required');const file=inside(work,path.resolve(planFile));await noLinks(file);

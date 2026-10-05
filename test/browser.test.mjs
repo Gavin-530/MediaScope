@@ -28,7 +28,7 @@ function scenario(name,body){
     let app,context,page;const errors=[];
     try{
       app=await startServer(path.join(dir,'reports'));
-      context=await browser.newContext({acceptDownloads:true,colorScheme:'dark',viewport:{width:1440,height:900}});
+      context=await browser.newContext({acceptDownloads:true,colorScheme:'dark',timezoneId:'America/Los_Angeles',viewport:{width:1440,height:900}});
       page=await context.newPage();page.on('pageerror',error=>errors.push(error.message));
       await page.goto(app.base);
       await page.waitForFunction(()=>document.querySelector('#environment')?.textContent.includes('ffmpeg version'));
@@ -59,7 +59,12 @@ async function runTask(page,app,button){
 }
 async function download(page,button,file){
   const pending=page.waitForEvent('download');await page.locator(button).click();
-  await(await pending).saveAs(file);return JSON.parse(await readFile(file,'utf8'));
+  const downloaded=await pending;
+  assert.match(downloaded.suggestedFilename(),/-\d{8}T\d{6}Z(?:-\d+)?\.json$/);
+  const stamp=downloaded.suggestedFilename().match(/(\d{8}T\d{6}Z)(?:-\d+)?\.json$/)[1];
+  const instant=Date.parse(stamp.replace(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/,'$1-$2-$3T$4:$5:$6Z'));
+  assert.ok(Math.abs(Date.now()-instant)<60000,'download filename must represent UTC regardless of the browser timezone');
+  await downloaded.saveAs(file);return JSON.parse(await readFile(file,'utf8'));
 }
 async function analyze(page,app){await preview(page);return runTask(page,app,'#analyze')}
 

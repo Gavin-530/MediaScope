@@ -60,7 +60,7 @@ try {
     }
   }
   $entries=@($entries | Sort-Object path)
-  $runId=(Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssfffZ')+'-'+[guid]::NewGuid().ToString('N').Substring(0,8)
+  $runId=(Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')+'-'+[guid]::NewGuid().ToString('N').Substring(0,8)
   $name="generated-fixtures-$runId"
   $destination=Join-Path $root $name
   $partial=Join-Path (Get-EvidencePendingRoot $project) ("staging/$name.partial-$([guid]::NewGuid().ToString('N'))")
@@ -98,7 +98,7 @@ try {
     if($byPath.Count){throw 'Fixture ZIP omitted files'}
   } finally {$zip.Dispose()}
   $manifest=[ordered]@{
-    schema=1;kind='generated-fixture-snapshot';createdAtUtc=(Get-Date).ToUniversalTime().ToString('o')
+    schema=1;kind='generated-fixture-snapshot';createdAtUtc=(Get-Date).ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", [Globalization.CultureInfo]::InvariantCulture)
     items=@($items | ForEach-Object {$_.Name})
     sourceRoot='test-work';directories=@($dirs | ForEach-Object {$_.Name})
     files=@($entries | ForEach-Object {@{path=$_.path;bytes=$_.bytes;sha256=$_.sha256}})

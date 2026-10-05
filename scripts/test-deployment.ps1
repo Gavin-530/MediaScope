@@ -9,7 +9,7 @@ if(!$ManagedEvidence){
 . (Join-Path $PSScriptRoot 'deployment.ps1')
 $script:checks=@()
 function Save-DeploymentResult([string]$Outcome,[string]$Failure) {
-  if($ResultPath){Write-Json $ResultPath @{schema=1;outcome=$Outcome;online=[bool]$Online;checks=@($script:checks);failure=$Failure;finishedAtUtc=(Get-Date).ToUniversalTime().ToString('o')}}
+  if($ResultPath){Write-Json $ResultPath @{schema=1;outcome=$Outcome;online=[bool]$Online;checks=@($script:checks);failure=$Failure;finishedAtUtc=(Get-Date).ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", [Globalization.CultureInfo]::InvariantCulture)}}
 }
 trap {Save-DeploymentResult 'failed' $_.Exception.Message;throw $_}
 $project=Split-Path $PSScriptRoot

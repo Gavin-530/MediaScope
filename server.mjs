@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import {createReadStream} from 'node:fs';
 import { FF,FP,run,probe,video,scan,summarize,compare,normalizeMediaPath,decodeThreadCount } from './engine.mjs';
 import {allPackets,structure,traceStructure,mapStructure,metadataSummary,complexity,trial,trialOptions} from './analysis.mjs';
-import {makePortable,maxPortableBytes} from './public/portable.js';
+import {makePortable,maxPortableBytes,utcNow} from './public/portable.js';
 import {RuntimeData,acquireDataLease,verifyDataLease,removeOwned,ended,trialDestination,saveTrialVideos} from './scripts/runtime-data.mjs';
 const root=path.dirname(fileURLToPath(import.meta.url)),token=randomBytes(24).toString('hex'),jobs=new Map();
 const dataRoot=path.resolve(process.env.MEDIASCOPE_DATA_DIR||path.join(root,'.mediascope'));
@@ -140,7 +140,7 @@ async function execute(job,input){
       else if(Number.isFinite(next[key])&&next[key]>=0)clean[key]=Number(next[key]);
     }
     const previous=job.progress||{},phaseChanged=clean.phaseIndex!=null&&clean.phaseIndex!==previous.phaseIndex;
-    job.progress={...previous,...(phaseChanged?{subtasks:{},completed:null,total:null,unit:''}:{}),...clean,updatedAt:new Date().toISOString()};
+    job.progress={...previous,...(phaseChanged?{subtasks:{},completed:null,total:null,unit:''}:{}),...clean,updatedAt:utcNow()};
     if(clean.detail||clean.stage)job.message=clean.detail||clean.stage;
     if(next.subtask&&typeof next.subtask.id==='string'){
       const previous=job.progress.subtasks||{},item={};
@@ -203,11 +203,11 @@ async function execute(job,input){
       if(input.keepFiles)result.experiment.retainedFiles=await saveTrialVideos(dataRoot,job.id,result.experiment.retainedFiles,input.exportDirectory);
     }else throw Error('未知任务');
     if(job.controller.signal.aborted)throw Error('任务已取消');
-    job.result={schema:'MediaScope/0.2',createdAt:new Date().toISOString(),type:job.type,tools:versions,commands:ctx.commands,timing:{computeSeconds:(performance.now()-started)/1000,decodeThreads:ctx.decodeThreads,stages,scope:'计算阶段，不含报告序列化、保存、传输及浏览器渲染；同一 concurrentGroup 的阶段时间相互重叠，不能相加；子进程耗时见 commands[].elapsedSeconds'},...result};
+    job.result={schema:'MediaScope/0.2',createdAt:utcNow(),type:job.type,tools:versions,commands:ctx.commands,timing:{computeSeconds:(performance.now()-started)/1000,decodeThreads:ctx.decodeThreads,stages,scope:'计算阶段，不含报告序列化、保存、传输及浏览器渲染；同一 concurrentGroup 的阶段时间相互重叠，不能相加；子进程耗时见 commands[].elapsedSeconds'},...result};
     await writeFile(path.join(cwd,'report.json'),JSON.stringify(job.result,null,2));
     job.reportPath=path.join(cwd,'report.json');delete job.result;
-    job.status='done';job.message='完成';job.progress={...(job.progress||{}),stage:'完成',detail:'报告已保存',completed:1,total:1,unit:'份报告',updatedAt:new Date().toISOString()};
-  }catch(e){const status=job.controller.signal.aborted?'cancelled':'error';job.message=e.message;job.progress={...(job.progress||{}),stage:status==='cancelled'?'已取消':'任务未完成',detail:e.message,updatedAt:new Date().toISOString()};await writeFile(path.join(cwd,'failure.json'),JSON.stringify({status,error:e.message,commands:ctx.commands},null,2)).catch(()=>{});job.status=status;}
+    job.status='done';job.message='完成';job.progress={...(job.progress||{}),stage:'完成',detail:'报告已保存',completed:1,total:1,unit:'份报告',updatedAt:utcNow()};
+  }catch(e){const status=job.controller.signal.aborted?'cancelled':'error';job.message=e.message;job.progress={...(job.progress||{}),stage:status==='cancelled'?'已取消':'任务未完成',detail:e.message,updatedAt:utcNow()};await writeFile(path.join(cwd,'failure.json'),JSON.stringify({status,error:e.message,commands:ctx.commands},null,2)).catch(()=>{});job.status=status;}
   finally{job.finishedAt=new Date().toISOString();await localData.enqueue(async()=>{
     await localData.save(job,input);await localData.prune(jobs,inputs);
   }).catch(e=>{job.retentionMessage='本地数据清理未完成：'+e.message;console.error(job.retentionMessage)})}
@@ -267,7 +267,7 @@ const server=http.createServer(async(req,res)=>{
         const controller=new AbortController();probes.add(controller);
         try{
           const commands=[],result=await probe(file,{signal:AbortSignal.any([controller.signal,AbortSignal.timeout(30000)]),commands,update:()=>{}});
-          send(res,200,{schema:'MediaScope/0.2',createdAt:new Date().toISOString(),type:'inspect',tools:versions,commands,...result,metadata:metadataSummary(result)});
+          send(res,200,{schema:'MediaScope/0.2',createdAt:utcNow(),type:'inspect',tools:versions,commands,...result,metadata:metadataSummary(result)});
         }finally{probes.delete(controller)}
         return;
       }

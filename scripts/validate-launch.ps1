@@ -20,7 +20,7 @@ try {
   }
   Write-Json $ResultPath @{state='ready';validation=$validation}
 } catch {
-  if($request){Write-Json ((Get-LaunchCachePath $request.app $request.installRoot)+'.failed') @{message=$_.Exception.Message;checkedAt=(Get-Date).ToUniversalTime().ToString('o')}}
+  if($request){Write-Json ((Get-LaunchCachePath $request.app $request.installRoot)+'.failed') @{message=$_.Exception.Message;checkedAt=(Get-Date).ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", [Globalization.CultureInfo]::InvariantCulture)}}
   Write-Json $ResultPath @{state='error';message=$_.Exception.Message}
   exit 1
 }

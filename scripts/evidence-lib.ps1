@@ -124,7 +124,7 @@ function Test-EvidenceRecord($Root,$Relative) {
       $a=$direct.archive
       if($a.schema -ne 1 -or $a.operation -ne 'historical-compaction' -or $a.previousChecksumsSha256 -notmatch '^[a-fA-F0-9]{64}$' -or !$a.originalRelative -or $a.rerun -ne $false){throw 'Invalid historical compaction metadata'}
       $time=Get-EvidenceRunTime $a.identifier
-      if($Relative.StartsWith('records/') -and $Relative -ne ('records/'+(Convert-EvidenceRunName $a.identifier))){throw 'Compacted record location mismatch'}
+      if($Relative.StartsWith('records/') -and $Relative -notin @(('records/'+(Convert-EvidenceRunName $a.identifier)),('records/'+(Convert-EvidenceRunName $a.identifier -Legacy)))){throw 'Compacted record location mismatch'}
       if($direct.kind -notin @('App','Package','OnlineDeployment','Custom','build-maintenance','pull-request-merge-audit','test-system-audit','generated-fixture-snapshot','historical-evidence-collection')){throw 'Invalid historical record kind'}
       if($direct.runId -and $direct.runId -ne $a.identifier){throw 'Compacted run identity mismatch'}
       $originalOutcome=if($direct.outcome){$direct.outcome}else{'archived'}
@@ -151,7 +151,7 @@ function Test-EvidenceRecord($Root,$Relative) {
     if($direct.evidenceRevision -eq 2){
       if($direct.kind -notin @('App','Package','Deployment','OnlineDeployment','Custom')){throw 'Invalid independent record kind'}
       if(!$Relative.StartsWith('records/') -and !$Relative.StartsWith('runs/')){throw 'Invalid independent record location'}
-      if($Relative.StartsWith('records/') -and $Relative -ne ('records/'+(Convert-EvidenceRunName $direct.runId))){throw 'Independent record location mismatch'}
+      if($Relative.StartsWith('records/') -and $Relative -notin @(('records/'+(Convert-EvidenceRunName $direct.runId)),('records/'+(Convert-EvidenceRunName $direct.runId -Legacy)))){throw 'Independent record location mismatch'}
       if($Relative.StartsWith('records/')){$Relative='runs/'+$direct.version+'/'+$direct.runId}
     }
   }
@@ -397,50 +397,63 @@ function Get-EvidencePayload($Record) {
   return @{source=$Record.source;relative=$relative}
 }
 function Get-EvidenceIdentifierPattern {
-  return '(?:[0-9]{8}(?:T[0-9]{6}(?:[0-9]{3})?Z)?|undated)-[a-f0-9]{8}'
+  return '(?:[0-9]{8}(?:T[0-9]{6}(?:[0-9]{3}|\.[0-9]+)?Z)?|undated)-[a-f0-9]{8}'
 }
 function Get-EvidenceRunTime([string]$RunId) {
-  if($RunId -notmatch ('^(?<stamp>[0-9]{8}(?:T[0-9]{6}(?:[0-9]{3})?Z)?|undated)-(?<nonce>[a-f0-9]{8})$')){throw 'Invalid evidence run identifier'}
+  if($RunId -notmatch ('^(?<stamp>[0-9]{8}(?:T[0-9]{6}(?:[0-9]{3}|\.[0-9]+)?Z)?|undated)-(?<nonce>[a-f0-9]{8})$')){throw 'Invalid evidence run identifier'}
   $stamp=$Matches.stamp;$nonce=$Matches.nonce
   if($stamp -eq 'undated'){return @{namePart='undated';nonce=$nonce;value=$null;precision='unknown';timeZone=$null;identifier=$RunId}}
-  $format='yyyyMMdd';$display='yyyy-MM-dd';$valueFormat=$display;$precision='day';$zone=$null
   $styles=[Globalization.DateTimeStyles]::None
-  if($stamp.Contains('T')){
-    $styles=[Globalization.DateTimeStyles]::AssumeUniversal -bor [Globalization.DateTimeStyles]::AdjustToUniversal
-    $zone='UTC'
-    if($stamp.Length -eq 19){$format='yyyyMMddTHHmmssfffZ';$display='yyyy-MM-ddTHH-mm-ss.fffZ';$valueFormat='yyyy-MM-ddTHH:mm:ss.fffZ';$precision='millisecond'}
-    else{$format='yyyyMMddTHHmmssZ';$display='yyyy-MM-ddTHH-mm-ssZ';$valueFormat='yyyy-MM-ddTHH:mm:ssZ';$precision='second'}
+  if(!$stamp.Contains('T')){
+    $date=[DateTime]::ParseExact($stamp,'yyyyMMdd',[Globalization.CultureInfo]::InvariantCulture,$styles)
+    $value=$date.ToString('yyyy-MM-dd',[Globalization.CultureInfo]::InvariantCulture)
+    return @{namePart=$value;nonce=$nonce;value=$value;precision='day';timeZone=$null;identifier=$RunId}
   }
-  $date=[DateTime]::ParseExact($stamp,$format,[Globalization.CultureInfo]::InvariantCulture,$styles)
-  return @{namePart=$date.ToString($display);nonce=$nonce;value=$date.ToString($valueFormat);precision=$precision;timeZone=$zone;identifier=$RunId}
+  $styles=[Globalization.DateTimeStyles]::AssumeUniversal -bor [Globalization.DateTimeStyles]::AdjustToUniversal
+  $fraction='';$legacy=$stamp -match '^[0-9]{8}T[0-9]{9}Z$'
+  if($legacy){$fraction=$stamp.Substring(15,3);$whole=$stamp.Substring(0,15)+'Z'}
+  elseif($stamp -match '\.(?<digits>[0-9]+)Z$'){$fraction=$Matches.digits;$whole=$stamp.Substring(0,15)+'Z'}
+  else{$whole=$stamp}
+  $date=[DateTime]::ParseExact($whole,"yyyyMMdd'T'HHmmss'Z'",[Globalization.CultureInfo]::InvariantCulture,$styles)
+  $suffix=if($fraction){'.'+$fraction+'Z'}else{'Z'}
+  $value=$date.ToString("yyyy-MM-dd'T'HH:mm:ss",[Globalization.CultureInfo]::InvariantCulture)+$suffix
+  # Historical undelimited millisecond identifiers retain their legacy path.
+  $namePart=if($legacy){$date.ToString("yyyy-MM-dd'T'HH-mm-ss",[Globalization.CultureInfo]::InvariantCulture)+$suffix}else{$whole.TrimEnd('Z')+$suffix}
+  $precision=if(!$fraction){'second'}elseif($fraction.Length -eq 3){'millisecond'}else{'fractional-second'}
+  return @{namePart=$namePart;nonce=$nonce;value=$value;precision=$precision;timeZone='UTC';identifier=$RunId}
 }
 function Get-EvidenceOriginalTime([string]$OriginalRelative) {
   if($OriginalRelative -notmatch ('(?:^|[/-])(?<identifier>'+ (Get-EvidenceIdentifierPattern) +')$')){throw 'New records require a UTC run identifier, date-only identifier or explicit undated identifier'}
   return (Get-EvidenceRunTime $Matches.identifier)
 }
-function Convert-EvidenceRunName([string]$RunId) {
+function Convert-EvidenceRunName([string]$RunId,[switch]$Legacy) {
   $time=Get-EvidenceRunTime $RunId
-  return $time.namePart+'-'+$time.nonce
+  $namePart=if($Legacy -and $time.timeZone -eq 'UTC'){$time.value.Replace(':','-')}else{$time.namePart}
+  return $namePart+'-'+$time.nonce
 }
 function Get-EvidenceLocationTime([string]$Relative) {
   $leaf=$Relative.Split('/')[-1]
-  $stamp='(?:[0-9]{4}-[0-9]{2}-[0-9]{2}(?:T[0-9]{2}-[0-9]{2}-[0-9]{2}(?:\.[0-9]{3})?Z)?|undated)'
+  $stamp='(?:[0-9]{8}T[0-9]{6}(?:\.[0-9]+)?Z|[0-9]{4}-[0-9]{2}-[0-9]{2}(?:T[0-9]{2}-[0-9]{2}-[0-9]{2}(?:\.[0-9]+)?Z)?|undated)'
   if($leaf -notmatch ('^(?<stamp>'+ $stamp +')(?:(?:_[a-z][a-z0-9-]{0,31}_)|-)(?<nonce>[a-f0-9]{8})$')){throw 'Invalid evidence location time'}
-  $identifier=($Matches.stamp -replace '[-:.]','')+'-'+$Matches.nonce
+  $stamp=$Matches.stamp;$nonce=$Matches.nonce
+  if($stamp -match '^[0-9]{4}-'){$stamp=$stamp -replace '[-:]',''}
+  $identifier=$stamp+'-'+$nonce
   return (Get-EvidenceRunTime $identifier)
 }
-function Format-EvidenceBeijingTime([string]$Value) {
+function Format-EvidenceUtcTime([string]$Value) {
   if(!$Value){return 'unknown'}
   if($Value -match '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'){
-    try{$null=[DateTime]::ParseExact($Value,'yyyy-MM-dd',[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::None);return $Value+' (date only; timezone unspecified)'}
+    try{$null=[DateTime]::ParseExact($Value,'yyyy-MM-dd',[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::None);return $Value+' (date only; timezone unknown)'}
     catch{return 'unknown (original value retained)'}
   }
-  if($Value -notmatch '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.(?<fraction>[0-9]{1,7}))?(?:Z|[+-][0-9]{2}:[0-9]{2})$'){return 'unknown (original value retained)'}
+  if($Value -notmatch '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.(?<fraction>[0-9]+))?(?:Z|[+-][0-9]{2}:[0-9]{2})$'){return 'unknown (original value retained; timezone unknown)'}
   $fraction=$Matches.fraction
-  $format='yyyy-MM-dd HH:mm:ss'
-  if($fraction){$format+='.'+('f'*$fraction.Length)}
-  try{return [DateTimeOffset]::Parse($Value,[Globalization.CultureInfo]::InvariantCulture).ToOffset([TimeSpan]::FromHours(8)).ToString($format+' zzz')}
-  catch{return 'unknown (original value retained)'}
+  # Parse whole seconds only; source fractional digits remain untouched.
+  $whole=$Value -replace '\.[0-9]+(?=Z|[+-][0-9]{2}:[0-9]{2}$)',''
+  try{
+    $utc=[DateTimeOffset]::ParseExact($whole,"yyyy-MM-dd'T'HH:mm:ssK",[Globalization.CultureInfo]::InvariantCulture).ToUniversalTime()
+    return $utc.ToString("yyyy-MM-dd'T'HH:mm:ss",[Globalization.CultureInfo]::InvariantCulture)+$(if($fraction){'.'+$fraction})+'Z'
+  }catch{return 'unknown (original value retained)'}
 }
 function Get-EvidenceCategory($OriginalRelative,$Manifest) {
   $category='maintenance'
@@ -533,7 +546,7 @@ function Write-EvidenceEnvelope($Root,$Relative,$OriginalRelative) {
     startedAtUtc=$started;recordedAtUtc=$recorded;timeBasis=$(if($time.precision -eq 'unknown'){'unknown'}else{'original-run-identifier'});
     identifierTime=$time.value;identifierTimePrecision=$time.precision;identifierTimeZone=$time.timeZone;
     identifierTimeSource=$(if($m){'original-run-identifier'}else{'original-checksums'});
-    archivedAtUtc=[DateTime]::UtcNow.ToString('o');
+    archivedAtUtc=[DateTime]::UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", [Globalization.CultureInfo]::InvariantCulture);
     outcome=$(if(!$m){'unknown'}elseif($m.kind -eq 'github-actions-evidence'){$m.testStepOutcome}elseif($m.outcome){$m.outcome}else{'archived'});
     scope=$m.scope;github=$github;originalRelative=$OriginalRelative;archiveState='sealed';
     originalChecksumsSha256=$originalSum
@@ -544,10 +557,10 @@ function Write-EvidenceEnvelope($Root,$Relative,$OriginalRelative) {
   $null=Test-EvidenceRecord $Root $Relative
 }
 function Get-EvidenceCanonicalLocation([string]$Relative) {
-  return ($Relative -replace '^(maintenance/(?:[0-9]{4}-[0-9]{2}-[0-9]{2}(?:T[0-9]{2}-[0-9]{2}-[0-9]{2}(?:\.[0-9]{3})?Z)?|undated))_[a-z][a-z0-9-]{0,31}_([a-f0-9]{8})$','$1-$2')
+  return ($Relative -replace '^(maintenance/(?:[0-9]{8}T[0-9]{6}(?:\.[0-9]+)?Z|[0-9]{4}-[0-9]{2}-[0-9]{2}(?:T[0-9]{2}-[0-9]{2}-[0-9]{2}(?:\.[0-9]+)?Z)?|undated))_[a-z][a-z0-9-]{0,31}_([a-f0-9]{8})$','$1-$2')
 }
 function Write-EvidenceRecordReadme($Root,$Record,$Manifest) {
-  $beijing=Format-EvidenceBeijingTime $Record.startedAtUtc
+  $utc=Format-EvidenceUtcTime $Record.startedAtUtc
   $lines=@('# Evidence record / 检查记录','',
     "- 分类：$($Record.category) / $($Record.kind)",
     "- 来源：$($Record.origin)",
@@ -555,7 +568,7 @@ function Write-EvidenceRecordReadme($Root,$Record,$Manifest) {
     "- 原始结果：$($Record.outcome)")
   if($Record.version){$lines+="- 版本：$($Record.version)"}
   if($Record.runId){$lines+="- 原始运行编号：$($Record.runId)"}
-  if($Record.startedAtUtc){$lines+=@("- 运行开始（原始清单值）：$($Record.startedAtUtc)","- 运行开始（北京时间或精度说明）：$beijing")}
+  if($Record.startedAtUtc){$lines+=@("- 运行开始（原始清单值）：$($Record.startedAtUtc)","- 运行开始（UTC 或精度说明）：$utc")}
   if($Record.recordedAtUtc){$lines+="- 原清单创建时间（UTC）：$($Record.recordedAtUtc)"}
   if($Record.scope){$lines+="- 测试范围：$($Record.scope)"}
   if($Record.identifierTimePrecision){$lines+=@("- 编号时间原值：$($Record.identifierTime)","- 编号时间精度：$($Record.identifierTimePrecision)","- 编号时间来源：$($Record.identifierTimeSource)","- 编号时区：$($Record.identifierTimeZone)")}
@@ -579,7 +592,7 @@ function Test-EvidenceEnvelope($Root,$Relative) {
     $Relative=$parent+'/'+$Relative.Split('/')[-1]
   }
   $samePath=($physical.StartsWith('records/') -and $r.path -eq $physical) -or $r.path -eq $Relative -or ($Relative.StartsWith('maintenance/') -and $r.path -eq (Get-EvidenceCanonicalLocation $Relative))
-  $dated='(?:[0-9]{4}-[0-9]{2}-[0-9]{2}(?:T[0-9]{2}-[0-9]{2}-[0-9]{2}(?:\.[0-9]{3})?Z)?|undated)'
+  $dated='(?:[0-9]{8}T[0-9]{6}(?:\.[0-9]+)?Z|[0-9]{4}-[0-9]{2}-[0-9]{2}(?:T[0-9]{2}-[0-9]{2}-[0-9]{2}(?:\.[0-9]+)?Z)?|undated)'
   $validLocation=$Relative -match ('^(tests/(local|github-actions)|maintenance|fixtures)/'+$dated+'-[a-f0-9]{8}$') -or
     $Relative -match ('^maintenance/'+$dated+'_[a-z][a-z0-9-]{0,31}_[a-f0-9]{8}$') -or
     $Relative -match '^maintenance/undated_release-materials_[a-f0-9]{8}$'
@@ -619,7 +632,7 @@ function Test-EvidenceEnvelope($Root,$Relative) {
       if($r.startedAtUtc -ne $expectedStart -or $r.recordedAtUtc -ne $expectedRecorded){throw 'Envelope time provenance mismatch'}
     }
     if($r.identifierTime -ne $time.value -or $r.identifierTimePrecision -ne $time.precision -or $r.identifierTimeZone -ne $time.timeZone -or $r.identifierTimeSource -ne $expectedSource -or $r.timeBasis -ne $expectedBasis -or
-       $locationTime.namePart -ne $time.namePart -or $locationTime.nonce -ne $time.nonce){throw 'Envelope time provenance mismatch'}
+       $locationTime.value -ne $time.value -or $locationTime.precision -ne $time.precision -or $locationTime.nonce -ne $time.nonce){throw 'Envelope time provenance mismatch'}
   }
   $null=Test-EvidenceRecord (Join-Path $Root 'original') $r.originalRelative
   return $true

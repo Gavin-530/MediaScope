@@ -190,10 +190,10 @@ try {
   if(!$Apply){Write-Output "Preview only: $($new.Count) new record(s). Use -Contributor <name> -Apply to import.";return}
   if(!$new.Count -and !$Folder){Write-Output 'All records already exist with identical checksums; nothing changed.';return}
 
-  $id=[DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ')+'-'+[guid]::NewGuid().ToString('N').Substring(0,8)
+  $id=[DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ')+'-'+[guid]::NewGuid().ToString('N').Substring(0,8)
   $transaction=Assert-EvidencePath $project (Join-Path (Get-EvidencePendingRoot $project) ('local-import-'+$id))
   $null=New-Item -ItemType Directory -Path $transaction
-  $receipt=[ordered]@{schema=1;operation='local-evidence-import';batch=$inputName;intakeFolder=$inputName;contributor=$Contributor;receivedFrom='user-supplied; not independently authenticated';importedAtUtc=[DateTime]::UtcNow.ToString('o');skippedSubtrees=@($script:receivedSkips.ToArray());sourceCatalogs=@($script:receivedCatalogs.ToArray());records=@($plan | ForEach-Object {[ordered]@{folder=$_.folder;path=$_.relative;checksumsSha256=$_.checksumsSha256;action=$_.action;sourceCommit=$_.sourceCommit;github=$_.github}})}
+  $receipt=[ordered]@{schema=1;operation='local-evidence-import';batch=$inputName;intakeFolder=$inputName;contributor=$Contributor;receivedFrom='user-supplied; not independently authenticated';importedAtUtc=[DateTime]::UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", [Globalization.CultureInfo]::InvariantCulture);skippedSubtrees=@($script:receivedSkips.ToArray());sourceCatalogs=@($script:receivedCatalogs.ToArray());records=@($plan | ForEach-Object {[ordered]@{folder=$_.folder;path=$_.relative;checksumsSha256=$_.checksumsSha256;action=$_.action;sourceCommit=$_.sourceCommit;github=$_.github}})}
   $utf8=New-Object Text.UTF8Encoding($false)
   [IO.File]::WriteAllText((Join-Path $transaction 'receipt.json'),($receipt | ConvertTo-Json -Depth 20),$utf8)
   if(!$new.Count){

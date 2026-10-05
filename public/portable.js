@@ -1,5 +1,8 @@
 import { validateReport } from "./report.js";
 
+export const utcNow = () => new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+export const utcFilename = () => utcNow().replace(/[-:]/g, "");
+
 export const portableSchema = "MediaScope/0.3";
 const earlierUnifiedSchema = "MediaScopePortable/1";
 export const legacyPortableSchemas = {
@@ -97,7 +100,7 @@ export function parsePortable(text) {
 }
 
 export function makePortable({
-  createdAt = new Date().toISOString(),
+  createdAt = utcNow(),
   results = [],
   plans = [],
 } = {}) {

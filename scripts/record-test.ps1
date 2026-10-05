@@ -58,7 +58,7 @@ if($Kind -in @('Package','OnlineDeployment')){
 $gitCommit=(& git -C $project rev-parse HEAD).Trim()
 $gitStatus=@(& git -C $project status --porcelain=v1 --untracked-files=normal)
 if($RequireClean -and $gitStatus.Count){throw 'The source tree is not clean'}
-$runId=(Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssfffZ')+'-'+[guid]::NewGuid().ToString('N').Substring(0,8)
+$runId=(Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')+'-'+[guid]::NewGuid().ToString('N').Substring(0,8)
 $staging=Join-Path (Get-EvidencePendingRoot $project) "staging/$runId"
 $localRun=Join-Path $root "runs/$version/$runId"
 $log=Join-Path $staging 'output.log'
@@ -169,7 +169,7 @@ if(!$summary -and $Kind -in @('Package','OnlineDeployment') -and $logText){
 $manifest=[ordered]@{
   schema=2;kind=$Kind;label=$Label;runId=$runId;version=$version
   git=@{commit=$gitCommit;dirty=($gitStatus.Count -gt 0);status=$gitStatus;role=$(if($Kind -eq 'App'){'source-under-test'}else{'test-harness-checkout'})}
-  startedAtUtc=$start.ToString('o');finishedAtUtc=$finish.ToString('o');durationSeconds=[math]::Round(($finish-$start).TotalSeconds,3)
+  startedAtUtc=$start.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", [Globalization.CultureInfo]::InvariantCulture);finishedAtUtc=$finish.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", [Globalization.CultureInfo]::InvariantCulture);durationSeconds=[math]::Round(($finish-$start).TotalSeconds,3)
   outcome=$(if($exitCode -eq 0){'passed'}else{'failed'});exitCode=$exitCode
   command=@{executable=$Executable;arguments=$Arguments;workingDirectory=$project}
   host=@{os=[Environment]::OSVersion.VersionString;processorArchitecture=$env:PROCESSOR_ARCHITECTURE;process64Bit=[Environment]::Is64BitProcess;powershell=$PSVersionTable.PSVersion.ToString()}

@@ -177,8 +177,11 @@ $precisionProject=Join-Path $project 'precision'
 $precisionRoot=Initialize-EvidenceArchive $precisionProject
 $cases=@(
   @{id='20261001T102030220Z-1234ab01';name='2026-10-01T10-20-30.220Z-1234ab01';precision='millisecond';zone='UTC';started='2026-10-01T10:20:30.220Z'},
-  @{id='20261001T102030Z-1234ab02';name='2026-10-01T10-20-30Z-1234ab02';precision='second';zone='UTC';started='2026-10-01T10:20:30Z'},
+  @{id='20261001T102030Z-1234ab02';name='20261001T102030Z-1234ab02';precision='second';zone='UTC';started='2026-10-01T10:20:30Z'},
   @{id='20261001-1234ab03';name='2026-10-01-1234ab03';precision='day';zone=$null;started=$null},
+  @{id='20261001T102030.1Z-1234ab06';name='20261001T102030.1Z-1234ab06';precision='fractional-second';zone='UTC';started='2026-10-01T10:20:30.1Z'},
+  @{id='20261001T102030.1200Z-1234ab07';name='20261001T102030.1200Z-1234ab07';precision='fractional-second';zone='UTC';started='2026-10-01T10:20:30.1200Z'},
+  @{id='20261001T102030.123456789Z-1234ab08';name='20261001T102030.123456789Z-1234ab08';precision='fractional-second';zone='UTC';started='2026-10-01T10:20:30.123456789Z'},
   @{id='undated-1234ab04';name='undated-1234ab04';precision='unknown';zone=$null;started=$null}
 )
 foreach($case in $cases){
@@ -195,9 +198,9 @@ foreach($case in $cases){
   $maintenancePath=Get-EvidenceDestination $precisionProject ('test-system-audit-'+$case.id)
   if((Split-Path -Leaf $maintenancePath) -ne ($case.name.Substring(0,$case.name.Length-9)+'_test-system-audit_'+$case.id.Substring($case.id.Length-8))){throw 'Maintenance label assumes fixed timestamp width'}
 }
-if((Test-EvidenceCatalog $precisionRoot) -ne 4){throw 'Precision records not all valid'}
+if((Test-EvidenceCatalog $precisionRoot) -ne $cases.Count){throw 'Precision records not all valid'}
 Write-Output 'PASS: millisecond, second, day and unknown identities publish without invented digits or timezone'
-$second=Join-Path $precisionRoot 'records/2026-10-01T10-20-30Z-1234ab02'
+$second=Join-Path $precisionRoot 'records/20261001T102030Z-1234ab02'
 $recordBytes=[IO.File]::ReadAllBytes((Join-Path $second 'record.json'))
 $sumBytes=[IO.File]::ReadAllBytes((Join-Path $second 'SHA256SUMS.txt'))
 $r4=Get-Content (Join-Path $second 'record.json') -Raw| ConvertFrom-EvidenceJson
@@ -219,12 +222,14 @@ foreach($bad in @('20260230-1234ab01','20260229-1234ab01','20261001T246099Z-1234
   if(!$failed){throw "Invalid calendar/identifier accepted: $bad"}
 }
 if((Get-EvidenceRunTime '20240229-1234ab01').value -ne '2024-02-29'){throw 'Leap date rejected'}
-if((Format-EvidenceBeijingTime '2026-10-01T10:20:30Z') -ne '2026-10-01 18:20:30 +08:00' -or
-   (Format-EvidenceBeijingTime '2026-10-01T10:20:30.220Z') -ne '2026-10-01 18:20:30.220 +08:00' -or
-   (Format-EvidenceBeijingTime '2026-10-01T10:20:30.1234567Z') -ne '2026-10-01 18:20:30.1234567 +08:00' -or
-   (Format-EvidenceBeijingTime '2026-10-01') -notmatch 'date only; timezone unspecified' -or
-   (Format-EvidenceBeijingTime 'invalid') -notmatch '^unknown' -or
-   (Format-EvidenceBeijingTime $null) -ne 'unknown'){throw 'Display invented precision or timezone'}
+if((Format-EvidenceUtcTime '2026-10-01T10:20:30Z') -ne '2026-10-01T10:20:30Z' -or
+   (Format-EvidenceUtcTime '2026-10-01T10:20:30.220Z') -ne '2026-10-01T10:20:30.220Z' -or
+   (Format-EvidenceUtcTime '2026-10-01T10:20:30.1234567Z') -ne '2026-10-01T10:20:30.1234567Z' -or
+   (Format-EvidenceUtcTime '2026-10-01') -notmatch 'date only; timezone unknown' -or
+   (Format-EvidenceUtcTime '2026-10-01T00:20:30.120000000+08:00') -ne '2026-09-30T16:20:30.120000000Z' -or
+   (Format-EvidenceUtcTime '2026-10-01T10:20:30') -notmatch 'timezone unknown' -or
+   (Format-EvidenceUtcTime 'invalid') -notmatch '^unknown' -or
+   (Format-EvidenceUtcTime $null) -ne 'unknown'){throw 'Display invented precision or timezone'}
 Write-Output 'PASS: real calendar validation rejects malformed dates and displays preserve source fractional precision'
 $cloudPrecision=Join-Path (Get-EvidencePendingRoot $precisionProject) 'cloud-time-fixture'
 $null=New-Item -ItemType Directory -Path $cloudPrecision -Force

@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][ValidatePattern('^[0-9]{8}T[0-9]{9}Z-[a-f0-9]{8}$')][string]$RunId)
+param([Parameter(Mandatory=$true)][ValidatePattern('^[0-9]{8}T[0-9]{6}(?:[0-9]{3}|\.[0-9]+)?Z-[a-f0-9]{8}$')][string]$RunId)
 $ErrorActionPreference='Stop'
 $project=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..')).TrimEnd('\')
 . (Join-Path $PSScriptRoot 'evidence-lib.ps1')
@@ -42,7 +42,7 @@ try {
     $dest=Publish-EvidenceRecord $project $raw $relative
   }
   $null=Test-EvidenceRecord $dest ('records/'+(Split-Path -Leaf $dest))
-  $id=[DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ')+'-'+[guid]::NewGuid().ToString('N').Substring(0,8)
+  $id=[DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ')+'-'+[guid]::NewGuid().ToString('N').Substring(0,8)
   $audit=Join-Path $pending ('staging/recovery-'+$id)
   $null=New-Item -ItemType Directory -Path $audit -Force
   $saved=@()
@@ -53,7 +53,7 @@ try {
     Copy-Item -LiteralPath $temp.FullName -Destination $audit
     $saved+=@{path=$temp.FullName;sha256=(Get-FileHash -LiteralPath $temp.FullName).Hash}
   }
-  $note=@{schema=1;kind='build-maintenance';createdAtUtc=[DateTime]::UtcNow.ToString('o');recoveredRun=$relative;catalogCandidates=$saved;note='Recovery only; no product tests rerun or added to pass counts'}
+  $note=@{schema=1;kind='build-maintenance';createdAtUtc=[DateTime]::UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", [Globalization.CultureInfo]::InvariantCulture);recoveredRun=$relative;catalogCandidates=$saved;note='Recovery only; no product tests rerun or added to pass counts'}
   [IO.File]::WriteAllText((Join-Path $audit 'manifest.json'),($note|ConvertTo-Json -Depth 8),(New-Object Text.UTF8Encoding($false)))
   $auditDest=Publish-EvidenceRecord $project $audit ('build-maintenance-'+$id)
   foreach($file in $saved){

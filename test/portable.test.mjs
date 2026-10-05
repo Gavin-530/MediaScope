@@ -22,13 +22,15 @@ test('single report, result table, plan and combined content share one schema an
   assert.deepEqual(value.results,content.results??[]);
   assert.deepEqual(value.plans,content.plans??[]);
   assert.equal(value.kind,undefined);
+  assert.match(value.createdAt,/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+  assert.match(report.createdAt,/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
  }
 });
 
 test('old bare reports and three purpose-specific files import into the same structure',()=>{
  assert.deepEqual(parsePortable(JSON.stringify(report)).results,[{entryId:'legacy-report',report}]);
  for(const [kind,content] of Object.entries({results:{results},plan:{plans},bundle:{results,plans}})){
-  const old={schema:legacyPortableSchemas[kind],kind,createdAt:'2026-09-27T15:30:45.000Z',...content};
+  const old={schema:legacyPortableSchemas[kind],kind,createdAt:'2026-09-27T15:30:45.120000000Z',...content};
   const restored=parsePortable(JSON.stringify(old));
   assert.equal(restored.schema,portableSchema);
   assert.equal(restored.createdAt,old.createdAt);

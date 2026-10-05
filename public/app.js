@@ -1,4 +1,4 @@
-import { parsePortable, makePortable, maxPortableBytes } from "./portable.js";
+import { parsePortable, makePortable, maxPortableBytes, utcFilename } from "./portable.js";
 import { plot, gopOverview } from "./charts.js";
 import { basicInfoHTML, initBasicInfo } from "./basic-info.js";
 import {
@@ -652,9 +652,7 @@ $("#trial").onclick = () => {
   }
 };
 function timestamp() {
-  const d = new Date(),
-    pad = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+  return utcFilename();
 }
 function safeName(value) {
   return (

@@ -23,13 +23,13 @@ $rows=@(foreach($record in Get-EvidenceRecords $root){
     $originPath=Join-Path $inner.source 'origin.json'
     $ciStep=if($cloud){$m.testStepOutcome}elseif($app.github -and (Test-Path -LiteralPath $originPath)){(Get-Content -LiteralPath $originPath -Raw|ConvertFrom-EvidenceJson).testStepOutcome}else{$null}
     $started=if($app.startedAt){$app.startedAt}elseif($app.startedAtUtc){$app.startedAtUtc}elseif($app.createdAtUtc){$app.createdAtUtc}elseif($app.createdUtc){$app.createdUtc}else{$null}
-    $beijing=Format-EvidenceBeijingTime $started
+    $utc=Format-EvidenceUtcTime $started
     $identifier=if($app.archiveRevision -eq 1){Get-EvidenceRunTime $app.archive.identifier}elseif($app.evidenceRevision -eq 2){Get-EvidenceRunTime $app.runId}else{$null}
     $precision=if($envelope.identifierTimePrecision){$envelope.identifierTimePrecision}elseif($identifier){$identifier.precision}else{'not-recorded'}
     $passed=$null;$failed=$null
     if($product -and $app.testSummary){$passed=$app.testSummary.passed;$failed=$app.testSummary.failed}
     elseif($product -and $app.summary){$passed=if($null -ne $app.summary.passed){$app.summary.passed}else{$app.summary.pass};$failed=if($null -ne $app.summary.failed){$app.summary.failed}else{$app.summary.fail}}
-    [pscustomobject]@{Time=$beijing;IdentifierTime=$(if($identifier){$identifier.value}else{$envelope.identifierTime});TimePrecision=$precision;TimeSource=$(if($identifier){'run-identifier'}else{$envelope.identifierTimeSource});Origin=$(if($app.github -or $cloud){'github-actions'}else{'local'});ArchiveClass=$archiveClass;Version=$(if($product){$app.version}else{'n/a'});Kind=$(if($app){$app.kind}elseif($envelope){$envelope.kind}else{'legacy'});Outcome=$(if($product -and $app.outcome){$app.outcome}elseif($envelope){$envelope.outcome}else{'archived'});CIStep=$ciStep;Passed=$passed;Failed=$failed;Scope=$app.scope;Validation=$app.validation.status;ValidationMode=$app.validation.mode;Run=$app.runId;GitHubRun=$app.github.runId;Attempt=$app.github.runAttempt;Path=$record.relative;Original=$inner.source}
+    [pscustomobject]@{Time=$utc;IdentifierTime=$(if($identifier){$identifier.value}else{$envelope.identifierTime});TimePrecision=$precision;TimeSource=$(if($identifier){'run-identifier'}else{$envelope.identifierTimeSource});Origin=$(if($app.github -or $cloud){'github-actions'}else{'local'});ArchiveClass=$archiveClass;Version=$(if($product){$app.version}else{'n/a'});Kind=$(if($app){$app.kind}elseif($envelope){$envelope.kind}else{'legacy'});Outcome=$(if($product -and $app.outcome){$app.outcome}elseif($envelope){$envelope.outcome}else{'archived'});CIStep=$ciStep;Passed=$passed;Failed=$failed;Scope=$app.scope;Validation=$app.validation.status;ValidationMode=$app.validation.mode;Run=$app.runId;GitHubRun=$app.github.runId;Attempt=$app.github.runAttempt;Path=$record.relative;Original=$inner.source}
   }
 })
 if($Scope -ne 'local'){

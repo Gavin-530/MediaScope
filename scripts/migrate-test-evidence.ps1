@@ -63,10 +63,10 @@ try {
     if(!@($current.records|Where-Object {$_.path -like 'legacy/local-test-archive/*'}).Count){[IO.Directory]::Move($destination,$old)}
     throw
   }
-  $id=[DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ')+'-'+[guid]::NewGuid().ToString('N').Substring(0,8)
+  $id=[DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ')+'-'+[guid]::NewGuid().ToString('N').Substring(0,8)
   $audit=Join-Path $pending ('staging/migration-'+$id)
   $null=New-Item -ItemType Directory -Path $audit -Force
-  $map=@{schema=1;kind='build-maintenance';createdAtUtc=[DateTime]::UtcNow.ToString('o');note='Archive layout migration; no product tests rerun';records=$count;files=$inventory.Count;oldRoot='local-test-archive';newRoot='evidence-archive/legacy/local-test-archive';inventory=$inventory}
+  $map=@{schema=1;kind='build-maintenance';createdAtUtc=[DateTime]::UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", [Globalization.CultureInfo]::InvariantCulture);note='Archive layout migration; no product tests rerun';records=$count;files=$inventory.Count;oldRoot='local-test-archive';newRoot='evidence-archive/legacy/local-test-archive';inventory=$inventory}
   [IO.File]::WriteAllText((Join-Path $audit 'manifest.json'),($map|ConvertTo-Json -Depth 8),(New-Object Text.UTF8Encoding($false)))
   [IO.File]::WriteAllText((Join-Path $audit 'original-catalog.json'),$oldCatalog,(New-Object Text.UTF8Encoding($false)))
   $auditDestination=Publish-EvidenceRecord $project $audit ('archive-migration-'+$id)

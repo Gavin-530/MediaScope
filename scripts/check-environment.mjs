@@ -59,5 +59,5 @@ try {
       });
     });
   } finally { child.kill(); await new Promise(resolve=>child.exitCode!==null?resolve():child.once('exit',resolve)); }
-  writeFileSync(output,JSON.stringify({compatibility:lock.compatibility,versions,checkedAt:new Date().toISOString()},null,2));
+  writeFileSync(output,JSON.stringify({compatibility:lock.compatibility,versions,checkedAt:new Date().toISOString().replace(/\.\d{3}Z$/,'Z')},null,2));
 } finally {rmSync(temp,{recursive:true,force:true})}

@@ -15,7 +15,8 @@ while(args.length){const a=args.shift();if(a==='--suite')suite=args.shift();else
 if(!['full','core','browser'].includes(suite))throw Error('Suite must be full, core or browser');
 if(release&&(suite!=='full'||ref))throw Error('--release requires the full suite against the clean current checkout');
 if(!Number.isSafeInteger(maxLogMiB)||maxLogMiB<1||maxLogMiB>256||!Number.isSafeInteger(warnTotalMiB)||warnTotalMiB<1)throw Error('Invalid evidence size limit');
-const id=new Date().toISOString().replace(/[-:.]/g,'')+'-'+randomUUID().slice(0,8);
+const now=()=>new Date().toISOString().replace(/\.\d{3}Z$/,'Z');
+const id=now().replace(/[-:]/g,'')+'-'+randomUUID().slice(0,8);
 const work=path.join(project,'evidence-archive','pending','test-runs',id),source=path.join(work,'source'),evidence=path.join(work,'evidence');
 const sha=b=>createHash('sha256').update(b).digest('hex');
 const git=(...a)=>execFileSync('git',['-C',project,...a],{encoding:'utf8',windowsHide:true}).trim();
@@ -34,9 +35,9 @@ ps('Validate','-Source',work);
 await fs.mkdir(path.dirname(work),{recursive:true});
 const lockPath=path.join(project,'evidence-archive','pending','test-run.lock');
 const lock=await fs.open(lockPath,'wx').catch(()=>{throw Error('Another test run is active, or an interrupted test-run.lock needs inspection')});
-await lock.writeFile(JSON.stringify({pid:process.pid,runId:id,started:new Date().toISOString()}));
+await lock.writeFile(JSON.stringify({pid:process.pid,runId:id,started:now()}));
 let gate,exitCode=2,version=JSON.parse(await fs.readFile(path.join(project,'package.json'),'utf8')).version,output='',events=[],preflight={},command;
-const started=new Date().toISOString();
+const started=now();
 const manifest={schema:3,evidenceRevision:2,kind:'App',runId:id,startedAt:started,scope:suite,invocation:{executable:process.execPath,args:process.argv.slice(1),cwd:process.cwd()},releaseCheck:{requested:release,ready:false,reasons:['Not evaluated']},host:{platform:process.platform,architecture:process.arch,release:os.release()},source:{},harness:{},outcome:'blocked',exitCode:2};
 if(process.env.GITHUB_ACTIONS==='true')manifest.github={repository:process.env.GITHUB_REPOSITORY,runId:process.env.GITHUB_RUN_ID,runAttempt:process.env.GITHUB_RUN_ATTEMPT,sha:process.env.GITHUB_SHA,job:process.env.GITHUB_JOB,ref:process.env.GITHUB_REF,event:process.env.GITHUB_EVENT_NAME};
 try {
@@ -136,7 +137,7 @@ try {
 }catch(e){output+='\n'+e.stack+'\n';manifest.blockedReason=e.message;console.error(e.message)}
 finally {
   try {
-    Object.assign(manifest,{version,endedAt:new Date().toISOString(),exitCode,command});
+    Object.assign(manifest,{version,endedAt:now(),exitCode,command});
     await json(path.join(evidence,'manifest.json'),manifest);
     manifest.data=await saveMeasurements(path.join(source,'test-work'),evidence,{failed:exitCode!==0});
     let human='';try{human=await fs.readFile(path.join(evidence,'output.log'),'utf8')}catch{}
@@ -144,7 +145,7 @@ finally {
     if(log.length>maxLogMiB*1024*1024)throw Error('Compressed log exceeds size limit; full log retained in sandbox');
     await fs.unlink(path.join(evidence,'output.log')).catch(e=>{if(e.code!=='ENOENT')throw e});
     await fs.unlink(path.join(evidence,'events.jsonl')).catch(e=>{if(e.code!=='ENOENT')throw e});
-    Object.assign(manifest,{version,endedAt:new Date().toISOString(),exitCode,command,environment:preflight,retention:'independent record; user may delete after execution; no automatic deletion',log:{file:'output.log.gz',compression:'gzip',storedBytes:log.length,sha256:sha(log),maximumStoredMiB:maxLogMiB}});
+    Object.assign(manifest,{version,endedAt:now(),exitCode,command,environment:preflight,retention:'independent record; user may delete after execution; no automatic deletion',log:{file:'output.log.gz',compression:'gzip',storedBytes:log.length,sha256:sha(log),maximumStoredMiB:maxLogMiB}});
     await json(path.join(evidence,'manifest.json'),manifest);
     // A lock/ledger error is never bypassed with an unverified archive write.
     if(!gate||gate.exitCode!==null||gate.signalCode!==null)throw Error('Evidence lock unavailable; retained sandbox for recovery');

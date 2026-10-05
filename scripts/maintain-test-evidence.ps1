@@ -23,16 +23,16 @@ $active=@(Get-CimInstance Win32_Process -Filter "Name='node.exe' OR Name='powers
 })
 if($active.Count){throw 'A relevant test/recording process is still active'}
 $gate=[IO.File]::Open((Get-EvidenceLockPath $project),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
-$id=[DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ')+'-'+[guid]::NewGuid().ToString('N').Substring(0,8)
+$id=[DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ')+'-'+[guid]::NewGuid().ToString('N').Substring(0,8)
 $tx=Assert-EvidencePath $project (Join-Path $project ('.build/evidence-maintenance-'+$id))
 if($ResumeDirectory){
   $tx=Assert-EvidencePath $project $ResumeDirectory
-  if((Split-Path -Parent $tx) -ne (Join-Path $project '.build') -or (Split-Path -Leaf $tx) -notmatch '^evidence-maintenance-(\d{8}T\d{9}Z-[a-f0-9]{8})$'){throw 'Invalid maintenance resume directory'}
+  if((Split-Path -Parent $tx) -ne (Join-Path $project '.build') -or (Split-Path -Leaf $tx) -notmatch '^evidence-maintenance-(\d{8}T\d{6}(?:\d{3}|\.[0-9]+)?Z-[a-f0-9]{8})$'){throw 'Invalid maintenance resume directory'}
   $id=$Matches[1]
 }
 $null=New-Item -ItemType Directory -Path $tx -Force
 $journal=New-Object Collections.ArrayList
-$receipt=@{schema=1;kind='test-system-audit';createdAtUtc=[DateTime]::UtcNow.ToString('o');note='Explicit historical compaction and pending finalization; no product tests rerun; original outcomes and time precision retained';records=@();pending=@()}
+$receipt=@{schema=1;kind='test-system-audit';createdAtUtc=[DateTime]::UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", [Globalization.CultureInfo]::InvariantCulture);note='Explicit historical compaction and pending finalization; no product tests rerun; original outcomes and time precision retained';records=@();pending=@()}
 if($ResumeDirectory){
   foreach($entry in (Get-Content -LiteralPath (Join-Path $tx 'journal.json') -Raw -Encoding UTF8|ConvertFrom-EvidenceJson)){
     if($entry.phase -ne 'installed' -or (Test-Path -LiteralPath $entry.backup)){throw 'An unfinished directory swap requires manual recovery'}
@@ -140,7 +140,7 @@ function Compact-Record($item){
       [IO.File]::Copy($file.full,$target)
       if((Get-FileHash -LiteralPath $target).Hash -ne (Get-FileHash -LiteralPath $file.full).Hash){throw 'Retained original bytes changed'}
     }
-    $archive=@{schema=1;operation='historical-compaction';originalPath=$item.relative;originalRelative=$r.originalRelative;identifier=$identifier;previousChecksumsSha256=(Get-FileHash -LiteralPath (Join-Path $item.source 'SHA256SUMS.txt')).Hash;originalManifestSha256=$(if(Test-Path -LiteralPath $mp){(Get-FileHash -LiteralPath $mp).Hash}else{$null});compactedAtUtc=[DateTime]::UtcNow.ToString('o');rerun=$false;originalOutcome=$(if($m.outcome){$m.outcome}else{'archived'});originalEnvelopeOutcome=$r.outcome;originalTimePrecision=$r.identifierTimePrecision;sourceSnapshotsRetained=$false;retention=$pack.stats}
+    $archive=@{schema=1;operation='historical-compaction';originalPath=$item.relative;originalRelative=$r.originalRelative;identifier=$identifier;previousChecksumsSha256=(Get-FileHash -LiteralPath (Join-Path $item.source 'SHA256SUMS.txt')).Hash;originalManifestSha256=$(if(Test-Path -LiteralPath $mp){(Get-FileHash -LiteralPath $mp).Hash}else{$null});compactedAtUtc=[DateTime]::UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", [Globalization.CultureInfo]::InvariantCulture);rerun=$false;originalOutcome=$(if($m.outcome){$m.outcome}else{'archived'});originalEnvelopeOutcome=$r.outcome;originalTimePrecision=$r.identifierTimePrecision;sourceSnapshotsRetained=$false;retention=$pack.stats}
     $m|Add-Member -NotePropertyName archiveRevision -NotePropertyValue 1 -Force
     $m|Add-Member -NotePropertyName archive -NotePropertyValue $archive -Force
     if($m.kind -eq 'generated-fixture-snapshot'){
@@ -181,7 +181,7 @@ try{
       foreach($file in Get-EvidenceFiles $raw){[IO.File]::Copy($file.full,(Join-Path $stage $file.path))}
       & node (Join-Path $PSScriptRoot 'recover-interrupted-data.mjs') (Join-Path $run.FullName 'source/test-work') $stage
       if($LASTEXITCODE -ne 0){throw 'Interrupted measurements could not be retained'}
-      Save-Json (Join-Path $stage 'manifest.json') @{schema=1;kind='build-maintenance';createdAtUtc=[DateTime]::UtcNow.ToString('o');interruptedRun=$run.Name;executionState='interrupted';note='No final run manifest or suite summary. Original events/logs and available measurements retained; no complete regression or product pass claimed.'}
+      Save-Json (Join-Path $stage 'manifest.json') @{schema=1;kind='build-maintenance';createdAtUtc=[DateTime]::UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", [Globalization.CultureInfo]::InvariantCulture);interruptedRun=$run.Name;executionState='interrupted';note='No final run manifest or suite summary. Original events/logs and available measurements retained; no complete regression or product pass claimed.'}
       $dest=Publish-EvidenceRecord $project $stage ('interrupted-test-'+$run.Name)
       Compact-Record @{source=$dest;relative='records/'+(Split-Path -Leaf $dest)}
       $dest=Join-Path $root ('records/'+(Convert-EvidenceRunName $run.Name))

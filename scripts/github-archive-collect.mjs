@@ -175,7 +175,7 @@ export async function sync(project,root,{budgetMs,maxBytes,reader=new GitHubRead
   report.captureCompletedAt=now();report.elapsedMs=Date.parse(report.captureCompletedAt)-Date.parse(report.captureStartedAt);report.downloadBytes=reader.downloadBytes;report.peakTemporaryDownloadBytes=reader.peakTemporaryBytes;report.remainingSpace=await fs.statfs(root);
   report.coverage={configured:inventory.remote.categories,current:report.categories,unsupported:Object.entries(inventory.remote.categories).filter(([,v])=>v.state==='unsupported').map(([k])=>k),scanComplete:Object.values(report.categories).every(v=>v.scan==='complete'),contentComplete:report.gaps.length===0&&report.counts.missing===0&&report.counts.expired===0,formalIntegrity:'requires-verify-command'};
   if(report.coverage.unsupported.length)report.coverage.contentComplete=false;
-  const receipt=await seal(root,'sync-reports/'+report.captureStartedAt.replaceAll(':','-'),{'report.json':report},{captureStartedAt:report.captureStartedAt});
+  const receipt=await seal(root,'sync-reports/'+report.captureStartedAt.replace(/[-:]/g,''),{'report.json':report},{captureStartedAt:report.captureStartedAt});
   report.receipt={path:receipt.path,bytes:receipt.bytes};await writeJson(path.join(root,'coverage.json'),report.coverage);await writeJson(path.join(root,'pending','sync-checkpoint.json'),report);return report;
 }
 async function downloadTask(root,name){const dir=path.join(root,'pending',name+'-'+hash(now()+Math.random()).slice(0,16));await fs.mkdir(dir);await writeJson(path.join(dir,'owner.json'),{owner:'mediascope-github-archive',state:'download'});return dir}

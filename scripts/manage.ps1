@@ -30,7 +30,7 @@ function Show-EnvironmentPrompt($Message,$Buttons,$DefaultButton=[Windows.Forms.
 }
 function Save-InstallMarker {
   $path=Join-Path $InstallRoot 'install.json'
-  $created=if(Test-Path -LiteralPath $path){(Read-Json $path).createdAt}else{(Get-Date).ToUniversalTime().ToString('o')}
+  $created=if(Test-Path -LiteralPath $path){(Read-Json $path).createdAt}else{(Get-Date).ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", [Globalization.CultureInfo]::InvariantCulture)}
   Write-Json $path @{schema=1;product='MediaScope';runtimeRoot=$RuntimeRoot;createdAt=$created}
   $retained=Join-Path $InstallRoot 'retained.json'
   if(Test-Path -LiteralPath $retained){Remove-Item -LiteralPath $retained -Force}

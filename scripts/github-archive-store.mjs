@@ -4,7 +4,7 @@ import {createHash,randomUUID} from 'node:crypto';
 
 export const FORMAT=1;
 export const TARGET={host:'github.com',repository:'Gavin-530/MediaScope',repositoryId:'1377031380'};
-export const now=()=>new Date().toISOString();
+export const now=({milliseconds=false}={})=>{const value=new Date().toISOString();return milliseconds?value:value.replace(/\.\d{3}Z$/,'Z')};
 export const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 export const jsonBytes=value=>Buffer.from(JSON.stringify(value,null,2)+'\n');
 export function canonical(value){
@@ -124,7 +124,7 @@ export async function seal(root,relative,content,metadata={}){
   const manifest={...metadata,format:FORMAT,kind:'github-platform-snapshot',...TARGET,object:relative,comparisonVersion:1,contentSha256:digest,captureStartedAt:metadata.captureStartedAt??now(),captureCompletedAt:now(),fetchedAt:metadata.fetchedAt??now(),files:list};
   await fs.writeFile(path.join(candidate,'archive-manifest.json'),jsonBytes(manifest),{flag:'wx'});
   const checks=await tree(candidate);await fs.writeFile(path.join(candidate,'SHA256SUMS.txt'),checks.map(f=>f.sha256+'  '+f.path).join('\n')+'\n',{flag:'wx'});
-  await verifySnapshot(candidate);const name=now().replaceAll(':','-')+'-'+digest.slice(0,16),destination=path.join(revisions,name);
+  await verifySnapshot(candidate);const name=now().replace(/[-:]/g,'')+'-'+digest.slice(0,16),destination=path.join(revisions,name);
   await fs.rename(candidate,destination);await verifySnapshot(destination);
   await writeJson(path.join(object,'latest.json'),{format:FORMAT,revision:'revisions/'+name,lastCheckedAt:now(),contentSha256:digest});
   await insideCleanup(root,pending);return {state:'saved',path:relative+'/revisions/'+name,bytes:checks.reduce((n,f)=>n+f.bytes,0)+Buffer.byteLength(checks.map(f=>f.sha256+'  '+f.path).join('\n')+'\n')};

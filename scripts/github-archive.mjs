@@ -84,7 +84,7 @@ async function backup(root,directory){
   if(!directory)throw Error('Backup requires explicit --backup directory on independent storage');const destination=path.resolve(directory);await noLinks(destination);
   try{inside(root,destination,{equal:true});throw Error('Backup cannot be inside archive')}catch(e){if(e.message!=='Path outside owned root')throw e}
   const verification=await verifyArchive(root);if(verification.errors.length)throw Error('Backup source integrity failed');
-  await fs.mkdir(destination,{recursive:true});const backupRoot=path.join(destination,'MediaScope-github-archive-'+now().replaceAll(':','-'));await fs.mkdir(backupRoot);
+  await fs.mkdir(destination,{recursive:true});const backupRoot=path.join(destination,'MediaScope-github-archive-'+now({milliseconds:true}).replace(/[-:]/g,''));await fs.mkdir(backupRoot);
   const copy=path.join(backupRoot,'github-archive');await fs.mkdir(copy);
   // Copy sealed formal content and offline control files; exclude pending, locks, HTTP cache and credentials.
   const files=(await tree(root)).filter(f=>!f.path.startsWith('pending/')&&!f.path.startsWith('index/'));

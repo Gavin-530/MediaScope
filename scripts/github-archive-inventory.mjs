@@ -6,7 +6,7 @@ import {TARGET,now,tree,readJson,writeJson,noLinks} from './github-archive-store
 
 export async function inventory(project,{online=true}={}){
   const work=path.join(project,'.build','github-archive-implementation');await noLinks(work);await fs.mkdir(work,{recursive:true});
-  const run=now().replaceAll(':','-');
+  const run=now({milliseconds:true}).replace(/[-:]/g,'');
   const rows=JSON.parse(execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',path.join(project,'scripts/github-archive-evidence.ps1'),'-Action','Inventory','-Project',project],{encoding:'utf8',windowsHide:true,timeout:180000,maxBuffer:32*1024**2}));
   const evidence=await tree(path.join(project,'evidence-archive')),releases=await tree(path.join(project,'releases'));
   const report={format:1,phase:'A',startedAt:now(),target:TARGET,records:rows.map(r=>({...r,files:evidence.filter(f=>f.path.startsWith(r.path+'/')).map(f=>({...f,path:f.path.slice(r.path.length+1)}))})),evidenceInventory:evidence,releaseInventory:releases,space:await fs.statfs(project),git:{head:execFileSync('git',['rev-parse','HEAD'],{cwd:project,encoding:'utf8',windowsHide:true}).trim(),status:execFileSync('git',['status','--short'],{cwd:project,encoding:'utf8',windowsHide:true}).trim()},remote:{state:'not-checked',categories:{}}};

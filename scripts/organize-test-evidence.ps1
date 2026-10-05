@@ -54,7 +54,7 @@ try {
   }
   Write-Output "Organization plan: $(@($plans|Where-Object {$_.operation -eq 'wrap'}).Count) historical wraps; $(@($plans|Where-Object {$_.operation -eq 'rename'}).Count) sealed records moved into records/."
   if(!$Apply){$plans|ForEach-Object {[pscustomobject]@{operation=$_.operation;from=$_.from;to=$_.to}}|Format-Table -AutoSize|Out-String -Width 240|Write-Output;exit 0}
-  $id=[DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ')+'-'+[guid]::NewGuid().ToString('N').Substring(0,8)
+  $id=[DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ')+'-'+[guid]::NewGuid().ToString('N').Substring(0,8)
   $tx=Assert-EvidencePath $project (Join-Path (Get-EvidencePendingRoot $project) ('org-'+[guid]::NewGuid().ToString('N').Substring(0,8)))
   $null=New-Item -ItemType Directory -Path $tx
   $auditRaw=Join-Path $tx 'audit/original'
@@ -113,7 +113,7 @@ try {
   $auditDest=Join-Path $root (Get-EvidenceFlatLocation ($auditDest.Substring($root.Length+1).Replace('\','/')))
   $auditRelative=$auditDest.Substring($root.Length+1).Replace('\','/')
   $mapping=@($plans|ForEach-Object @{oldPath=$_.from;newPath=$_.to;originalRelative=$_.originalRelative;operation=$_.operation;kind=$_.kind;inventory=$_.inventory})
-  $manifest=@{schema=1;kind='test-system-audit';createdAtUtc=[DateTime]::UtcNow.ToString('o');note='Archive organization; original evidence bytes and existing sealed record bytes preserved; no product tests rerun';recordsBefore=$before;wrapped=@($plans|Where-Object {$_.operation -eq 'wrap'}).Count;renamed=@($plans|Where-Object {$_.operation -eq 'rename'}).Count;originalFilesVerified=$originalFiles;maximumOrganizedPathLength=$maxPath;mapping=$mapping;legacyInventory=$legacyInventory}
+  $manifest=@{schema=1;kind='test-system-audit';createdAtUtc=[DateTime]::UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", [Globalization.CultureInfo]::InvariantCulture);note='Archive organization; original evidence bytes and existing sealed record bytes preserved; no product tests rerun';recordsBefore=$before;wrapped=@($plans|Where-Object {$_.operation -eq 'wrap'}).Count;renamed=@($plans|Where-Object {$_.operation -eq 'rename'}).Count;originalFilesVerified=$originalFiles;maximumOrganizedPathLength=$maxPath;mapping=$mapping;legacyInventory=$legacyInventory}
   [IO.File]::WriteAllText((Join-Path $auditRaw 'manifest.json'),($manifest|ConvertTo-Json -Depth 12),(New-Object Text.UTF8Encoding($false)))
   $report=@('# Archive organization receipt','',
     "Original records: $before; historical wraps: $($manifest.wrapped); sealed record moves: $($manifest.renamed).",

@@ -48,7 +48,7 @@ try {
   $null=Test-EvidenceCatalog $root
   $active=@(Get-CimInstance Win32_Process -Filter "Name='node.exe' OR Name='ffmpeg.exe' OR Name='ffprobe.exe'" | Where-Object {$_.CommandLine -and $_.CommandLine.IndexOf($build,[StringComparison]::OrdinalIgnoreCase) -ge 0})
   if($active.Count){throw 'A build/test process is active; cleanup refused'}
-  $name='build-maintenance-'+(Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssfffZ')+'-'+[guid]::NewGuid().ToString('N').Substring(0,8)
+  $name='build-maintenance-'+(Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')+'-'+[guid]::NewGuid().ToString('N').Substring(0,8)
   $partial=Join-Path (Get-EvidencePendingRoot $project) ('staging/'+$name+'.partial-'+[guid]::NewGuid().ToString('N'))
   New-Item -ItemType Directory -Path $partial | Out-Null
   $inventory=@()
@@ -70,7 +70,7 @@ try {
     }
     $inventory+=@{source=$candidate.path;kind=$candidate.kind;originalBytes=$candidate.bytes;originalFiles=$candidate.files.Count;retainedDiagnostics=$retained}
   }
-  $manifest=@{schema=1;kind='build-maintenance';createdAtUtc=(Get-Date).ToUniversalTime().ToString('o');entries=$inventory;note='Maintenance record, not a product test result. Existing original run evidence is preserved; executable copies and generated archives are reconstructible.'}
+  $manifest=@{schema=1;kind='build-maintenance';createdAtUtc=(Get-Date).ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", [Globalization.CultureInfo]::InvariantCulture);entries=$inventory;note='Maintenance record, not a product test result. Existing original run evidence is preserved; executable copies and generated archives are reconstructible.'}
   [IO.File]::WriteAllText((Join-Path $partial 'manifest.json'),($manifest | ConvertTo-Json -Depth 10),(New-Object Text.UTF8Encoding($false)))
   Write-EvidenceChecksums $partial
   $null=Test-EvidenceChecksums $partial

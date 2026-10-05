@@ -69,7 +69,7 @@ export async function migrate(project,root){
     }catch(e){receipt.errors.push({source:record.path,reason:e.message});await writeJson(journal,receipt)}
   }
   receipt.completedAt=now();receipt.sourceRecords=sources.length;receipt.copied=receipt.records.filter(r=>r.state==='saved').length;receipt.deduplicated=receipt.records.filter(r=>r.state==='unchanged').length;receipt.oldBytesRetained=receipt.records.reduce((n,r)=>n+r.bytes,0);
-  await seal(root,'migration-reports/'+receipt.startedAt.replaceAll(':','-'),{'report.json':receipt});await writeJson(journal,receipt);return receipt;
+  await seal(root,'migration-reports/'+receipt.startedAt.replace(/[-:]/g,''),{'report.json':receipt});await writeJson(journal,receipt);return receipt;
 }
 export async function importTransport(project,root,archive,identity,{reader,artifact}={}){
   if(identity.repository!==TARGET.repository||!/^\d+$/.test(identity.runId)||!/^\d+$/.test(identity.attempt))throw Error('Import requires explicit verified repository/run/attempt');
@@ -118,5 +118,5 @@ export async function mergeCopy(root,source){
     const saved=await seal(root,'supplements/received/'+hash(key).slice(0,24),content);await verifySnapshot(path.join(root,saved.path,'received'));known.set(key,saved.path);
     receipt.records.push({sourceObject:manifest.object,sha256:manifest.contentSha256,state:saved.state,target:saved.path,trust:'unconfirmed-source-retained'});
   }
-  receipt.completedAt=now();await seal(root,'migration-reports/received-'+receipt.startedAt.replaceAll(':','-'),{'report.json':receipt});return receipt;
+  receipt.completedAt=now();await seal(root,'migration-reports/received-'+receipt.startedAt.replace(/[-:]/g,''),{'report.json':receipt});return receipt;
 }
