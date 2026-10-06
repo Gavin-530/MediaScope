@@ -6,7 +6,7 @@ import {gzipSync} from 'node:zlib';
 export function measurementFile(relative) {
   const name=path.posix.basename(relative),top=relative.split('/')[0];
   if(/^(psnr|ssim|vmaf)\.(log|json)$/.test(name)&&(!relative.includes('/')||['bitdepth','trial','trial-libx265','trial-libaom-av1'].includes(top)))return true;
-  if(/^(metrics-equivalence|reference-cache|vfr-equivalence|structure-equivalence|siti-parallel)-[A-Za-z0-9]{6}$/.test(top))return name.endsWith('.json');
+  if(/^(metrics-equivalence|reference-cache|vfr-equivalence|structure-equivalence|siti-parallel|bitrate-equivalence)-[A-Za-z0-9]{6}$/.test(top))return name.endsWith('.json');
   if(['browser','server-reports','chroma-assumption','portable','report-validation'].includes(top))return name==='report.json'||/^theme-.*\.json$/.test(name)||name==='sidebar-links.json';
   if(['trials-expanded','chart-model'].includes(top))return name==='measured-trial.json';
   if(top==='startup-desktop')return ['cache-result.json','page-timing.json'].includes(name);
@@ -15,7 +15,8 @@ export function measurementFile(relative) {
   return false;
 }
 
-export async function saveMeasurements(generated,evidence,{failed=false}={}) {
+export const criticalMeasurements = [{testName:'real video and two audio tracks: 100 ms aggregation matches direct 1 s without changing legacy accounting',pathPattern:/^bitrate-equivalence-[A-Za-z0-9]{6}\/measured-equivalence\.json$/}];
+export async function saveMeasurements(generated,evidence,{failed=false,requiredMeasurements=[]}={}) {
   const entries=[],diagnostics=[];
   async function visit(directory) {
     for(const item of await fs.readdir(directory,{withFileTypes:true})) {
@@ -45,6 +46,7 @@ export async function saveMeasurements(generated,evidence,{failed=false}={}) {
   if(root?.isSymbolicLink())throw Error('Linked test measurement root');
   if(root)await visit(generated);
   entries.sort((a,b)=>a.path.localeCompare(b.path));
+  for(const requirement of requiredMeasurements) if(!entries.some(e=>requirement.pathPattern.test(e.path)&&e.data?.outcome==='passed')) throw Error('Missing critical measurement evidence: '+requirement.testName);
   if(entries.length)await fs.writeFile(path.join(evidence,'measurements.json.gz'),gzipSync(Buffer.from(JSON.stringify({schema:1,entries})+'\n')));
   return {measurements:entries.length,diagnostics:diagnostics.length};
 }

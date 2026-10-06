@@ -417,8 +417,8 @@ function Get-EvidenceRunTime([string]$RunId) {
   $date=[DateTime]::ParseExact($whole,"yyyyMMdd'T'HHmmss'Z'",[Globalization.CultureInfo]::InvariantCulture,$styles)
   $suffix=if($fraction){'.'+$fraction+'Z'}else{'Z'}
   $value=$date.ToString("yyyy-MM-dd'T'HH:mm:ss",[Globalization.CultureInfo]::InvariantCulture)+$suffix
-  # Historical undelimited millisecond identifiers retain their legacy path.
-  $namePart=if($legacy){$date.ToString("yyyy-MM-dd'T'HH-mm-ss",[Globalization.CultureInfo]::InvariantCulture)+$suffix}else{$whole.TrimEnd('Z')+$suffix}
+  # New destinations use basic UTC spelling; legacy physical paths remain readable.
+  $namePart=$whole.TrimEnd('Z')+$suffix
   $precision=if(!$fraction){'second'}elseif($fraction.Length -eq 3){'millisecond'}else{'fractional-second'}
   return @{namePart=$namePart;nonce=$nonce;value=$value;precision=$precision;timeZone='UTC';identifier=$RunId}
 }
@@ -556,6 +556,9 @@ function Write-EvidenceEnvelope($Root,$Relative,$OriginalRelative) {
   Write-EvidenceChecksums $Root
   $null=Test-EvidenceRecord $Root $Relative
 }
+function Convert-EvidenceLocationSpelling([string]$Relative) {
+  return ($Relative -replace '(?<=/)([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2})-([0-9]{2})-([0-9]{2})(?=(?:\.[0-9]+)?Z(?:-|_))','$1$2$3T$4$5$6')
+}
 function Get-EvidenceCanonicalLocation([string]$Relative) {
   return ($Relative -replace '^(maintenance/(?:[0-9]{8}T[0-9]{6}(?:\.[0-9]+)?Z|[0-9]{4}-[0-9]{2}-[0-9]{2}(?:T[0-9]{2}-[0-9]{2}-[0-9]{2}(?:\.[0-9]+)?Z)?|undated))_[a-z][a-z0-9-]{0,31}_([a-f0-9]{8})$','$1-$2')
 }
@@ -592,6 +595,10 @@ function Test-EvidenceEnvelope($Root,$Relative) {
     $Relative=$parent+'/'+$Relative.Split('/')[-1]
   }
   $samePath=($physical.StartsWith('records/') -and $r.path -eq $physical) -or $r.path -eq $Relative -or ($Relative.StartsWith('maintenance/') -and $r.path -eq (Get-EvidenceCanonicalLocation $Relative))
+  # Moving a sealed legacy envelope changes its location, not its saved bytes.
+  $recordLocation=if($r.path -match '^records/[^/]+$'){$Relative.Substring(0,$Relative.LastIndexOf('/')+1)+$r.path.Split('/')[-1]}else{$r.path}
+  $samePath=$samePath -or (Convert-EvidenceLocationSpelling $recordLocation) -eq (Convert-EvidenceLocationSpelling $Relative) -or
+    ($Relative.StartsWith('maintenance/') -and (Convert-EvidenceLocationSpelling $recordLocation) -eq (Convert-EvidenceLocationSpelling (Get-EvidenceCanonicalLocation $Relative)))
   $dated='(?:[0-9]{8}T[0-9]{6}(?:\.[0-9]+)?Z|[0-9]{4}-[0-9]{2}-[0-9]{2}(?:T[0-9]{2}-[0-9]{2}-[0-9]{2}(?:\.[0-9]+)?Z)?|undated)'
   $validLocation=$Relative -match ('^(tests/(local|github-actions)|maintenance|fixtures)/'+$dated+'-[a-f0-9]{8}$') -or
     $Relative -match ('^maintenance/'+$dated+'_[a-z][a-z0-9-]{0,31}_[a-f0-9]{8}$') -or

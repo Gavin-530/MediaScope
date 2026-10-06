@@ -6,7 +6,7 @@ import {createHash,randomUUID} from 'node:crypto';
 import {gzipSync} from 'node:zlib';
 import os from 'node:os';
 import {featureResults,releaseReadiness,regressionAssessment} from '../test/helpers/test-results.mjs';
-import {saveMeasurements,compactResults} from './test-evidence.mjs';
+import {saveMeasurements,compactResults,criticalMeasurements} from './test-evidence.mjs';
 
 // Application bytes and harness bytes are captured independently. No source rewriting.
 const project=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
@@ -139,7 +139,8 @@ finally {
   try {
     Object.assign(manifest,{version,endedAt:now(),exitCode,command});
     await json(path.join(evidence,'manifest.json'),manifest);
-    manifest.data=await saveMeasurements(path.join(source,'test-work'),evidence,{failed:exitCode!==0});
+    const passedNames=events.filter(e=>e.type==='test:pass'&&!e.data.skip&&!e.data.todo).map(e=>e.data.name);
+    manifest.data=await saveMeasurements(path.join(source,'test-work'),evidence,{failed:exitCode!==0,requiredMeasurements:exitCode===0?criticalMeasurements.filter(r=>passedNames.includes(r.testName)):[]});
     let human='';try{human=await fs.readFile(path.join(evidence,'output.log'),'utf8')}catch{}
     const log=gzipSync(Buffer.from(output+human));await fs.mkdir(evidence,{recursive:true});await fs.writeFile(path.join(evidence,'output.log.gz'),log);
     if(log.length>maxLogMiB*1024*1024)throw Error('Compressed log exceeds size limit; full log retained in sandbox');

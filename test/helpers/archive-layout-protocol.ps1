@@ -54,7 +54,9 @@ Write-Output 'PASS: recomputed outer checksums cannot promote original failed ev
 $r.outcome='failed';[IO.File]::WriteAllText((Join-Path $published 'record.json'),($r|ConvertTo-Json -Depth 8));Write-EvidenceChecksums $published
 # Refresh only the synthetic fixture's registered checksum, never a product archive.
 $c=Get-Content (Join-Path $root 'catalog.json') -Raw| ConvertFrom-EvidenceJson
-($c.records|Where-Object {$_.path -eq $r.path}).checksumsSha256=(Get-FileHash (Join-Path $published 'SHA256SUMS.txt')).Hash
+foreach($fixtureEntry in @($c.records|Where-Object {$_.path -eq $r.path})){
+  $fixtureEntry.checksumsSha256=(Get-FileHash (Join-Path $published 'SHA256SUMS.txt')).Hash
+}
 [IO.File]::WriteAllText((Join-Path $root 'catalog.json'),($c|ConvertTo-Json -Depth 8))
 $held=Join-Path (Get-EvidencePendingRoot $project) 'interrupted'
 $null=New-Item -ItemType Directory -Path $held
@@ -176,7 +178,7 @@ Write-Output 'PASS: failure before catalog commit rolls back original locations 
 $precisionProject=Join-Path $project 'precision'
 $precisionRoot=Initialize-EvidenceArchive $precisionProject
 $cases=@(
-  @{id='20261001T102030220Z-1234ab01';name='2026-10-01T10-20-30.220Z-1234ab01';precision='millisecond';zone='UTC';started='2026-10-01T10:20:30.220Z'},
+  @{id='20261001T102030220Z-1234ab01';name='20261001T102030.220Z-1234ab01';precision='millisecond';zone='UTC';started='2026-10-01T10:20:30.220Z'},
   @{id='20261001T102030Z-1234ab02';name='20261001T102030Z-1234ab02';precision='second';zone='UTC';started='2026-10-01T10:20:30Z'},
   @{id='20261001-1234ab03';name='2026-10-01-1234ab03';precision='day';zone=$null;started=$null},
   @{id='20261001T102030.1Z-1234ab06';name='20261001T102030.1Z-1234ab06';precision='fractional-second';zone='UTC';started='2026-10-01T10:20:30.1Z'},

@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {gunzipSync} from 'node:zlib';
-import {saveMeasurements,compactResults} from '../scripts/test-evidence.mjs';
+import {saveMeasurements,compactResults,criticalMeasurements} from '../scripts/test-evidence.mjs';
 
 test('[test-system] archive contains measurements but excludes source, profiles and simulated archives',async()=>{
   await fs.mkdir('test-work',{recursive:true});
@@ -14,6 +14,7 @@ test('[test-system] archive contains measurements but excludes source, profiles 
   const inputs={
     'metrics-equivalence-Ab1234/measured-equivalence.json':{baseline:1.25,combined:1.25},
     'siti-parallel-Ab1234/serial.json':{si:[1,2],ti:[0,3]},
+    'bitrate-equivalence-Ab1234/measured-equivalence.json':{outcome:'passed',tracks:[{exactEqual:true}]},
     'psnr.log':'n:1 mse_avg:0 psnr_avg:inf',
     'archive-layout-Ab1234/records/result.json':{protocol:'simulated'},
     'local-import-Ab1234/receipt.json':{protocol:'simulated'},
@@ -27,19 +28,31 @@ test('[test-system] archive contains measurements but excludes source, profiles 
     const file=path.join(generated,name);await fs.mkdir(path.dirname(file),{recursive:true});
     await fs.writeFile(file,typeof data==='string'?data:JSON.stringify(data));
   }
-  assert.deepEqual(await saveMeasurements(generated,evidence),{measurements:3,diagnostics:0});
+  assert.deepEqual(await saveMeasurements(generated,evidence),{measurements:4,diagnostics:0});
   const saved=JSON.parse(gunzipSync(await fs.readFile(path.join(evidence,'measurements.json.gz'))).toString());
-  assert.equal(saved.entries.find(x=>x.path.includes('measured-equivalence')).data.combined,1.25);
+  assert.equal(saved.entries.find(x=>x.path.startsWith('metrics-equivalence-')).data.combined,1.25);
+  assert.equal(saved.entries.find(x=>x.path.startsWith('bitrate-equivalence-')).data.tracks[0].exactEqual,true);
   assert.deepEqual(await fs.readdir(evidence),['measurements.json.gz']);
-  assert.deepEqual(await saveMeasurements(generated,evidence,{failed:true}),{measurements:3,diagnostics:2});
+  assert.deepEqual(await saveMeasurements(generated,evidence,{failed:true}),{measurements:4,diagnostics:2});
   assert.ok((await fs.stat(path.join(evidence,'diagnostics/browser/01/browser-errors.json.gz'))).size>0);
   assert.equal(JSON.parse(gunzipSync(await fs.readFile(path.join(evidence,'diagnostics/startup-desktop/owned-case/job/failure.json.gz'))).toString()).message,'real task failure diagnostic');
+  assert.ok(work.startsWith(path.resolve('test-work')+path.sep));
+  await fs.rm(work,{recursive:true,force:true});
 });
 
 test('[test-system] compact results distinguish skipped, TODO and cancelled cases from passes',()=>{
   const item={name:'protocol-only',file:'test/example.test.mjs',event:'test:pass'};
   const result=compactResults({},[item,{...item,skip:'unavailable'},{...item,todo:true},{...item,event:'test:fail',details:{error:{failureType:'cancelledByParent'}}}]);
   assert.deepEqual(result.cases.map(x=>x.status),['passed','skipped','todo','cancelled']);
+});
+test('[test-system] successful critical checks require retained measurement data',async()=>{
+ const work=await fs.mkdtemp(path.resolve('test-work/independent-evidence-'));
+ try {
+  await assert.rejects(saveMeasurements(work,work,{requiredMeasurements:criticalMeasurements}),/Missing critical measurement evidence/);
+  const data=path.join(work,'bitrate-equivalence-Ab1234');await fs.mkdir(data);
+  await fs.writeFile(path.join(data,'measured-equivalence.json'),JSON.stringify({outcome:'passed'}));
+  assert.equal((await saveMeasurements(work,work,{requiredMeasurements:criticalMeasurements})).measurements,1);
+ } finally {assert.ok(work.startsWith(path.resolve('test-work')+path.sep));await fs.rm(work,{recursive:true,force:true})}
 });
 
 test('[test-system] compacted history preserves original claims and rejects missing data, changed counts and fabricated precision',async()=>{
