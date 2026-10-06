@@ -473,6 +473,7 @@ button:disabled {
 }
 
 .bottom-panels .panel {
+  min-width: 0;
   margin-bottom: 0;
   height: 100%;
 }
@@ -1206,6 +1207,60 @@ canvas.frames-canvas {
 
 .queue-item button {
   flex-shrink: 0;
+}
+
+.queue-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 0 0 auto;
+  max-width: 45%;
+}
+
+.queue-actions button {
+  padding: 8px 12px;
+}
+
+@media (max-width: 760px) {
+  .queue-item {
+    flex-wrap: wrap;
+  }
+
+  .queue-actions {
+    flex-basis: 100%;
+    max-width: none;
+    justify-content: flex-start;
+  }
+}
+
+.list-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.list-toolbar h3 {
+  margin: 0;
+}
+
+.bitrate-display-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.bitrate-display-control label {
+  margin: 0;
+}
+
+.bitrate-display-control select {
+  width: 110px;
+  padding: 8px 10px;
 }
 
 #queue-list {

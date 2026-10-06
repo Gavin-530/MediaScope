@@ -103,7 +103,8 @@
             完整分析加入队列
           </button>
         </div>
-        <div class="row siti-options">
+        <div class="row"><label>码率计算窗口<select id="bitrate-window"><option value="100">100 ms</option><option value="1000">1 秒</option></select></label></div>
+          <div class="row siti-options">
           <label class="complexity-option"
             ><input id="complexity" type="checkbox" /> 同时测量 SI/TI
             内容复杂度</label
@@ -434,15 +435,17 @@
           <span id="queue-count"></span>
         </div>
         <p class="hint">
-          每个文件任务只显示一项，内部阶段显示在运行进度中。暂停会让当前任务完成后停下；取消当前任务后可以重新排队，从头运行。运行或暂停时都可继续添加任务。
+          每个文件任务只显示一项，内部阶段显示在运行进度中。暂停会让当前任务完成后停下；取消的任务直接移除。清空待运行任务不会中断当前任务。运行或暂停时都可继续添加任务。
         </p>
         <div class="row">
           <button id="queue-start">开始 / 继续队列</button
           ><button id="queue-pause" class="secondary">暂停后续任务</button>
+          <button id="queue-clear" class="secondary" disabled>清空待运行</button>
         </div>
         <div id="queue-list"></div>
         <details id="queue-history">
           <summary id="queue-history-count">已结束任务</summary>
+          <div class="list-toolbar"><button id="queue-history-clear" class="secondary" disabled>清空已结束</button></div>
           <div id="queue-history-list"></div>
         </details>
       </section>
@@ -468,7 +471,7 @@
             <option value="selected">仅勾选计划</option></select
           ><button id="export-portable" class="secondary">导出 JSON</button>
         </div>
-        <h3>已完成结果</h3>
+        <div class="list-toolbar"><h3>已完成结果</h3><button id="result-clear" class="secondary" disabled>清空结果</button></div>
         <div id="result-list"></div>
         </section>
       </div>

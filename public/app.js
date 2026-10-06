@@ -1,3 +1,4 @@
+import {bitrateView} from "./bitrate-model.js";
 import { parsePortable, makePortable, maxPortableBytes, utcFilename } from "./portable.js";
 import { plot, gopOverview } from "./charts.js";
 import { basicInfoHTML, initBasicInfo } from "./basic-info.js";
@@ -13,6 +14,7 @@ import {
 } from "./trial-model.js";
 const modes = ["inspect", "compare", "trial"],
   reports = {},
+  reportOwners = {},
   viewCharts = { inspect: [], compare: [], trial: [] };
 let activeMode = "inspect",
   renderingMode = null,
@@ -201,6 +203,7 @@ let submitting = false,
   latestJobs = [],
   importSequence = 0;
 let importedResults = [],
+  removedReportIds = new Set(),
   selectedResults = new Set(),
   selectedPlans = new Set(),
   downloadNames = new Map();
@@ -241,11 +244,11 @@ function queueRow(j, position) {
     secondary = j.candidate ? " → " + fileName(j.candidate) : "";
   const pathText =
     (j.file || j.reference || "") + (j.candidate ? " → " + j.candidate : "");
-  const action = ["done", "error", "cancelled"].includes(j.status) ? "retry" : "cancel";
-  const label = { retry: "重新排队", cancel: "取消" }[action];
+  const action = ["done", "error"].includes(j.status) ? "retry" : j.status === "queued" ? "remove" : "cancel";
+  const label = { retry: "重新排队", cancel: "取消", remove: "移除" }[action];
   const stage =
     j.status === "running" ? j.progress?.stage || j.message : j.message;
-  return `<div class="queue-item">${j.status === "queued" ? `<input class="portable-check" type="checkbox" data-plan-select="${j.id}" aria-label="选择任务计划 ${esc(primary)}" ${selectedPlans.has(j.id) ? "checked" : ""}>` : ""}<div class="queue-item-main"><strong>${position ? position + ". " : ""}${esc(primary + secondary)}</strong><span class="queue-state">${esc(names[j.type])} · ${states[j.status]}</span><p class="queue-path" title="${esc(pathText)}">${esc(pathText)}</p><p class="queue-description">${esc(j.description || "")}${stage ? " · " + esc(stage) : ""}</p></div><button class="secondary" data-job="${j.id}" data-action="${j.status === 'done' ? 'report' : action}">${j.status === 'done' ? '查看报告' : label}</button>${j.status === 'done' ? `<button class="secondary" style="margin-left: 8px;" data-job="${j.id}" data-action="retry">重新排队</button>` : ''}</div>`;
+  return `<div class="queue-item">${j.status === "queued" ? `<input class="portable-check" type="checkbox" data-plan-select="${j.id}" aria-label="选择任务计划 ${esc(primary)}" ${selectedPlans.has(j.id) ? "checked" : ""}>` : ""}<div class="queue-item-main"><strong>${position ? position + ". " : ""}${esc(primary + secondary)}</strong><span class="queue-state">${esc(names[j.type])} · ${states[j.status]}</span><p class="queue-path" title="${esc(pathText)}">${esc(pathText)}</p><p class="queue-description">${esc(j.description || "")}${stage ? " · " + esc(stage) : ""}</p></div><div class="queue-actions"><button class="secondary" data-job="${j.id}" data-action="${j.status === 'done' ? 'report' : action}">${j.status === 'done' ? '查看报告' : label}</button>${j.status === 'done' ? `<button class="secondary" data-job="${j.id}" data-action="retry">重新排队</button>` : ''}${["done", "error"].includes(j.status) ? `<button class="secondary" data-job="${j.id}" data-action="remove">移除</button>` : ''}</div></div>`;
 }
 function resultItems() {
   return [
@@ -258,8 +261,23 @@ function resultItems() {
 function renderResultList() {
   const items = resultItems(),
     available = new Set(items.map((x) => x.id));
+  let viewRemoved = false;
+  for (const mode of modes) {
+    if (reportOwners[mode] && removedReportIds.has(reportOwners[mode])) {
+      viewCharts[mode].forEach(chart => chart.dispose?.());
+      viewCharts[mode] = [];
+      delete reports[mode];
+      delete reportOwners[mode];
+      $("#" + mode + "-details").textContent = "";
+      $("#" + mode + "-summary").textContent = "";
+      viewRemoved = true;
+    }
+  }
+  removedReportIds.clear();
+  if (viewRemoved) switchMode(activeMode);
   for (const id of selectedResults)
     if (!available.has(id)) selectedResults.delete(id);
+  $("#result-clear").disabled = !items.length;
   const signature = JSON.stringify(items.map((x) => [x.id, x.job?.status]));
   if (signature === resultView) return;
   resultView = signature;
@@ -278,7 +296,7 @@ function renderResultList() {
             "未指定文件",
           other = r?.candidate?.file || j?.candidate;
         const label = fileName(file) + (other ? " → " + fileName(other) : "");
-        return `<div class="queue-item"><input class="portable-check" type="checkbox" data-result-select="${esc(x.id)}" aria-label="选择结果 ${esc(label)}" ${selectedResults.has(x.id) ? "checked" : ""}><div class="queue-item-main"><strong>${esc(label)}</strong><span class="queue-state">${esc(type)} · ${r ? "已导入" : "已完成"}</span><p class="queue-path">${esc(file)}${other ? " → " + esc(other) : ""}</p></div><button class="secondary" data-result-open="${esc(x.id)}">查看报告</button></div>`;
+        return `<div class="queue-item"><input class="portable-check" type="checkbox" data-result-select="${esc(x.id)}" aria-label="选择结果 ${esc(label)}" ${selectedResults.has(x.id) ? "checked" : ""}><div class="queue-item-main"><strong>${esc(label)}</strong><span class="queue-state">${esc(type)} · ${r ? "已导入" : "已完成"}</span><p class="queue-path">${esc(file)}${other ? " → " + esc(other) : ""}</p></div><div class="queue-actions"><button class="secondary" data-result-open="${esc(x.id)}">查看报告</button><button class="secondary" data-result-remove="${esc(x.id)}">移除</button></div></div>`;
       })
       .join("") || '<p class="hint">暂无已完成结果。</p>';
 }
@@ -297,12 +315,25 @@ $("#result-list").onchange = (e) => {
   }
 };
 $("#result-list").onclick = async (e) => {
+  const remove = e.target.closest?.("[data-result-remove]");
+  if (remove) {
+    remove.disabled = true;
+    try {
+      const id = remove.dataset.resultRemove;
+      if (importedResults.some(x => x.id === id)) importedResults = importedResults.filter(x => x.id !== id);
+      else await api("jobs/" + id, { method: "DELETE" });
+      removedReportIds.add(id);
+      renderResultList();
+      await poll();
+    } catch (err) { message(err.message, true); remove.disabled = false; }
+    return;
+  }
   const id = e.target.closest?.("[data-result-open]")?.dataset.resultOpen;
   if (!id) return;
   try {
     const item = resultItems().find((x) => x.id === id);
     if (!item) throw Error("结果已不可用");
-    render(item.report || (await api("jobs/" + id + "/report")));
+    render(item.report || (await api("jobs/" + id + "/report")), true, id);
   } catch (err) {
     message(err.message, true);
   }
@@ -313,7 +344,7 @@ async function queueAction(event) {
   button.disabled = true;
   try {
     if (button.dataset.action === "report")
-      render(await api("jobs/" + button.dataset.job + "/report"));
+      render(await api("jobs/" + button.dataset.job + "/report"), true, button.dataset.job);
     else if (button.dataset.action === "retry")
       await api("jobs/" + button.dataset.job + "/retry", {
         method: "POST",
@@ -321,7 +352,7 @@ async function queueAction(event) {
       });
     else {
       await api("jobs/" + button.dataset.job, { method: "DELETE" });
-      $("#queue-history").open = true;
+      removedReportIds.add(button.dataset.job);
     }
     await poll();
   } catch (e) {
@@ -331,6 +362,21 @@ async function queueAction(event) {
 }
 $("#queue-list").onclick = queueAction;
 $("#queue-history-list").onclick = queueAction;
+for (const [id, scope] of [["queue-clear", "queued"], ["queue-history-clear", "history"], ["result-clear", "results"]]) {
+  $("#" + id).onclick = async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+      const removedIds = latestJobs.filter(j => scope === "queued" ? j.status === "queued" : scope === "results" ? j.status === "done" : ["done", "error"].includes(j.status)).map(j => j.id);
+      if (scope === "results") removedIds.push(...importedResults.map(x => x.id));
+      await api("jobs/clear", { method: "POST", body: JSON.stringify({ scope }) });
+      removedIds.forEach(id => removedReportIds.add(id));
+      if (scope === "results") importedResults = [];
+      renderResultList();
+      await poll();
+    } catch (e) { message(e.message, true); button.disabled = false; }
+  };
+}
 async function poll() {
   if (refreshing) return;
   refreshing = true;
@@ -344,7 +390,7 @@ async function poll() {
     const pending = s.jobs.filter((j) =>
         ["queued", "running"].includes(j.status),
       ),
-      history = s.jobs.filter((j) => !["queued", "running"].includes(j.status));
+      history = s.jobs.filter((j) => ["done", "error"].includes(j.status));
     const waitingIds = new Set(
       pending.filter((j) => j.status === "queued").map((j) => j.id),
     );
@@ -357,6 +403,8 @@ async function poll() {
       " 项等待";
     $("#queue-start").disabled = !environmentReady || !s.jobs.some((j) => j.status === "queued");
     $("#queue-pause").disabled = !s.queueRunning;
+    $("#queue-clear").disabled = !waitingIds.size;
+    $("#queue-history-clear").disabled = !history.length;
     $("#queue-history-count").textContent = `已结束任务（${history.length}）`;
     const nextQueue = JSON.stringify(
       pending.map((j) => [j.id, j.status, j.progress?.stage]),
@@ -381,7 +429,7 @@ async function poll() {
     if (completed) {
       autoOpen = null;
       if (completed.status === "done")
-        render(await api("jobs/" + completed.id + "/report"), false);
+        render(await api("jobs/" + completed.id + "/report"), false, completed.id);
       if (!running)
         message(
           completed.retentionMessage || completed.message,
@@ -394,7 +442,9 @@ async function poll() {
     const ended = s.jobs.find(
       (j) => j.id === previous && !["queued", "running"].includes(j.status),
     );
-    if (ended && ["error", "cancelled"].includes(ended.status))
+    if (autoOpen && !s.jobs.some(j => j.id === autoOpen)) autoOpen = null;
+    if (previous && !running && !s.jobs.some(j => j.id === previous)) message("任务已取消并移除", false, null, null, "cancelled");
+    if (ended && ended.status === "error")
       $("#queue-history").open = true;
     if (!running && ended)
       message(
@@ -516,6 +566,7 @@ $("#analyze").onclick = () =>
     file: infoPath,
     stream: Number($("#stream").value),
     complexity: $("#complexity").checked,
+    bitrateWindowMs: Number($("#bitrate-window").value),
     sitiWorkers: $("#siti-workers").value,
   });
 $("#compare").onclick = (event) => {
@@ -576,6 +627,7 @@ $("#enqueue-analyze").onclick = () =>
     stream:
       infoPath === clean($("#file").value) ? Number($("#stream").value) : null,
     complexity: $("#complexity").checked,
+    bitrateWindowMs: Number($("#bitrate-window").value),
     sitiWorkers: $("#siti-workers").value,
   });
 $("#enqueue-trial").onclick = () => {
@@ -815,6 +867,7 @@ $("#import-report").onchange = async (e) => {
         importedResults = [];
       }
       importedResults.push(...incoming);
+      if (results.length === 1 && !plans.length) reportOwners[modeOf(results[0].report)] = incoming[0].id;
       resultView = "";
       renderResultList();
     }
@@ -880,7 +933,7 @@ function draw(id, data, options) {
     return p;
   }
 }
-function render(r, activate = true) {
+function render(r, activate = true, owner = null) {
   const mode = modeOf(r);
   renderingMode = mode;
   charts = viewCharts[mode];
@@ -897,6 +950,7 @@ function render(r, activate = true) {
     else if (r.type === "trial") renderTrial(r);
     else renderMedia(r);
     reports[mode] = r;
+    reportOwners[mode] = owner;
   } finally {
     viewCharts[mode] = charts;
     renderingMode = null;
@@ -905,6 +959,7 @@ function render(r, activate = true) {
   }
 }
 function renderMedia(r) {
+  const displayControl = (curve, id) => curve ? `<div class="bitrate-display-control"><label for="${id}">显示窗口</label><select id="${id}">${curve.windowMs === 100 ? '<option value="100">100 ms</option>' : ''}<option value="1000">1 秒</option></select></div>` : '';
   const streams = r.raw.streams,
     videos = streams.filter((s) => s.codec_type === "video");
   if (!clean($("#file").value) || clean($("#file").value) === r.file) {
@@ -944,17 +999,17 @@ function renderMedia(r) {
         `<p>新编码帧 ${r.coding.counts.encoded} · 隐藏帧 ${r.coding.counts.hidden} · SHOW_EXISTING ${r.coding.counts.showExisting} · 显示事件 ${r.coding.counts.shown}</p><p class="hint">按码流编码顺序列出所有帧头事件，包含 KEY / INTER / INTRA_ONLY / SWITCH、隐藏帧和 SHOW_EXISTING。H=隐藏、S=显示已有帧、V=新帧直接显示。点击色带查看结构字段、刷新掩码与参考槽。OBU 负载字节不一定等于完整图像大小。</p><div id="av1-plot"></div><label>编码事件 #<input id="av1-index" type="number" min="0" max="${r.coding.events.length - 1}" value="0"></label><div id="av1-detail"></div>${raw(r.coding.sequences, "AV1 序列头（去重）")}`,
       );
     html += section(
-      "视频码率 · 1 秒窗口",
-      `<div id="bitrate"></div><p class="hint">平均 ${fmt(r.packets.averageMbps)} Mbps · 缺少时间戳 ${r.packets.missing} 包。放大显示不会将 1 秒窗口改成更细的测量。</p>`,
+      r.packets.bitrateCurve ? "视频区间平均码率" : "视频码率 · 1 秒窗口（旧报告）",
+      `${displayControl(r.packets.bitrateCurve, "bitrate-display")}${r.packets.bitrateCurve ? `<p class="hint">计算窗口 ${r.packets.bitrateCurve.windowMs} ms；按 PTS 归属包负载，首尾使用实际时长。${r.packets.bitrateCurve.status === "ok" ? "" : esc(r.packets.bitrateCurve.reasons.join("；"))}</p>` : ""}<div id="bitrate"></div><p class="hint">全程平均（独立口径） ${fmt(r.packets.averageMbps)} Mbps · 缺少时间戳 ${r.packets.missing} 包。放大不改变统计窗口。</p>`,
     );
     const audio = (r.tracks || []).filter((t) => t.type === "audio");
     if (audio.length)
       html += section(
-        "音轨码率 · 1 秒窗口",
+        r.packets.bitrateCurve ? "音轨区间平均码率" : "音轨码率 · 1 秒窗口（旧报告）",
         audio
           .map(
             (t) =>
-              `<h4>音轨 #${t.index} · ${esc(t.codec)} · 平均 ${fmt((t.averageMbps ?? 0) * 1000)} kbps</h4><div id="audio-${t.index}"></div>`,
+              `<h4>音轨 #${t.index} · ${esc(t.codec)} · 全程平均（独立口径） ${t.averageMbps == null ? "不可计算" : fmt(t.averageMbps * 1000) + " kbit/s"}</h4>${displayControl(t.bitrateCurve, `audio-${t.index}-display`)}<div id="audio-${t.index}"></div>${t.bitrateCurve?.status === "unavailable" ? `<p class="hint">不可计算：${esc(t.bitrateCurve.reasons.join("；"))}</p>` : ""}`,
           )
           .join(""),
       );
@@ -1010,17 +1065,21 @@ function renderMedia(r) {
   if (r.frames) {
     if (r.frames.length) initFrames(r);
     else $("#gop-overview").textContent = "报告中没有显示帧";
-    draw(
-      "bitrate",
-      r.packets.bins.map((p) => [p.second, p.mbps]),
-      { unit: "Mbps" },
-    );
-    for (const t of (r.tracks || []).filter((t) => t.type === "audio"))
-      draw(
-        "audio-" + t.index,
-        t.bins.map((p) => [p.second, p.mbps * 1000]),
-        { unit: "kbps" },
-      );
+    const bitratePlots = new Map();
+    for (const [id, t, factor, unit] of [["bitrate", r.packets, 1, "Mbit/s"], ...(r.tracks || []).filter(t => t.type === "audio").map(t => ["audio-" + t.index, t, 1000, "kbit/s"])]) {
+      const control = $("#" + (id === "bitrate" ? "bitrate-display" : id + "-display"));
+      const drawBitrate = () => {
+        const windowMs = Number(control?.value ?? 1000);
+        const data = t.bitrateCurve ? bitrateView(t.bitrateCurve, windowMs).map(b => [b.start, b.mbps * factor]) : t.bins.map(b => [b.second, b.mbps * factor]);
+        const previous = bitratePlots.get(id);
+        previous?.dispose?.();
+        if (previous) { const i = charts.indexOf(previous); if (i >= 0) charts.splice(i, 1); }
+        bitratePlots.set(id, draw(id, data, {unit}));
+        if (t.bitrateCurve?.status === "unavailable") $("#" + id).textContent = "不可计算";
+      };
+      drawBitrate();
+      if (control) control.onchange = drawBitrate;
+    }
     if (r.content?.available) {
       draw(
         "si",

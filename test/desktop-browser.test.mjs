@@ -94,8 +94,7 @@ test('[desktop-startup] owned browser opens automatically, refresh keeps the ser
     // Shutdown can spend 3 + 10 + 10 + 10 + 3 seconds in its bounded stages.
     await deadline(async()=>child.exitCode!==null,40000);assert.equal(child.exitCode,0,output);
     await assert.rejects(fetch(base));
-    const failure=JSON.parse(await readFile(path.join(dir,activeJob.id,'failure.json'),'utf8'));
-    assert.equal(failure.status,'cancelled','Closing the window must cancel and record its real encoding task');
+    await assert.rejects(readFile(path.join(dir,activeJob.id,'job-input.json')),e=>e.code==='ENOENT','Closing the window must cancel and remove its encoding task');
     await assert.rejects(readFile(path.join(dir,'desktop-profile','Local State')),e=>e.code==='ENOENT');
     assert.notEqual(JSON.parse(await readFile(path.join(dir,'settings.json'),'utf8')).theme,'system');
     await writeFile(path.join(dir,'launcher.log'),output);

@@ -107,6 +107,7 @@ export class RuntimeData {
             this.warnings.push('旧版保留的实验视频已移至：'+path.join(destination,entry.name));
           }
         }
+        if(job.status==='cancelled'){await removeOwned(this.root,entry.name);continue}
         if(!report)await json(path.join(folder,'failure.json'),failure);
         await this.trimWork(entry.name);
         if(report)job.reportPath=path.join(folder,'report.json');
@@ -140,14 +141,21 @@ export class RuntimeData {
   }
   pinned(id){for(const [key,hold]of this.holds){if(hold.expires<Date.now())this.holds.delete(key);else if(hold.ids.includes(id))return true}return false}
   hold(ids,jobs){if(!Array.isArray(ids)||ids.length>10000||ids.some(id=>!jobs.get(id)?.reportPath))throw Error('导出结果已变化，请重新选择');const key=randomUUID();this.holds.set(key,{ids,expires:Date.now()+10*60*1000});return key}
+  async remove(job,jobs,inputs){
+    if(this.pinned(job.id)){job.removed=true;this.clearAfterExport.add(job.id);return}
+    if(job.sessionOnly){const target=path.join(this.root,'.session',job.id);await safeTree(target);await rm(target,{recursive:true,force:true})}
+    else await removeOwned(this.root,job.id);
+    jobs.delete(job.id);inputs.delete(job.id);this.clearAfterExport.delete(job.id);
+  }
   async prune(jobs,inputs,{clear=false}={}){
     for(const [key,hold]of this.holds)if(hold.expires<Date.now())this.holds.delete(key);
     const recent=[...jobs.values()].filter(j=>ended(j)).sort((a,b)=>(b.finishedAt||'').localeCompare(a.finishedAt||''));
     let count=0,bytes=0,exhausted=false;
     for(const job of recent){
       const size=job.sessionOnly?0:await safeTree(path.join(this.root,job.id));
-      if(!clear&&!this.clearAfterExport.has(job.id)&&(count>=recentLimit||bytes+size>recentBytes))exhausted=true;
-      if(!clear&&!this.clearAfterExport.has(job.id)&&!exhausted){count++;bytes+=size;continue}
+      const discard=clear||job.status==='cancelled'||this.clearAfterExport.has(job.id);
+      if(!discard&&(count>=recentLimit||bytes+size>recentBytes))exhausted=true;
+      if(!discard&&!exhausted){count++;bytes+=size;continue}
       if(this.pinned(job.id)){if(clear)this.clearAfterExport.add(job.id);continue}
       if(job.sessionOnly){const target=path.join(this.root,'.session',job.id);await safeTree(target);await rm(target,{recursive:true,force:true})}
       else await removeOwned(this.root,job.id);

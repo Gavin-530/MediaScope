@@ -2,7 +2,7 @@ import {parseReport} from '../public/report.js';
 import {test,before,beforeEach,afterEach} from 'node:test';
 import assert from 'node:assert/strict';
 import {startServer} from './helpers/server.mjs';
-import {mkdir,readdir} from 'node:fs/promises';
+import {mkdir,lstat} from 'node:fs/promises';
 import path from 'node:path';
 import {FF,run} from '../engine.mjs';
 const source=path.resolve('test-work/http-fixture.mp4');let reportRoot,caseNumber=0;
@@ -16,6 +16,7 @@ beforeEach(async()=>{reportRoot=path.resolve('test-work/server-reports',String(+
 afterEach(async()=>{await app?.stop()});
 const request=(url,method='GET',data)=>fetch(base+'/api/'+url,{method,headers:{'x-mediascope-token':token,'content-type':'application/json'},body:data?JSON.stringify(data):undefined});
 async function finished(id){for(let i=0;i<200;i++){const j=await(await request('jobs/'+id)).json();if(!['running','queued'].includes(j.status))return j;await delay(100)}throw Error('Timed out')}
+async function removed(id){for(let i=0;i<200;i++){if((await request('jobs/'+id)).status===404)return;await delay(100)}throw Error('Cancellation did not remove the job')}
 test('API protects local data and streams a reproducible completed report',async()=>{
  assert.equal((await fetch(base+'/api/status')).status,403);
  assert.equal((await fetch(base+'/api/status',{headers:{'x-mediascope-token':token,origin:'https://external.invalid'}})).status,403);
@@ -32,7 +33,7 @@ test('SI/TI worker setting validates input and records requested versus actual w
  const html=await(await fetch(base)).text();assert.match(html,/id="siti-workers"/);assert.match(html,/value="8">8 路/);
 });
 test('API cancellation ends the job and does not leave experiment video files',async()=>{
- const job=await(await request('jobs','POST',{type:'trial',file:source,stream:0,start:0,duration:1,encoder:'libx265',crfs:[20,32],metrics:['psnr']})).json();await request('jobs/'+job.id,'DELETE');const result=await finished(job.id);assert.equal(result.status,'cancelled');const files=await readdir(path.join(reportRoot,job.id));assert.ok(!files.some(f=>f.endsWith('.mkv')));assert.ok(files.includes('job-input.json'));
+ const job=await(await request('jobs','POST',{type:'trial',file:source,stream:0,start:0,duration:1,encoder:'libx265',crfs:[20,32],metrics:['psnr']})).json();await request('jobs/'+job.id,'DELETE');await removed(job.id);await assert.rejects(lstat(path.join(reportRoot,job.id)),e=>e.code==='ENOENT');assert.ok(!(await(await request('status')).json()).jobs.some(j=>j.id===job.id));
 });
 
 test('API requires cross-depth opt-in and exports normalization evidence',async()=>{
@@ -73,8 +74,9 @@ test('mixed queue waits for start, preserves all reports and continues after fai
  await delay(150);let state=await(await request('status')).json();assert.equal(state.queueRunning,false);assert.ok(ids.every(id=>state.jobs.find(j=>j.id===id).status==='queued'));
  await request('jobs/'+ids[3],'DELETE');
  await request('queue','POST',{action:'start'});
- const results=[];for(const id of ids)results.push(await finished(id));
- assert.deepEqual(results.map(j=>j.status),['done','done','done','cancelled','error','done','done'],JSON.stringify(results.map(j=>j.message)));
+ await removed(ids[3]);
+ const results=[];for(const id of ids.filter(id=>id!==ids[3]))results.push(await finished(id));
+ assert.deepEqual(results.map(j=>j.status),['done','done','done','error','done','done'],JSON.stringify(results.map(j=>j.message)));
  const executed=results.filter(j=>j.startedAt);for(let i=1;i<executed.length;i++)assert.ok(executed[i].startedAt>=executed[i-1].finishedAt);
  for(const id of [ids[0],ids[1],ids[2],ids[6]])assert.equal((await request('jobs/'+id+'/report')).status,200);
 });
@@ -83,24 +85,53 @@ test('pausing holds waiting jobs while cancellation releases the running slot',a
  const first=await(await request('jobs','POST',{type:'trial',file:source,stream:0,start:0,duration:1,encoder:'libx265',crfs:[20,32],metrics:['psnr'],enqueue:true})).json();
  const second=await(await request('jobs','POST',{type:'inspect',file:source,enqueue:true})).json();
  await request('queue','POST',{action:'start'});await request('queue','POST',{action:'pause'});
- await request('jobs/'+first.id,'DELETE');assert.equal((await finished(first.id)).status,'cancelled');
+ await request('jobs/'+first.id,'DELETE');await removed(first.id);
  assert.equal((await(await request('jobs/'+second.id)).json()).status,'queued');
  await request('queue','POST',{action:'start'});assert.equal((await finished(second.id)).status,'done');
 });
+test('queue removal and scoped clearing preserve active work and protect reports already exporting',async()=>{
+ const completed=await(await request('jobs','POST',{type:'inspect',file:source})).json();assert.equal((await finished(completed.id)).status,'done');
+ const {key}=await(await request('local-data/export-hold','POST',{ids:[completed.id]})).json();
+ await request('jobs/'+completed.id,'DELETE');
+ assert.ok(!(await(await request('status')).json()).jobs.some(j=>j.id===completed.id));
+ assert.equal((await request('jobs/'+completed.id+'/report')).status,200);
+ await request('local-data/export-release','POST',{key});await removed(completed.id);
+ await assert.rejects(lstat(path.join(reportRoot,completed.id)),e=>e.code==='ENOENT');
+ const batch=await(await request('plans/import','POST',{mode:'append',start:false,plans:Array.from({length:128},(_,i)=>({entryId:'removal-'+i,input:{type:'inspect',file:source}}))})).json();
+ await request('queue','POST',{action:'start'});
+ await request('jobs/clear','POST',{scope:'queued'});
+ assert.deepEqual((await(await request('status')).json()).jobs.map(j=>j.id),[batch.ids[0]],'clearing must retire all waiting jobs before filesystem work can release the running slot');
+ await finished(batch.ids[0]);await request('jobs/'+batch.ids[0],'DELETE');await removed(batch.ids[0]);
+ const active=await(await request('jobs','POST',{type:'trial',file:source,stream:0,start:0,duration:1,encoder:'libx265',presets:['slow'],crfs:[18,22,26,30],metrics:['psnr']})).json();
+ const waiting=await(await request('jobs','POST',{type:'inspect',file:source,enqueue:true})).json();
+ await request('jobs/clear','POST',{scope:'queued'});
+ assert.equal((await request('jobs/'+waiting.id)).status,404);
+ assert.equal((await(await request('jobs/'+active.id)).json()).status,'running');
+ await request('jobs/'+active.id,'DELETE');await removed(active.id);
+ const done=await(await request('jobs','POST',{type:'inspect',file:source})).json();await finished(done.id);
+ const failed=await(await request('jobs','POST',{type:'inspect',file:path.resolve('test-work/missing-remove.mp4')})).json();await finished(failed.id);
+ await request('jobs/clear','POST',{scope:'results'});await removed(done.id);
+ assert.equal((await(await request('jobs/'+failed.id)).json()).status,'error');
+ await request('jobs/clear','POST',{scope:'history'});await removed(failed.id);
+ await app.stop();app=await startServer(reportRoot);base=app.base;token=app.token;
+ assert.deepEqual((await(await request('status')).json()).jobs,[]);
+});
+
 test('read-only file preview does not enter the queue',async()=>{
  const before=(await(await request('status')).json()).jobs.length;
  const response=await request('probe','POST',{file:source});assert.equal(response.status,200);
  const report=await response.json();assert.equal(report.type,'inspect');assert.equal(report.file,source);assert.equal(report.raw.streams[0].codec_type,'video');assert.ok(report.commands.length>=1);assert.deepEqual(parseReport(JSON.stringify(report)),report);
  assert.equal((await(await request('status')).json()).jobs.length,before);
 });
-test('cancelled and failed tasks can be requeued while paused and resume with later tasks',async()=>{
+test('cancelled tasks disappear while failed tasks can be requeued and resume with later tasks',async()=>{
  await request('queue','POST',{action:'pause'});
  const cancelled=await(await request('jobs','POST',{type:'inspect',file:source,enqueue:true})).json();
  await request('jobs/'+cancelled.id,'DELETE');
  const invalid=await(await request('jobs','POST',{type:'inspect',file:path.resolve('test-work/not-here.mp4'),enqueue:true})).json();
  await request('queue','POST',{action:'start'});assert.equal((await finished(invalid.id)).status,'error');
  await request('queue','POST',{action:'pause'});
- const first=await(await request('jobs/'+cancelled.id+'/retry','POST',{})).json();
+ assert.equal((await request('jobs/'+cancelled.id+'/retry','POST',{})).status,404);
+ const first=await(await request('jobs','POST',{type:'inspect',file:source,enqueue:true})).json();
  const second=await(await request('jobs/'+invalid.id+'/retry','POST',{})).json();
  const later=await(await request('jobs','POST',{type:'inspect',file:source,enqueue:true})).json();
  for(const id of [first.id,second.id,later.id])assert.equal((await(await request('jobs/'+id)).json()).status,'queued');

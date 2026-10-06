@@ -38,8 +38,8 @@ test('[runtime-data] real completed jobs retain the newest ten, restore exact re
     assert.deepEqual((await app.request('status')).jobs.map(j=>j.id),[queued.id]);
     const retry=await app.request('jobs/'+queued.id,'DELETE');assert.equal(retry.ok,true);
     await app.stop();app=await startServer(dir);
-    const restored=await app.request('jobs/'+queued.id);assert.equal(restored.status,'cancelled');
-    const again=await app.request('jobs/'+queued.id+'/retry','POST',{});await app.request('queue','POST',{action:'start'});
+    await assert.rejects(app.request('jobs/'+queued.id),/404/);assert.deepEqual((await app.request('status')).jobs,[]);
+    const again=await app.request('jobs','POST',{type:'inspect',file:source,enqueue:true});await app.request('queue','POST',{action:'start'});
     assert.equal((await waitForJob(app.request,again.id)).status,'done');
   }finally{await app.stop()}
 });
@@ -91,7 +91,7 @@ test('[runtime-data] active ownership and links block cleanup; stale session dat
   await mkdir(path.join(dir,'.session'));await writeFile(path.join(dir,'.session','scratch'),'discard');await new RuntimeData(dir).init();assert.equal(await exists(path.join(dir,'.session')),false);
   const interrupted=randomUUID(),folder=path.join(dir,interrupted);await mkdir(folder);
   await writeFile(path.join(folder,'job-input.json'),JSON.stringify({type:'inspect',file:source}));await writeFile(path.join(folder,'reference.mkv'),'interrupted scratch');
-  const restored=await new RuntimeData(dir).init();assert.equal(restored[0].job.status,'cancelled');assert.equal(await exists(path.join(folder,'reference.mkv')),false);
+  const restored=await new RuntimeData(dir).init();assert.deepEqual(restored,[]);assert.equal(await exists(folder),false);
   const external=await temp();await writeFile(path.join(external,'original'),'keep');
   await symlink(external,path.join(dir,'desktop-profile'),'junction');await assert.rejects(removeOwned(dir,'desktop-profile'),/链接/);
   assert.equal(await readFile(path.join(external,'original'),'utf8'),'keep');await unlink(path.join(dir,'desktop-profile'));

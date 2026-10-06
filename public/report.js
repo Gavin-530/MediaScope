@@ -1,3 +1,4 @@
+import {validateBitrateCurve} from './bitrate-model.js';
 // Validate the saved data without normalizing, rounding or discarding evidence.
 export function parseReport(text) {
   let r;
@@ -107,12 +108,14 @@ export function validateReport(r) {
       objects(r.frames, "frames");
       obj(r.packets, "packets");
       objects(r.packets.bins, "packets.bins");
+      if (r.packets.bitrateCurve) validateBitrateCurve(r.packets.bitrateCurve);
       obj(r.summary, "summary");
       if (r.tracks) {
         objects(r.tracks, "tracks");
         r.tracks.forEach((x) => {
           index(x.index, "tracks.index");
           objects(x.bins, "tracks.bins");
+          if (x.bitrateCurve) validateBitrateCurve(x.bitrateCurve);
         });
       }
       if (r.content?.available) {

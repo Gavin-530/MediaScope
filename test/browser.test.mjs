@@ -67,6 +67,83 @@ async function download(page,button,file){
   await downloaded.saveAs(file);return JSON.parse(await readFile(file,'utf8'));
 }
 async function analyze(page,app){await preview(page);return runTask(page,app,'#analyze')}
+scenario('[bitrate-window] calculation selection and display aggregation survive report import',async({page,app,dir})=>{
+  await preview(page);
+  await page.locator('#bitrate-window').selectOption('100');
+  const {report}=await runTask(page,app,'#analyze');
+  assert.equal(report.packets.bitrateCurve.windowMs,100);
+  assert.equal(report.packets.bitrateCurve.status,'ok');
+  assert.equal(await page.locator('#bitrate-display').inputValue(),'100');
+  assert.equal(await page.locator('[id^="audio-"][id$="-display"]').count(),2);
+  const videoWidth=await page.locator('#bitrate-display').evaluate(el=>el.getBoundingClientRect().width);
+  assert.ok(videoWidth<=120,'short window values use a compact control');
+  const audioCanvas=await page.locator('#audio-1 canvas').elementHandle();
+  await page.locator('#bitrate-display').selectOption('1000');
+  assert.equal(await page.locator('#audio-1-display').inputValue(),'100');
+  assert.equal(await audioCanvas.evaluate(el=>el.isConnected),true,'video selection must not redraw audio');
+  const videoCanvas=await page.locator('#bitrate canvas').elementHandle();
+  await page.locator('#audio-1-display').selectOption('1000');
+  assert.equal(await page.locator('#audio-2-display').inputValue(),'100');
+  assert.equal(await videoCanvas.evaluate(el=>el.isConnected),true,'audio selection must not redraw video');
+  assert.equal(await page.locator('#bitrate .plot-axis-y').textContent(),'纵轴：Mbit/s');
+  await page.locator('#bitrate-display').selectOption('100');
+  const file=path.join(dir,'bitrate.json');await writeFile(file,JSON.stringify(report));
+  await page.locator('#import-report').setInputFiles(file);
+  assert.equal(await page.locator('#bitrate-display').inputValue(),'100');
+  await page.locator('#bitrate-window').selectOption('1000');
+  const next=await runTask(page,app,'#analyze');
+  assert.equal(next.report.packets.bitrateCurve.windowMs,1000);
+  assert.equal(await page.locator('#bitrate-display option').count(),1);
+});
+
+scenario('[queue-removal] GUI removes waiting tasks and completed/imported results and clears each scope',async({page,app,dir})=>{
+  await page.locator('#file').fill(media.source);
+  for(let i=0;i<3;i++){
+    const response=page.waitForResponse(r=>r.url().endsWith('/api/jobs')&&r.request().method()==='POST');
+    await page.locator('#enqueue-analyze').click();await response;
+    await page.waitForFunction(n=>document.querySelectorAll('#queue-list .queue-item').length===n,i+1);
+  }
+  await page.locator('#queue-list [data-action="remove"]').first().click();
+  await page.waitForFunction(()=>document.querySelectorAll('#queue-list .queue-item').length===2);
+  assert.equal((await app.request('plans')).plans.length,2);
+  assert.equal(await page.locator('#queue-history-list .queue-item').count(),0);
+  await page.locator('#queue-clear').click();
+  await page.waitForFunction(()=>document.querySelectorAll('#queue-list .queue-item').length===0);
+  assert.equal((await app.request('status')).jobs.length,0);
+  const active=await app.request('jobs','POST',{type:'trial',file:media.source,stream:0,start:0,duration:1,encoder:'libx265',presets:['slow'],crfs:[18,22,26,30],metrics:['psnr']});
+  await page.locator('#cancel').waitFor({state:'visible'});await page.locator('#cancel').click();
+  await page.waitForFunction(()=>document.querySelector('#task-label').textContent==='任务已取消');
+  assert.ok(!(await app.request('status')).jobs.some(j=>j.id===active.id));
+  assert.equal(await page.locator('#queue-history-list .queue-item').count(),0);
+  const completed=await app.request('jobs','POST',{type:'inspect',file:media.source});await waitForJob(app.request,completed.id);
+  await page.locator(`[data-result-remove="${completed.id}"]`).waitFor();
+  await page.setViewportSize({width:390,height:844});
+  await page.locator('#queue-history').evaluate(el=>el.open=true);
+  for(const selector of ['#queue-panel','#portable-panel',`[data-result-remove="${completed.id}"]`,`[data-job="${completed.id}"][data-action="remove"]`]) {
+    const bounds=await page.locator(selector).boundingBox();assert.ok(bounds.x>=0&&bounds.x+bounds.width<=390,selector+' must fit a narrow viewport');
+  }
+  await page.setViewportSize({width:1440,height:900});
+  await page.locator(`[data-result-remove="${completed.id}"]`).click();
+  await page.waitForFunction(()=>document.querySelectorAll('#result-list .queue-item').length===0);
+  await assert.rejects(app.request('jobs/'+completed.id+'/report'),/404/);
+  const inspected=await preview(page);
+  const file=path.join(dir,'import-removal.json');await writeFile(file,JSON.stringify(inspected));
+  await page.locator('#import-report').setInputFiles(file);
+  await page.locator('#result-list [data-result-remove]').waitFor();await page.locator('#result-list [data-result-remove]').click();
+  assert.equal(await page.locator('#result-list .queue-item').count(),0);
+  assert.equal(await page.locator('#inspect-result').isVisible(),false,'removing the displayed imported result releases its report view');
+  await page.locator('#import-report').setInputFiles(file);
+  const done=await app.request('jobs','POST',{type:'inspect',file:media.source});await waitForJob(app.request,done.id);
+  await page.locator(`[data-result-remove="${done.id}"]`).waitFor();
+  await page.locator('#result-clear').click();
+  await page.waitForFunction(()=>document.querySelectorAll('#result-list .queue-item').length===0);
+  const failed=await app.request('jobs','POST',{type:'inspect',file:path.join(dir,'missing.mp4')});await waitForJob(app.request,failed.id);
+  await page.locator('#queue-history').evaluate(el=>el.open=true);
+  await page.locator(`[data-job="${failed.id}"][data-action="remove"]`).waitFor();
+  await page.locator('#queue-history-clear').click();
+  await page.waitForFunction(()=>document.querySelectorAll('#queue-history-list .queue-item').length===0);
+  assert.deepEqual((await app.request('status')).jobs,[]);
+});
 
 scenario('[startup] actual browser loads the complete app and the API rejects an absent session token',async({page,app})=>{
   assert.equal((await fetch(app.base+'/api/status')).status,403);
@@ -164,7 +241,7 @@ scenario('[analysis] actual multi-audio file, frame scan, GOP, SI/TI and export 
   assert.equal(info.raw.streams.length,3);
   await page.locator('#complexity').check();await page.locator('#siti-workers').selectOption('8');
   const {report}=await runTask(page,app,'#analyze');
-  assert.deepEqual(await page.locator('#inspect-details > .section > h3').allTextContents(),['文件基本信息','帧结构与 GOP','视频码率 · 1 秒窗口','音轨码率 · 1 秒窗口','体积构成','SI/TI 内容复杂度']);
+  assert.deepEqual(await page.locator('#inspect-details > .section > h3').allTextContents(),['文件基本信息','帧结构与 GOP','视频区间平均码率','音轨区间平均码率','体积构成','SI/TI 内容复杂度']);
   assert.equal(await page.locator('#inspect-details > .cards .card').count(),4);
   assert.equal(report.frames.length,12);assert.equal(report.tracks.filter(s=>s.type==='audio').length,2);
   assert.equal(report.content.points.length,report.frames.length);

@@ -1,10 +1,12 @@
 import {test,before} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdir} from 'node:fs/promises';
+import {mkdir,mkdtemp} from 'node:fs/promises';
 import path from 'node:path';
 import {FF,probe,run,scan,packets,summarize,alignment,compare,comparisonProfile,normalizeMediaPath} from '../engine.mjs';
 import {allPackets,structure,metadataSummary,complexity,trial,av1ShortRefs} from '../analysis.mjs';
 import {readdir} from 'node:fs/promises';
+import {bitrateView} from '../public/bitrate-model.js';
+import {saveBitrateEvidence} from './helpers/bitrate-evidence.mjs';
 const dir=path.resolve('test-work'),source=path.join(dir,'参考 多音轨.mp4'),candidate=path.join(dir,'candidate.mp4');
 const context=()=>({cwd:dir,commands:[],update:()=>{}});
 before(async()=>{
@@ -48,6 +50,17 @@ test('AV1 MP4: probe, decode and identical-frame metrics',async()=>{
 test('packet accounting separates both audio tracks and matches every packet byte',async()=>{
  const p=await probe(source),tracks=await allPackets(source,p.raw.streams,context());assert.equal(tracks.length,3);assert.equal(tracks.filter(t=>t.type==='audio').length,2);
  for(const t of tracks){assert.ok(t.bytes>0);assert.ok(Math.abs(t.bins.reduce((s,b)=>s+b.mbps,0)*1e6/8-t.bytes)<.001)}
+});
+test('real video and two audio tracks: 100 ms aggregation matches direct 1 s without changing legacy accounting',async()=>{
+ const ctx=context(),p=await probe(source,ctx),fine=await allPackets(source,p.raw.streams,{...ctx,bitrateWindowMs:100}),coarse=await allPackets(source,p.raw.streams,{...ctx,bitrateWindowMs:1000}),legacy=await allPackets(source,p.raw.streams,ctx);
+ const evidence=await saveBitrateEvidence(await mkdtemp(path.join(dir,'bitrate-equivalence-')),{file:source,probe:p,fine,coarse,commands:ctx.commands});
+ assert.equal(evidence.outcome,'passed');
+ for(let i=0;i<fine.length;i++){
+   assert.equal(fine[i].bitrateCurve.status,'ok');
+   assert.deepEqual(bitrateView(fine[i].bitrateCurve,1000),bitrateView(coarse[i].bitrateCurve));
+   assert.equal(fine[i].bitrateCurve.bins.reduce((sum,b)=>sum+BigInt(b.bytes),0n),BigInt(fine[i].bytes));
+   assert.equal(fine[i].bytes,legacy[i].bytes);assert.equal(fine[i].averageMbps,legacy[i].averageMbps);
+ }
 });
 test('H.264 IDR is determined from NAL headers, not inferred from I frames',async()=>{
  const p=await probe(source),frames=await scan(source,0),r=await structure(source,p.raw.streams[0],frames,context());assert.equal(frames[0].special,'IDR');assert.equal(r.matchedDisplayFrames,12);assert.equal(r.gops[0].count,12);assert.ok(frames.slice(1).every(f=>f.special==='NON_IDR'));
