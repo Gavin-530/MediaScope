@@ -1,11 +1,11 @@
 import {bitrateView} from "./bitrate-model.js";
+import {formatBytes, formatBitrate, byteEvidence, byteLimit, quantityScale, quantityNumber, scalePlotData} from "./units.js";
 import { parsePortable, makePortable, maxPortableBytes, utcFilename } from "./portable.js";
 import { plot, gopOverview } from "./charts.js";
 import { basicInfoHTML, initBasicInfo } from "./basic-info.js";
 import {
   parseCrfs,
   rowLabel,
-  trialValue,
   trialPlotData,
   trialFramePlotData,
   metricLabels,
@@ -47,16 +47,11 @@ const fmt = (v, d = 3) =>
   typeof v === "number"
     ? v.toLocaleString("zh-CN", { maximumFractionDigits: d })
     : (v ?? "未报告");
-const size = (v) =>
-  v == null
-    ? "未报告"
-    : v >= 1073741824
-      ? `${fmt(v / 1073741824)} GiB`
-      : v >= 1048576
-        ? `${fmt(v / 1048576)} MiB`
-        : v >= 1024
-          ? `${fmt(v / 1024)} KiB`
-          : `${v} B`;
+const unitCell = Symbol('unit-cell');
+const quantityCell = (text, title) => ({[unitCell]: true, text, title, toString: () => text});
+const size = v => quantityCell(formatBytes(v), byteEvidence(v));
+const rate = mbps => quantityCell(formatBitrate(mbps == null ? null : mbps * 1e6), mbps == null ? '未报告' : `${mbps * 1e6} bit/s`);
+const cellHTML = v => v?.[unitCell] ? `<span title="${esc(v.title)}">${esc(v.text)}</span>` : esc(v);
 const clean = (v) => v.trim().replace(/^"|"$/g, "");
 async function api(url, options = {}) {
   const r = await fetch("/api/" + url, {
@@ -726,7 +721,7 @@ function reportName(r) {
 function downloadPortable(results, plans, name) {
   const json = JSON.stringify(makePortable({ results, plans }), null, 2);
   if (new Blob([json]).size > maxPortableBytes)
-    throw Error("导出文件超过 256 MiB；请勾选较少的结果，确保文件能够重新导入");
+    throw Error(`导出文件超过 ${byteLimit(maxPortableBytes)}；请勾选较少的结果，确保文件能够重新导入`);
   download(json, name, "application/json");
 }
 for (const mode of modes)
@@ -823,7 +818,7 @@ $("#import-report").onchange = async (e) => {
   message("正在读取并校验 JSON…");
   try {
     if (f.size > maxPortableBytes)
-      throw Error("JSON 文件超过 256 MiB 导入上限");
+      throw Error(`JSON 文件超过 ${byteLimit(maxPortableBytes)} 导入上限`);
     const useResults = $("#import-results").checked,
       usePlans = $("#import-plans").checked;
     if (!useResults && !usePlans) throw Error("请至少选择一项导入内容");
@@ -906,7 +901,7 @@ function cardsHTML(items) {
   return items
     .map(
       ([k, v]) =>
-        `<div class="card"><span>${esc(k)}</span><strong>${esc(v)}</strong></div>`,
+        `<div class="card"><span>${esc(k)}</span><strong>${cellHTML(v)}</strong></div>`,
     )
     .join("");
 }
@@ -917,7 +912,7 @@ function section(title, html) {
   return `<section class="section"><h3>${esc(title)}</h3>${html}</section>`;
 }
 function table(headers, rows) {
-  return `<div class="table-wrap"><table><thead><tr>${headers.map((v) => `<th>${esc(v)}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((v) => `<td>${esc(v)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+  return `<div class="table-wrap"><table><thead><tr>${headers.map((v) => `<th>${esc(v)}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((v) => `<td>${cellHTML(v)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
 }
 function raw(data, title = "展开证据 / 原始数据") {
   return `<details><summary>${esc(title)}</summary><pre>${esc(JSON.stringify(data, null, 2))}</pre></details>`;
@@ -1000,7 +995,7 @@ function renderMedia(r) {
       );
     html += section(
       r.packets.bitrateCurve ? "视频区间平均码率" : "视频码率 · 1 秒窗口（旧报告）",
-      `${displayControl(r.packets.bitrateCurve, "bitrate-display")}${r.packets.bitrateCurve ? `<p class="hint">计算窗口 ${r.packets.bitrateCurve.windowMs} ms；按 PTS 归属包负载，首尾使用实际时长。${r.packets.bitrateCurve.status === "ok" ? "" : esc(r.packets.bitrateCurve.reasons.join("；"))}</p>` : ""}<div id="bitrate"></div><p class="hint">全程平均（独立口径） ${fmt(r.packets.averageMbps)} Mbps · 缺少时间戳 ${r.packets.missing} 包。放大不改变统计窗口。</p>`,
+      `${displayControl(r.packets.bitrateCurve, "bitrate-display")}${r.packets.bitrateCurve ? `<p class="hint">计算窗口 ${r.packets.bitrateCurve.windowMs} ms；按 PTS 归属包负载，首尾使用实际时长。${r.packets.bitrateCurve.status === "ok" ? "" : esc(r.packets.bitrateCurve.reasons.join("；"))}</p>` : ""}<div id="bitrate"></div><p class="hint">全程平均（独立口径） ${cellHTML(rate(r.packets.averageMbps))} · 缺少时间戳 ${r.packets.missing} 包。放大不改变统计窗口。</p>`,
     );
     const audio = (r.tracks || []).filter((t) => t.type === "audio");
     if (audio.length)
@@ -1009,7 +1004,7 @@ function renderMedia(r) {
         audio
           .map(
             (t) =>
-              `<h4>音轨 #${t.index} · ${esc(t.codec)} · 全程平均（独立口径） ${t.averageMbps == null ? "不可计算" : fmt(t.averageMbps * 1000) + " kbit/s"}</h4>${displayControl(t.bitrateCurve, `audio-${t.index}-display`)}<div id="audio-${t.index}"></div>${t.bitrateCurve?.status === "unavailable" ? `<p class="hint">不可计算：${esc(t.bitrateCurve.reasons.join("；"))}</p>` : ""}`,
+              `<h4>音轨 #${t.index} · ${esc(t.codec)} · 全程平均（独立口径） ${t.averageMbps == null ? "不可计算" : cellHTML(rate(t.averageMbps))}</h4>${displayControl(t.bitrateCurve, `audio-${t.index}-display`)}<div id="audio-${t.index}"></div>${t.bitrateCurve?.status === "unavailable" ? `<p class="hint">不可计算：${esc(t.bitrateCurve.reasons.join("；"))}</p>` : ""}`,
           )
           .join(""),
       );
@@ -1066,15 +1061,16 @@ function renderMedia(r) {
     if (r.frames.length) initFrames(r);
     else $("#gop-overview").textContent = "报告中没有显示帧";
     const bitratePlots = new Map();
-    for (const [id, t, factor, unit] of [["bitrate", r.packets, 1, "Mbit/s"], ...(r.tracks || []).filter(t => t.type === "audio").map(t => ["audio-" + t.index, t, 1000, "kbit/s"])]) {
+    for (const [id, t] of [["bitrate", r.packets], ...(r.tracks || []).filter(t => t.type === "audio").map(t => ["audio-" + t.index, t])]) {
       const control = $("#" + (id === "bitrate" ? "bitrate-display" : id + "-display"));
       const drawBitrate = () => {
         const windowMs = Number(control?.value ?? 1000);
-        const data = t.bitrateCurve ? bitrateView(t.bitrateCurve, windowMs).map(b => [b.start, b.mbps * factor]) : t.bins.map(b => [b.second, b.mbps * factor]);
+        const data = t.bitrateCurve ? bitrateView(t.bitrateCurve, windowMs).map(b => [b.start, b.mbps * 1e6, b]) : t.bins.map(b => [b.second, b.mbps * 1e6, b]);
+        const scale = quantityScale(data.map(p => p[1]), 'bit/s');
         const previous = bitratePlots.get(id);
         previous?.dispose?.();
         if (previous) { const i = charts.indexOf(previous); if (i >= 0) charts.splice(i, 1); }
-        bitratePlots.set(id, draw(id, data, {unit}));
+        bitratePlots.set(id, draw(id, scalePlotData(data, {y: scale}), {unit: scale.unit, describe: p => `${quantityNumber(p[0], 6)} s · ${formatBitrate(p[2].mbps * 1e6)}`}));
         if (t.bitrateCurve?.status === "unavailable") $("#" + id).textContent = "不可计算";
       };
       drawBitrate();
@@ -1108,13 +1104,14 @@ function legacyGops(frames) {
 }
 function initFrames(r) {
   const gops = r.coding?.gops || legacyGops(r.frames),
-    fdata = r.frames.map((f, i) => [i, f.bytes ?? 0, f]);
+    frameScale = quantityScale(r.frames.map(f => f.bytes)),
+    fdata = r.frames.map((f, i) => [i, f.bytes == null ? null : f.bytes / frameScale.divisor, f]);
   const detail = (p) => {
     const f = p[2],
       packet = r.coding?.packets?.[f.packetIndex];
     $("#frame-detail").innerHTML =
       table(
-        ["显示帧", "时间", "预测类型", "访问类型", "关键帧标记", "包字节"],
+        ["显示帧", "时间", "预测类型", "访问类型", "关键帧标记", "包体积"],
         [
           [
             p[0],
@@ -1122,19 +1119,19 @@ function initFrames(r) {
             f.type,
             f.special ?? "旧版未解析",
             f.key ? "是" : "否",
-            f.bytes ?? "未报告",
+            size(f.bytes),
           ],
         ],
       ) + raw(packet ?? f, "码流包 / 单帧证据");
   };
   const ribbon = draw("frame-plot", fdata, {
-    unit: "包字节",
+    unit: `包体积（${frameScale.unit}）`,
     axis: "显示帧",
     frames: true,
     initial: [0, gops[0].end + 1],
     onPick: detail,
     describe: (p) =>
-      `帧 ${p[0]} · ${fmt(p[2].t, 6)} s · ${p[2].type} / ${p[2].special ?? "未解析"} · ${size(p[2].bytes)}`,
+      `帧 ${p[0]} · ${fmt(p[2].t, 6)} s · ${p[2].type} / ${p[2].special ?? "未解析"} · ${formatBytes(p[2].bytes)}`,
   });
   let selected = 0;
   const overview = gopOverview($("#gop-overview"), gops, r.frames.length, (i) =>
@@ -1164,7 +1161,7 @@ function initFrames(r) {
     $("#prev").disabled = page === 0;
     $("#next").disabled = (page + 1) * 100 >= r.frames.length;
     $("#frames").innerHTML = table(
-      ["帧", "时间 s", "预测类型", "码流访问类型", "关键帧", "包字节"],
+      ["帧", "时间 s", "预测类型", "码流访问类型", "关键帧", "包体积"],
       r.frames
         .slice(page * 100, page * 100 + 100)
         .map((f, i) => [
@@ -1173,7 +1170,7 @@ function initFrames(r) {
           f.type,
           f.special ?? "未解析",
           f.key ? "是" : "否",
-          f.bytes,
+          size(f.bytes),
         ]),
     );
   };
@@ -1206,7 +1203,8 @@ function initFrames(r) {
     );
   drawPage();
   if (r.coding?.codec === "av1") {
-    const events = r.coding.events;
+    const events = r.coding.events,
+      eventScale = quantityScale(events.map(e => e.obuPayloadBytes));
     const eventDetail = (p) => {
       const e = events[p[0]];
       $("#av1-index").value = e.id;
@@ -1242,7 +1240,7 @@ function initFrames(r) {
       "av1-plot",
       events.map((e) => [
         e.id,
-        e.obuPayloadBytes ?? 0,
+        e.obuPayloadBytes == null ? null : e.obuPayloadBytes / eventScale.divisor,
         {
           type: e.hidden ? "H" : e.showExisting ? "S" : "V",
           special: e.kind,
@@ -1250,14 +1248,14 @@ function initFrames(r) {
         },
       ]),
       {
-        unit: "OBU 负载字节",
+        unit: `OBU 负载体积（${eventScale.unit}）`,
         axis: "编码事件",
         frames: true,
         initial: [0, Math.min(60, Math.max(1, events.length))],
         onPick: eventDetail,
         describe: (p) => {
           const e = events[p[0]];
-          return `事件 ${e.id} · 包 ${e.packet} · ${e.kind} · ${e.hidden ? "隐藏" : "显示"} · order_hint ${e.orderHint ?? "未知"}`;
+          return `事件 ${e.id} · 包 ${e.packet} · ${e.kind} · ${e.hidden ? "隐藏" : "显示"} · order_hint ${e.orderHint ?? "未知"} · ${formatBytes(e.obuPayloadBytes)}`;
         },
       },
     );
@@ -1492,6 +1490,9 @@ function renderTrial(r) {
     metrics = ["psnr", "ssim", "vmaf"].filter((m) =>
       rows.some((x) => x.metrics[m]),
     );
+  const byteScale = quantityScale(rows.map(x => x.videoBytes)),
+    bitScale = quantityScale(rows.map(x => x.videoMbps == null ? null : x.videoMbps * 1e6), 'bit/s'),
+    scales = {videoBytes: byteScale, videoMbps: {...bitScale, divisor: bitScale.divisor / 1e6}};
   let html =
     `<p class="path">${esc(r.source.file)}</p>` +
     notices([
@@ -1529,7 +1530,7 @@ function renderTrial(r) {
   );
   html += section(
     "码率—质量与编码成本",
-    `<div class="two"><label>横轴<select id="rd-axis"><option value="videoMbps">视频平均码率（Mbit/s）</option><option value="videoKiB">视频包体积（KiB）</option><option value="encodeSeconds">编码耗时（s）</option><option value="encodeFps">编码速度（frame/s）</option></select></label><label>纵轴指标<select id="rd-metric">${metrics.map((m) => `<option value="${m}">${esc(metricLabels[m])}</option>`).join("")}</select></label></div><div id="rd"></div><p class="hint">码率—质量图：同等质量时越靠左越省码率，同等码率时越高越好；需比较同一参考片段及指标域。成本图仅显示散点：相同质量下比较编码时间或速度。Mbit/s = 10⁶ bit/s；KiB = 1024 B，仅计视频包。PSNR 为 MSE 域汇总，SSIM / VMAF 为逐帧均值。</p>`,
+    `<div class="two"><label>横轴<select id="rd-axis"><option value="videoMbps">视频平均码率（${bitScale.unit}）</option><option value="videoBytes">视频包体积（${byteScale.unit}）</option><option value="encodeSeconds">编码耗时（s）</option><option value="encodeFps">编码速度（frame/s）</option></select></label><label>纵轴指标<select id="rd-metric">${metrics.map((m) => `<option value="${m}">${esc(metricLabels[m])}</option>`).join("")}</select></label></div><div id="rd"></div><p class="hint">码率—质量图：同等质量时越靠左越省码率，同等码率时越高越好；需比较同一参考片段及指标域。成本图仅显示散点：相同质量下比较编码时间或速度。体积与码率仅计视频包。PSNR 为 MSE 域汇总，SSIM / VMAF 为逐帧均值。</p>`,
   );
   html += section(
     "逐帧质量叠加 · 固定位深与 preset，对比 CRF",
@@ -1545,8 +1546,8 @@ function renderTrial(r) {
   $("#details").innerHTML = html;
   const labels = {
     ...metricLabels,
-    videoKiB: "视频包体积（KiB）",
-    videoMbps: "视频平均码率（Mbit/s）",
+    videoBytes: `视频包体积（${byteScale.unit}）`,
+    videoMbps: `视频平均码率（${bitScale.unit}）`,
     encodeSeconds: "编码耗时（s）↓",
     encodeFps: "编码速度（frame/s）↑",
     crf: "CRF（无量纲）",
@@ -1557,7 +1558,7 @@ function renderTrial(r) {
         "位深 / preset",
         "CRF",
         "视频包体积",
-        "视频码率 / Mbit/s",
+        "视频码率",
         "PSNR / dB",
         "SSIM / 无量纲",
         "VMAF / 模型分数",
@@ -1571,7 +1572,7 @@ function renderTrial(r) {
         rowLabel(x),
         x.crf,
         size(x.videoBytes),
-        fmt(x.videoMbps),
+        rate(x.videoMbps),
         fmt(x.metrics.psnr?.pooled),
         fmt(x.metrics.ssim?.pooled, 6),
         fmt(x.metrics.vmaf?.pooled),
@@ -1581,13 +1582,13 @@ function renderTrial(r) {
   };
   const seriesPlot = (id, x, y) => {
     const { data, series } = trialPlotData(rows, x, y);
-    return draw(id, data, {
+    return draw(id, scalePlotData(data, {x: scales[x], y: scales[y]}), {
       series,
       connect: !["encodeSeconds", "encodeFps"].includes(x),
       unit: labels[y],
       axis: labels[x],
       describe: (p) =>
-        `${rowLabel(p[2])} · CRF ${p[2].crf} · ${labels[y]} ${fmt(["psnr", "ssim", "vmaf"].includes(y) ? p[2].metrics[y]?.pooled : trialValue(p[2], y), 6)}`,
+        `${rowLabel(p[2])} · CRF ${p[2].crf} · ${labels[x]} ${quantityNumber(p[0], 6)} · ${labels[y]} ${["psnr", "ssim", "vmaf"].includes(y) ? fmt(p[2].metrics[y]?.pooled, 6) : quantityNumber(p[1], 6)} · ${formatBytes(p[2].videoBytes)} · ${rate(p[2].videoMbps)}`,
     });
   };
   seriesPlot("trial-psnr", "crf", "psnr");
@@ -1953,9 +1954,10 @@ $("#trial-save-picker").onclick = async () => {
   catch(e){message(e.message,true)}finally{button.disabled=false}
 };
 async function refreshLocalData(){
-  const value=await api("local-data"),mib=bytes=>(bytes/1024**2).toFixed(2);
+  const value=await api("local-data");
   $("#clear-on-exit").checked=value.settings.clearOnExit;
-  $("#local-data-usage").textContent=`近期记录 ${value.count} / ${value.limit} 次 · ${mib(value.recordBytes)} MiB；浏览器缓存 ${mib(value.profileBytes)} MiB；运行目录总计 ${mib(value.totalBytes)} MiB。${value.warnings.join('；')}`;
+  $("#local-data-usage").textContent=`近期记录 ${value.count} / ${value.limit} 次 · ${formatBytes(value.recordBytes)}；浏览器缓存 ${formatBytes(value.profileBytes)}；运行目录总计 ${formatBytes(value.totalBytes)}。${value.warnings.join('；')}`;
+  $("#local-data-usage").title=`近期记录 ${byteEvidence(value.recordBytes)}；浏览器缓存 ${byteEvidence(value.profileBytes)}；运行目录总计 ${byteEvidence(value.totalBytes)}`;
 }
 $("#local-data-panel").ontoggle=()=>{if($("#local-data-panel").open)refreshLocalData().catch(e=>message(e.message,true))};
 $("#local-data-refresh").onclick=()=>refreshLocalData().catch(e=>message(e.message,true));

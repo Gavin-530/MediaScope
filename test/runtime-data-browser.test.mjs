@@ -32,6 +32,8 @@ test('[runtime-data] real browser restores recent reports and preferences, expor
     const bundle=JSON.parse(await readFile(exported,'utf8'));assert.equal(bundle.results.length,1);assert.equal(bundle.results[0].report.file,media);
     await writeFile(path.join(work,'measured-browser-export.json'),JSON.stringify(bundle));
     await page.locator('#local-data-panel summary').click();await page.locator('#local-data-usage').filter({hasText:'近期记录 1 / 10'}).waitFor();
+    assert.equal((await app.request('local-data')).maxBytes,100000000);
+    assert.match(await page.locator('#local-data-panel').innerText(),/合计不超过 100 MB/);
     const queued=await app.request('jobs','POST',{type:'inspect',file:media,enqueue:true});
     page.once('dialog',dialog=>dialog.accept());await page.locator('#local-data-clear').click();
     await page.locator('#local-data-usage').filter({hasText:'近期记录 0 / 10'}).waitFor();assert.equal((await app.request('jobs/'+queued.id)).status,'queued');

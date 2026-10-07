@@ -37,7 +37,7 @@ try {
   } catch {
     $reason=if($paths){'Local programs did not pass the compatibility check.'}else{$_.Exception.Message}
     Write-Host "No compatible local environment: $reason"
-    Write-Host 'Preparing the private runtime; first launch requires internet (about 219 MiB).'
+    Write-Host 'Preparing the private runtime; first launch requires internet (about 230 MB).'
     $paths=Get-PrivateRuntime $source $InstallRoot
     $mode='private'
     $validation=Test-Environment $source $paths $InstallRoot

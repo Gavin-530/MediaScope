@@ -60,7 +60,7 @@ function Select-FirstEnvironment($App) {
     $detail=if($reason){$reason}else{'未找到全部三个程序'}
     Write-Host "No compatible local environment: $detail"
     if(!$NonInteractive) {
-      $choice=Show-EnvironmentPrompt "电脑中没有通过验证的完整运行环境。`n原因：$detail`n`n确定：首次联网下载推荐的私有 Node.js、FFmpeg 和 FFprobe（约 219 MiB）`n取消：暂不安装。不会改动电脑已有环境。" ([Windows.Forms.MessageBoxButtons]::OKCancel) ([Windows.Forms.MessageBoxDefaultButton]::Button1)
+      $choice=Show-EnvironmentPrompt "电脑中没有通过验证的完整运行环境。`n原因：$detail`n`n确定：首次联网下载推荐的私有 Node.js、FFmpeg 和 FFprobe（约 230 MB）`n取消：暂不安装。不会改动电脑已有环境。" ([Windows.Forms.MessageBoxButtons]::OKCancel) ([Windows.Forms.MessageBoxDefaultButton]::Button1)
       if($choice -ne [Windows.Forms.DialogResult]::OK){throw 'Installation cancelled; no environment was selected'}
     }
   }

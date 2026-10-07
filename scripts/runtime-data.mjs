@@ -2,8 +2,10 @@ import {mkdir,readFile,writeFile,rename,readdir,lstat,rm,open,unlink,copyFile} f
 import {constants} from 'node:fs';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
+import {compareTimes} from './time.mjs';
+import {byteLimit} from '../public/units.js';
 
-export const recentLimit=10, recentBytes=100*1024**2;
+export const recentLimit=10, recentBytes=100*1000**2;
 const jobId=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 export const ended=job=>['done','error','cancelled'].includes(job.status);
 const alive=pid=>{if(!Number.isSafeInteger(pid)||pid<1)return false;try{process.kill(pid,0);return true}catch(e){return e.code!=='ESRCH'}};
@@ -31,6 +33,31 @@ export async function removeOwned(root,name){
 async function json(file,value){
   const temp=file+'.'+randomUUID()+'.tmp';
   try{await writeFile(temp,JSON.stringify(value,null,2));await rename(temp,file)}finally{await unlink(temp).catch(()=>{})}
+}
+const windowRect=value=>value&&['left','top','width','height'].every(key=>Number.isInteger(value[key])&&Math.abs(value[key])<=2147483647)&&value.width>0&&value.height>0;
+const rectValues=value=>Object.fromEntries(['left','top','width','height'].map(key=>[key,value[key]]));
+export function desktopWindowBounds(area,saved){
+  if(!windowRect(area))throw Error('无法读取显示器可用区域');
+  const width=Math.min(area.width,windowRect(saved)?saved.width:Math.round(area.width*.75));
+  const height=Math.min(area.height,windowRect(saved)?saved.height:Math.round(area.height*.75));
+  const visible=windowRect(saved)&&saved.left+saved.width>area.left&&saved.left<area.left+area.width&&saved.top+saved.height>area.top&&saved.top<area.top+area.height;
+  return {left:visible?Math.max(area.left,Math.min(saved.left,area.left+area.width-width)):area.left+Math.round((area.width-width)/2),
+    top:visible?Math.max(area.top,Math.min(saved.top,area.top+area.height-height)):area.top+Math.round((area.height-height)/2),width,height};
+}
+export class DesktopWindowData {
+  constructor(root){this.file=path.join(root,'desktop-window.json');this.state=null;this.serialized=''}
+  async init(){
+    try{
+      const saved=JSON.parse((await readFile(this.file,'utf8')).replace(/^\uFEFF/,''));
+      if(saved?.schema===1&&windowRect(saved.normal)&&typeof saved.maximized==='boolean')this.state={schema:1,normal:rectValues(saved.normal),maximized:saved.maximized,...(windowRect(saved.area)?{area:rectValues(saved.area)}:{})};
+    }catch(e){if(e.code!=='ENOENT')console.error('窗口设置读取失败，使用默认窗口：'+e.message)}
+  }
+  async save(normal,maximized,area){
+    if(!windowRect(normal)||!windowRect(area))return;
+    const state={schema:1,normal,maximized,area},serialized=JSON.stringify(state);
+    if(serialized===this.serialized)return;
+    await json(this.file,state);this.state=state;this.serialized=serialized;
+  }
 }
 export async function acquireDataLease(root){
   root=path.resolve(root);await safeTree(root);await mkdir(root,{recursive:true});
@@ -118,7 +145,7 @@ export class RuntimeData {
         this.warnings.push('已移除无法恢复的运行记录：'+entry.name);await removeOwned(this.root,entry.name);
       }
     }
-    return records.sort((a,b)=>a.job.finishedAt.localeCompare(b.job.finishedAt));
+    return records.sort((a,b)=>compareTimes(a.job.finishedAt,b.job.finishedAt));
   }
   async trimWork(id){
     const folder=path.join(this.root,id);
@@ -136,7 +163,7 @@ export class RuntimeData {
       const session=path.join(this.root,'.session');await mkdir(session,{recursive:true});
       const target=path.join(session,job.id);await rename(folder,target);
       if(job.reportPath)job.reportPath=path.join(target,'report.json');
-      job.sessionOnly=true;job.retentionMessage='报告超过 100 MiB，仅在本次会话可用；请导出保存';
+      job.sessionOnly=true;job.retentionMessage=`报告超过 ${byteLimit(recentBytes)}，仅在本次会话可用；请导出保存`;
     }
   }
   pinned(id){for(const [key,hold]of this.holds){if(hold.expires<Date.now())this.holds.delete(key);else if(hold.ids.includes(id))return true}return false}
@@ -149,7 +176,7 @@ export class RuntimeData {
   }
   async prune(jobs,inputs,{clear=false}={}){
     for(const [key,hold]of this.holds)if(hold.expires<Date.now())this.holds.delete(key);
-    const recent=[...jobs.values()].filter(j=>ended(j)).sort((a,b)=>(b.finishedAt||'').localeCompare(a.finishedAt||''));
+    const recent=[...jobs.values()].filter(j=>ended(j)).sort((a,b)=>compareTimes(b.finishedAt||'',a.finishedAt||''));
     let count=0,bytes=0,exhausted=false;
     for(const job of recent){
       const size=job.sessionOnly?0:await safeTree(path.join(this.root,job.id));

@@ -1,16 +1,20 @@
 import { videoFields, propertyValue, summarizeSample } from './properties.js';
+import {formatBytes, formatQuantity, byteEvidence} from './units.js';
 
 // This module only presents the report. It never changes the saved evidence.
 const esc = value => String(value ?? '未报告').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
 const types = {video:'视频',audio:'音频',subtitle:'字幕',attachment:'附件',data:'数据'};
 const raw = (value, title) => `<details><summary>${esc(title)}</summary><pre>${esc(JSON.stringify(value, null, 2))}</pre></details>`;
 const table = (headers, rows) => `<div class="table-wrap"><table><thead><tr>${headers.map(v=>`<th>${esc(v)}</th>`).join('')}</tr></thead><tbody>${rows.map(row=>`<tr>${row.map(v=>`<td>${esc(v)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
-const pairs = rows => `<dl class="property-grid">${rows.map(([key,label,value])=>`<div class="property-pair" data-property="${esc(key)}"><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`).join('')}</dl>`;
+const pairs = rows => `<dl class="property-grid">${rows.map(([key,label,value,title])=>`<div class="property-pair" data-property="${esc(key)}"><dt>${esc(label)}</dt><dd${title ? ` title="${esc(title)}"` : ''}>${esc(value)}</dd></div>`).join('')}</dl>`;
 const value = (object, key, kind='text', unit='') => {
   const result = propertyValue(object?.[key], kind, key);
+  if (result.state === 'reported' && ['B', 'bit/s'].includes(unit)) return formatQuantity(object[key], unit);
   return result.text + (result.state === 'reported' && unit ? ` ${unit}` : '');
 };
-const field = (object, key, label, kind='text', unit='') => [key,label,value(object,key,kind,unit)];
+const field = (object, key, label, kind='text', unit='') => [key,label,value(object,key,kind,unit),
+  propertyValue(object?.[key],kind,key).state === 'reported' && ['B','bit/s'].includes(unit)
+    ? unit === 'B' ? byteEvidence(object[key]) : `${object[key]} bit/s` : null];
 const dimensions = (s, x, y) => `${value(s,x,'positive')} × ${value(s,y,'positive')} px`;
 const typeName = s => Object.hasOwn(types,s.codec_type) ? types[s.codec_type] : s.codec_type ?? '未知类型';
 const trackName = s => `#${s.index} · ${typeName(s)} · ${s.codec_name ?? '编码未报告'}${s.disposition?.attached_pic === 1 ? ' · 附加图像' : ''}${s.disposition?.default === 1 ? ' · 默认' : ''}`;
@@ -51,7 +55,7 @@ function statuses(r) {
   if (!r.frameSampleRead && r.raw.streams.some(s=>s.codec_type==='video'))
     messages.push(r.frameSample ? '旧报告未保存读取状态' : '旧报告未保存抽样结果');
   if (propertyValue(r.size,'integer').state==='reported' && propertyValue(r.raw.format.size,'integer').state==='reported' && Number(r.raw.format.size) !== Number(r.size))
-    messages.push(`文件大小来源不同：文件系统 ${r.size} byte；FFprobe ${r.raw.format.size} byte。`);
+    messages.push(`文件大小来源不同：文件系统 ${byteEvidence(r.size)}；FFprobe ${byteEvidence(r.raw.format.size)}。`);
   return messages.map(message=>`<p class="notice">${esc(message)}</p>`).join('');
 }
 
@@ -176,10 +180,12 @@ export function basicInfoHTML(r) {
   const counts = new Map(); streams.forEach(s=>counts.set(typeName(s),(counts.get(typeName(s))??0)+1));
   const fileSize = propertyValue(r.size,'integer');
   const main = pairs([
-    ['format_name','容器',value(f,'format_name')],['size','文件大小（文件系统）',fileSize.state==='reported' ? `${Number(r.size).toLocaleString('zh-CN')} byte` : fileSize.text],
+    ['format_name','容器',value(f,'format_name')],['size','文件大小（文件系统）',fileSize.state==='reported' ? formatBytes(r.size) : fileSize.text,fileSize.state==='reported' ? byteEvidence(r.size) : null],
     field(f,'duration','容器报告时长','nonnegative','s'),['streams','轨道',[...counts].map(([type,count])=>`${count} 路${type}`).join(' · ') || '0'],
     field(f,'bit_rate','容器报告总码率','positive','bit/s'),field(f,'start_time','容器报告起点','number','s')]);
-  const fileExtra = pairs([['mtime','文件修改时间',r.mtime ?? '未保存'],['probe-size','文件大小（FFprobe）',value(f,'size','integer','byte')]]);
+  const probeSize = field(f,'size','文件大小（FFprobe）','integer','B');
+  probeSize[0] = 'probe-size';
+  const fileExtra = pairs([['mtime','文件修改时间',r.mtime ?? '未保存'],probeSize]);
   const containerOther = remainingHTML(f,new Set(['filename','format_name','size','duration','bit_rate','start_time','tags']));
   const chapters = r.raw.chapters ?? [];
   return `<section class="section basic-info" data-basic-info><h3>文件基本信息</h3><p class="path">${esc(r.file)}</p>${main}${statuses(r)}` +

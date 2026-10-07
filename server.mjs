@@ -9,7 +9,8 @@ import {createReadStream} from 'node:fs';
 import { FF,FP,run,probe,video,scan,summarize,compare,normalizeMediaPath,decodeThreadCount } from './engine.mjs';
 import {allPackets,structure,traceStructure,mapStructure,metadataSummary,complexity,trial,trialOptions} from './analysis.mjs';
 import {makePortable,maxPortableBytes,utcNow} from './public/portable.js';
-import {RuntimeData,acquireDataLease,verifyDataLease,removeOwned,ended,trialDestination,saveTrialVideos} from './scripts/runtime-data.mjs';
+import {byteLimit} from './public/units.js';
+import {RuntimeData,acquireDataLease,verifyDataLease,removeOwned,ended,trialDestination,saveTrialVideos,recentBytes} from './scripts/runtime-data.mjs';
 const root=path.dirname(fileURLToPath(import.meta.url)),token=randomBytes(24).toString('hex'),jobs=new Map();
 const dataRoot=path.resolve(process.env.MEDIASCOPE_DATA_DIR||path.join(root,'.mediascope'));
 const dataLease=process.env.MEDIASCOPE_DATA_LEASE?null:await acquireDataLease(dataRoot);
@@ -320,9 +321,9 @@ const server=http.createServer(async(req,res)=>{
       }
       send(res,404,{error:'接口不存在'});return;
     }
-    const files={'/':'index.html','/app.js':'app.js','/report.js':'report.js','/properties.js':'properties.js','/basic-info.js':'basic-info.js','/portable.js':'portable.js','/bitrate-model.js':'bitrate-model.js','/charts.js':'charts.js','/trial-model.js':'trial-model.js','/style.css':'style.css'};
+    const files={'/':'index.html','/app.js':'app.js','/report.js':'report.js','/properties.js':'properties.js','/basic-info.js':'basic-info.js','/portable.js':'portable.js','/bitrate-model.js':'bitrate-model.js','/charts.js':'charts.js','/trial-model.js':'trial-model.js','/units.js':'units.js','/style.css':'style.css'};
     if(req.method!=='GET'||!files[url.pathname]){res.writeHead(404);res.end();return}
-    const name=files[url.pathname];let data=await readFile(path.join(root,'public',name));if(name==='index.html')data=Buffer.from(data.toString().replace('__TOKEN__',token).replace('__APP_VERSION__',appVersion).replace('__LOCAL_THEME__',localData.settings.theme));
+    const name=files[url.pathname];let data=await readFile(path.join(root,'public',name));if(name==='index.html')data=Buffer.from(data.toString().replace('__TOKEN__',token).replace('__APP_VERSION__',appVersion).replace('__LOCAL_THEME__',localData.settings.theme).replace('__PORTABLE_LIMIT__',byteLimit(maxPortableBytes)).replace('__RECENT_LIMIT__',byteLimit(recentBytes)));
     res.writeHead(200,{'Content-Type':name.endsWith('.html')?'text/html; charset=utf-8':name.endsWith('.js')?'text/javascript; charset=utf-8':'text/css; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' blob:; object-src 'none'; frame-ancestors 'none'"});res.end(data);
   }catch(e){send(res,400,{error:e.message})}
 });

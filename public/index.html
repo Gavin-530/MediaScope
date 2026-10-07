@@ -62,11 +62,11 @@
       </div>
       <p class="hint">
         三个页签分别保留当前查看的报告；多份完成报告可从下方结果表切换。关闭后可导入
-        JSON 恢复结果或任务计划（最大 256 MiB）。
+        JSON 恢复结果或任务计划（最大 __PORTABLE_LIMIT__）。
       </p>
       <details class="panel" id="local-data-panel">
         <summary>本地数据</summary>
-        <p class="hint">近期任务自动保留最多 10 次、合计不超过 100 MiB，重启后可查看。长期保存请导出 JSON。浏览器运行缓存退出后清理。</p>
+        <p class="hint">近期任务自动保留最多 10 次、合计不超过 __RECENT_LIMIT__，重启后可查看。长期保存请导出 JSON。浏览器运行缓存退出后清理。</p>
         <p id="local-data-usage" role="status" aria-live="polite">展开后查看占用情况。</p>
         <div class="row">
           <label><input id="clear-on-exit" type="checkbox" />退出后清空近期记录</label>

@@ -1,5 +1,6 @@
 import {measureSiti} from './siti.mjs';
 import {createBitrateAccumulator} from './public/bitrate-model.js';
+import {byteLimit} from './public/units.js';
 import {mkdir,unlink,access} from 'node:fs/promises';
 import path from 'node:path';
 import {FF,FP,run,probe,video,scan,compare,createComparisonSession,bitDepthPlan,bitDepthReductionFilter,verifyBitDepthReduction,alignment} from './engine.mjs';
@@ -173,7 +174,7 @@ export async function trial(input,ctx){
     // FFV1 preserves decoded sample values. Limit temporary data by requested duration and available frame count.
     const fpsParts=(s.avg_frame_rate||'0/1').split('/').map(Number),fps=fpsParts[0]/fpsParts[1];
     const estimate=s.width*s.height*(depthMode==='both'?4.5:s.pix_fmt==='yuv420p10le'?3:1.5)*(fps||60)*duration;
-    if(estimate>8*1024**3)throw Error('所选片段原始像素预算超过 8 GiB，请缩短片段');
+    if(estimate>8*1024**3)throw Error(`所选片段原始像素预算超过 ${byteLimit(8*1024**3)}，请缩短片段`);
     const sourceColor=[];for(const [field,flag]of [['color_primaries','-color_primaries'],['color_transfer','-color_trc'],['color_space','-colorspace'],['color_range','-color_range'],['chroma_location','-chroma_sample_location']])if(s[field]&&s[field]!=='unknown')sourceColor.push(flag,s[field]);
     await run(FF,['-hide_banner','-nostdin','-v','error','-xerror','-noauto_conversion_filters','-noautorotate','-ss',String(start),'-accurate_seek','-i',input.file,'-t',String(duration),'-map',`0:${s.index}`,'-an','-sn','-vf','setpts=PTS-STARTPTS','-c:v','ffv1','-level','3',...sourceColor,'-fps_mode','passthrough','-progress','pipe:1','-stats_period','0.25',reference],ctx,line=>{const count=Number(line.match(/^frame=(\d+)/)?.[1]);if(Number.isFinite(count))ctx.update?.({detail:`已写入 ${count.toLocaleString()} 帧无损参考`,completed:count,total:null,unit:'帧'})});
     const refInfo=await probe(reference,ctx),refStream=video(refInfo,0),refFrames=await scan(reference,0,{...ctx,comparisonStream:refStream,requireProgressive:depthMode==='both'});if(refFrames.length<2)throw Error('实验片段没有足够的视频帧');

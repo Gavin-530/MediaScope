@@ -1,3 +1,4 @@
+import {quantityNumber} from './units.js';
 const palette = {
   I: "#80e1c4",
   P: "#76a9ed",
@@ -16,7 +17,7 @@ export const colorFor = (k) =>
   "#8795a8";
 const n = (x, d = 3) =>
   Number.isFinite(x)
-    ? x.toLocaleString("zh-CN", { maximumFractionDigits: d })
+    ? quantityNumber(x, d)
     : "∞";
 function indexAt(data, x) {
   let a = 0,

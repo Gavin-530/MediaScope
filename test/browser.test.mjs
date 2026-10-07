@@ -11,6 +11,8 @@ import {propertyValue} from '../public/properties.js';
 import {probe,FF,run} from '../engine.mjs';
 import {metadataSummary} from '../analysis.mjs';
 import {legacyFrameSample} from './helpers/basic-properties.mjs';
+import {formatBytes, byteEvidence, quantityScale} from '../public/units.js';
+import {bitrateView} from '../public/bitrate-model.js';
 
 const root=path.resolve('test-work/browser');
 let browser,media,sequence=0;
@@ -67,7 +69,7 @@ async function download(page,button,file){
   await downloaded.saveAs(file);return JSON.parse(await readFile(file,'utf8'));
 }
 async function analyze(page,app){await preview(page);return runTask(page,app,'#analyze')}
-scenario('[bitrate-window] calculation selection and display aggregation survive report import',async({page,app,dir})=>{
+scenario('[bitrate-window] [units] calculation selection and display aggregation survive report import',async({page,app,dir})=>{
   await preview(page);
   await page.locator('#bitrate-window').selectOption('100');
   const {report}=await runTask(page,app,'#analyze');
@@ -85,7 +87,10 @@ scenario('[bitrate-window] calculation selection and display aggregation survive
   await page.locator('#audio-1-display').selectOption('1000');
   assert.equal(await page.locator('#audio-2-display').inputValue(),'100');
   assert.equal(await videoCanvas.evaluate(el=>el.isConnected),true,'audio selection must not redraw video');
-  assert.equal(await page.locator('#bitrate .plot-axis-y').textContent(),'纵轴：Mbit/s');
+  const rateUnit=quantityScale(bitrateView(report.packets.bitrateCurve,1000).map(b=>b.mbps*1e6),'bit/s').unit;
+  assert.equal(await page.locator('#bitrate .plot-axis-y').textContent(),'纵轴：'+rateUnit);
+  await page.locator('#bitrate [data-op="in"]').click();
+  assert.equal(await page.locator('#bitrate .plot-axis-y').textContent(),'纵轴：'+rateUnit,'zoom does not change units');
   await page.locator('#bitrate-display').selectOption('100');
   const file=path.join(dir,'bitrate.json');await writeFile(file,JSON.stringify(report));
   await page.locator('#import-report').setInputFiles(file);
@@ -145,9 +150,13 @@ scenario('[queue-removal] GUI removes waiting tasks and completed/imported resul
   assert.deepEqual((await app.request('status')).jobs,[]);
 });
 
-scenario('[startup] actual browser loads the complete app and the API rejects an absent session token',async({page,app})=>{
+scenario('[startup] [units] actual browser loads the complete app and the API rejects an absent session token',async({page,app})=>{
   assert.equal((await fetch(app.base+'/api/status')).status,403);
   assert.equal(await page.locator('#analyze').isEnabled(),false);
+  const help=(await page.locator('p.hint').allTextContents()).join(' ');
+  assert.match(help,/最大 256 MB/);assert.match(help,/合计不超过 100 MB/);
+  assert.ok(!help.includes('B 表示字节')&&!help.includes('1000 进位'));
+  assert.ok(!help.includes('268.435')&&!help.includes('104.858'));
   for(const mode of ['inspect','compare','trial']){
     await page.locator(`[data-mode="${mode}"]`).click();
     assert.equal(await page.locator('#'+mode+'-panel').isVisible(),true);
@@ -236,7 +245,7 @@ scenario('[basic-properties] real subtitles attachments chapters and narrow layo
   assert.deepEqual(exported.results[0].report,report);
 });
 
-scenario('[analysis] actual multi-audio file, frame scan, GOP, SI/TI and export match the server report',async({page,app,dir})=>{
+scenario('[analysis] [units] actual multi-audio file, frame scan, GOP, SI/TI and export match the server report',async({page,app,dir})=>{
   const info=await preview(page);assert.deepEqual(info.raw,media.info.raw);
   assert.equal(info.raw.streams.length,3);
   await page.locator('#complexity').check();await page.locator('#siti-workers').selectOption('8');
@@ -248,6 +257,12 @@ scenario('[analysis] actual multi-audio file, frame scan, GOP, SI/TI and export 
   assert.equal(report.content.execution.requestedWorkers,8);
   assert.ok(report.commands.length>0&&report.commands.every(c=>c.exitCode===0));
   assert.ok(await page.locator('#frame-plot canvas').isVisible());
+  const fileSize=page.locator('[data-property="size"] dd');
+  assert.equal(await fileSize.textContent(),formatBytes(report.size));
+  assert.equal(await fileSize.getAttribute('title'),byteEvidence(report.size));
+  const frameUnit=quantityScale(report.frames.map(f=>f.bytes)).unit;
+  assert.equal(await page.locator('#frame-plot .plot-axis-y').textContent(),`纵轴：包体积（${frameUnit}）`);
+  assert.ok(!(await page.locator('#inspect-details').innerText()).includes('MiB'));
   assert.equal(await page.locator('#gop-index').inputValue(),'0');
   assert.equal(report.coding.gops.length,2);
   await page.locator('#gop-next').click();assert.equal(await page.locator('#gop-index').inputValue(),'1');
@@ -295,7 +310,7 @@ scenario('[alignment] ordinal pairing requires its own explicit confirmation bef
   assert.equal(report.alignment.pairing,'ordinal-confirmed');assert.equal(report.metrics.psnr.pooled,'Infinity');
 });
 
-scenario('[trial] real x264 trial encodes both CRFs, preserves frame metrics and cleans generated video',async({page,app})=>{
+scenario('[trial] [units] real x264 trial encodes both CRFs, preserves frame metrics and cleans generated video',async({page,app,dir})=>{
   await page.locator('[data-mode="trial"]').click();await page.locator('#trial-file').fill(media.source);
   await page.locator('#trial-duration').fill('1');await page.locator('#trial-encoder').selectOption('libx264');
   await page.locator('[name="trial-preset"][value="medium"]').uncheck();await page.locator('[name="trial-preset"][value="ultrafast"]').check();
@@ -305,6 +320,23 @@ scenario('[trial] real x264 trial encodes both CRFs, preserves frame metrics and
   assert.ok(report.rows.every(r=>r.metrics.psnr.values.length===report.experiment.actualFrames));
   assert.ok(report.rows[0].videoBytes>report.rows[1].videoBytes);
   assert.ok(await page.locator('#trial-frames canvas').isVisible());
+  await page.locator('#trial-psnr canvas').hover({position:{x:60,y:50}});
+  assert.ok((await page.locator('#trial-psnr .chart-label').innerText()).includes(report.rows[0].metrics.psnr.pooled.toLocaleString('zh-CN',{maximumFractionDigits:6})), 'quality tooltips retain their original precision');
+  const unit=quantityScale(report.rows.map(r=>r.videoBytes)).unit;
+  await page.locator('#rd-axis').selectOption('videoBytes');
+  assert.match(await page.locator('#rd canvas').getAttribute('aria-label'),new RegExp(`视频包体积（${unit}）`));
+  await page.locator('#rd [data-op="in"]').click();
+  assert.match(await page.locator('#rd canvas').getAttribute('aria-label'),new RegExp(`视频包体积（${unit}）`));
+  const exported=await download(page,'#trial-export',path.join(dir,'units-trial.json'));
+  assert.deepEqual(exported.results[0].report,report);
+  await page.locator('#import-report').setInputFiles(path.join(dir,'units-trial.json'));
+  await page.locator('#rd-axis').selectOption('videoBytes');
+  assert.match(await page.locator('#rd canvas').getAttribute('aria-label'),new RegExp(`视频包体积（${unit}）`));
+  await page.locator('#trial-crfs').fill('0');
+  const lossless=await runTask(page,app,'#trial');
+  assert.equal(lossless.report.rows[0].metrics.psnr.pooled,'Infinity');
+  await page.locator('#trial-psnr canvas').hover({position:{x:60,y:50}});
+  assert.match(await page.locator('#trial-psnr .chart-label').innerText(),/Infinity/,'infinite quality is not presented as a missing measurement');
 });
 
 scenario('[portable] real export/import restores measured frames without queuing or changing the report',async({page,app,dir})=>{

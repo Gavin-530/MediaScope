@@ -2,7 +2,7 @@ import {spawn} from 'node:child_process';
 import {readFile,writeFile,mkdir,unlink,access,rename} from 'node:fs/promises';
 import path from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
-import {acquireDataLease,removeOwned} from './runtime-data.mjs';
+import {acquireDataLease,removeOwned,DesktopWindowData,desktopWindowBounds} from './runtime-data.mjs';
 
 const requestPath=process.argv[2];
 const config=JSON.parse((await readFile(requestPath,'utf8')).replace(/^\uFEFF/,''));
@@ -65,13 +65,20 @@ async function openWindow(){
   // no debugger TCP port is exposed and ordinary browser profiles are untouched.
   browser=spawn(exe,[`--app=${base}`,`--user-data-dir=${profile}`,'--remote-debugging-pipe',
     '--no-first-run','--no-default-browser-check','--disable-background-mode','--disable-extensions',
+    // A guest session cannot sign in or sync the Windows account. A separate
+    // user-data-dir alone still lets Edge implicitly sign in on every launch.
+    '--guest','--disable-sync','--disable-background-networking',
+    // Edge's compatibility relaunch closes the inherited control pipe. Keep
+    // the original process, as Playwright does, so window ownership is retained.
+    ...(path.basename(exe).toLowerCase()==='msedge.exe'?['--edge-skip-compat-layer-relaunch']:[]),
     // The test host restricts nested Windows sandbox tokens. This matches the
     // existing Playwright test setup; the normal application keeps its sandbox.
     ...(process.env.MEDIASCOPE_DESKTOP_HEADLESS==='1'?['--headless=new','--disable-gpu','--no-sandbox']:[])],{windowsHide:true,stdio:['ignore','ignore','pipe','pipe','pipe']});
   if(browser.pid)await dataLease.browser(browser.pid);
-  browser.stderr.resume();
+  let browserLog='';browser.stderr.on('data',chunk=>{browserLog=(browserLog+chunk.toString()).slice(-16384)});
   let sequence=0,buffer=Buffer.alloc(0),browserError;const pending=new Map();
-  const disconnected=()=>{browserDisconnected=true;for(const entry of pending.values()){clearTimeout(entry.timer);entry.reject(browserError||Error('应用窗口已关闭'))}pending.clear()};
+  const closedError=()=>browserError||Error('应用窗口已关闭'+(browserLog?'：\n'+browserLog:''));
+  const disconnected=()=>{browserDisconnected=true;for(const entry of pending.values()){clearTimeout(entry.timer);entry.reject(closedError())}pending.clear()};
   browser.on('error',e=>{browserError=e;disconnected()});
   browser.stdio[3].on('error',disconnected);browser.stdio[4].on('error',disconnected);browser.stdio[4].on('close',disconnected);
   browser.stdio[4].on('data',chunk=>{
@@ -84,7 +91,7 @@ async function openWindow(){
     }
   });
   browserCall=(method,params={},sessionId)=>new Promise((resolve,reject)=>{
-    if(browserDisconnected){reject(browserError||Error('应用窗口已关闭'));return}
+    if(browserDisconnected){reject(closedError());return}
     const id=++sequence,timer=setTimeout(()=>{pending.delete(id);reject(Error('应用窗口响应超时'))},10000);
     pending.set(id,{resolve,reject,timer});browser.stdio[3].write(JSON.stringify({id,method,params,...(sessionId?{sessionId}:{})})+'\0');
   });
@@ -95,15 +102,49 @@ async function openWindow(){
     try{const result=await browserCall(message.method,message.params,message.sessionId);if(process.connected)process.send({type:'desktop-command-result',id:message.id,result},()=>{})}
     catch(e){if(process.connected)process.send({type:'desktop-command-result',id:message.id,error:e.message},()=>{})}
   });
-  const deadline=Date.now()+20000;let seen=false,announced=false,appTargetId;
+  const windowData=new DesktopWindowData(dataRoot);await windowData.init();
+  const deadline=Date.now()+20000;let seen=false,announced=false,appTargetId,windowId,windowSession,normalBounds,lastBounds;
+  const workArea=async()=>{
+    // Screen coordinates and available dimensions are logical CSS pixels,
+    // already adjusted for Windows scaling and the taskbar on this monitor.
+    const {result}=await browserCall('Runtime.evaluate',{expression:'({left:screen.availLeft,top:screen.availTop,width:screen.availWidth,height:screen.availHeight})',returnByValue:true},windowSession);
+    return result.value;
+  };
+  const rememberWindow=async()=>{
+    const {bounds}=await browserCall('Browser.getWindowBounds',{windowId});
+    if(!['normal','maximized'].includes(bounds.windowState)||JSON.stringify(bounds)===lastBounds)return;
+    const area=await workArea();
+    if(bounds.windowState==='normal')normalBounds={left:bounds.left,top:bounds.top,width:bounds.width,height:bounds.height};
+    else normalBounds=desktopWindowBounds(area,normalBounds);
+    await windowData.save(normalBounds,bounds.windowState==='maximized',area);
+    lastBounds=JSON.stringify(bounds);
+  };
   while(!stopping&&!exited(server)&&!browserDisconnected){
     let targetInfos;
     try{({targetInfos}=await browserCall('Target.getTargets'))}catch(e){if(seen&&browserDisconnected)break;throw e}
     const pages=targetInfos.filter(t=>t.type==='page');
     if(!appTargetId)appTargetId=pages.find(t=>t.url.startsWith(base))?.targetId;
     if(appTargetId)seen=true;
-    if(seen&&!announced){console.log('MediaScope 应用窗口已连接。');announced=true}
+    if(seen&&!announced){
+      ({windowId}=await browserCall('Browser.getWindowForTarget',{targetId:appTargetId}));
+      ({sessionId:windowSession}=await browserCall('Target.attachToTarget',{targetId:appTargetId,flatten:true}));
+      await browserCall('Browser.setWindowBounds',{windowId,bounds:{windowState:'normal'}});
+      // Position a remembered window first so screen reports its monitor. If
+      // that monitor was removed, fit it to the nearest available work area.
+      if(windowData.state){
+        const saved=windowData.state;
+        const placement=saved.maximized&&saved.area?desktopWindowBounds(saved.area,saved.normal):saved.normal;
+        await browserCall('Browser.setWindowBounds',{windowId,bounds:placement});
+        await delay(100);
+      }
+      normalBounds=desktopWindowBounds(await workArea(),windowData.state?.normal);
+      await browserCall('Browser.setWindowBounds',{windowId,bounds:normalBounds});
+      if(windowData.state?.maximized)await browserCall('Browser.setWindowBounds',{windowId,bounds:{windowState:'maximized'}});
+      await rememberWindow().catch(e=>console.error('窗口设置保存失败：'+e.message));
+      console.log('MediaScope 应用窗口已连接。');announced=true;
+    }
     if(seen&&!pages.some(t=>t.targetId===appTargetId))break;
+    if(announced)await rememberWindow().catch(e=>{if(!browserDisconnected)console.error('窗口设置保存失败：'+e.message)});
     if(!seen&&Date.now()>deadline)throw Error('应用页面未能打开');
     await delay(200);
   }

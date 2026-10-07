@@ -53,7 +53,7 @@ function Expand-SafeZip($Archive,$Destination) {
       $null=Safe-Path $Destination $name
       if($seen.ContainsKey($name)){throw "Duplicate archive entry: $name"};$seen[$name]=$true
       $total+=$entry.Length
-      if($total -gt 3GB){throw 'Archive exceeds 3 GiB extraction limit'}
+      if($total -gt 3GB){throw 'Archive exceeds 3.221225472 GB (3221225472 B) extraction limit'}
       if(($entry.ExternalAttributes -shr 16 -band 0xF000) -eq 0xA000){throw 'Archive links are forbidden'}
     }
     [IO.Compression.ZipFileExtensions]::ExtractToDirectory($zip,$Destination)

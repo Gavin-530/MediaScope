@@ -7,6 +7,7 @@ import {setTimeout as delay} from 'node:timers/promises';
 import {randomUUID} from 'node:crypto';
 import {FF,FP,run} from '../engine.mjs';
 import {startServer,waitForJob} from './helpers/server.mjs';
+import {desktopWindowBounds} from '../scripts/runtime-data.mjs';
 
 const root=path.resolve('.'),work=path.resolve('test-work/startup-desktop');
 const deadline=async(fn,timeout=20000)=>{
@@ -26,7 +27,7 @@ async function connectPage(child,base){
   const call=(method,params={},rootCommand=false)=>new Promise((resolve,reject)=>{const sequence=++id;const timer=setTimeout(()=>{calls.delete(sequence);reject(Error('CDP command timed out: '+method))},10000);calls.set(sequence,{resolve,reject,timer,method});child.send({type:'desktop-command',id:sequence,method,params,sessionId:rootCommand?undefined:sessionId})});
   const {targetInfos}=await call('Target.getTargets');const target=targetInfos.find(t=>t.type==='page'&&t.url.startsWith(base));assert.ok(target);
   ({sessionId}=await call('Target.attachToTarget',{targetId:target.targetId,flatten:true}));
-  return {call,evaluate:async expression=>(await call('Runtime.evaluate',{expression,returnByValue:true,userGesture:true})).result.value,event:method=>new Promise((resolve,reject)=>{const timer=setTimeout(()=>{events.delete(method);reject(Error('CDP event timed out: '+method))},10000);events.set(method,data=>{clearTimeout(timer);resolve(data)})})};
+  return {call,target,evaluate:async expression=>(await call('Runtime.evaluate',{expression,returnByValue:true,userGesture:true})).result.value,event:method=>new Promise((resolve,reject)=>{const timer=setTimeout(()=>{events.delete(method);reject(Error('CDP event timed out: '+method))},10000);events.set(method,data=>{clearTimeout(timer);resolve(data)})})};
 }
 
 test('[desktop-startup] page appears before validation, rejects media work until ready, and remains usable after an error',async()=>{
@@ -55,6 +56,49 @@ test('[desktop-startup] page appears before validation, rejects media work until
   try {await deadline(async()=>(await failed.request('status')).startup.state==='error');assert.match((await failed.request('status')).startup.message,/损坏/);assert.equal((await fetch(failed.base)).status,200)}finally{await failed.stop()}
 });
 
+test('[desktop-startup] window geometry fits scaled work areas, negative monitor coordinates and a removed monitor',()=>{
+  // Effective dimensions of a 1920x1080 display at 150%, after its taskbar.
+  const scaled={left:0,top:0,width:1280,height:680};
+  assert.deepEqual(desktopWindowBounds(scaled),{left:160,top:85,width:960,height:510});
+  const leftMonitor={left:-1920,top:40,width:1920,height:1040};
+  assert.deepEqual(desktopWindowBounds(leftMonitor),{left:-1680,top:170,width:1440,height:780});
+  assert.deepEqual(desktopWindowBounds(scaled,{left:-1800,top:0,width:1500,height:900}),{left:0,top:0,width:1280,height:680});
+  assert.deepEqual(desktopWindowBounds(scaled,{left:1200,top:650,width:600,height:450}),{left:680,top:230,width:600,height:450});
+});
+
+test('[desktop-startup] relaunch restores normal and maximized windows, ignores minimization and recovers corrupt preferences',async t=>{
+  const dir=path.join(work,'window-'+randomUUID());await mkdir(dir,{recursive:true});
+  const requestFile=path.join(dir,'launch.json'),settingsFile=path.join(dir,'desktop-window.json');
+  await writeFile(requestFile,JSON.stringify({app:root,paths:{node:process.execPath,ffmpeg:FF,ffprobe:FP},needsValidation:false,desktop:true}));
+  const children=[];
+  t.after(()=>{for(const child of children)if(child.exitCode===null){try{execFileSync('taskkill.exe',['/PID',String(child.pid),'/T','/F'],{windowsHide:true,stdio:'ignore'})}catch{child.kill()}}});
+  const saved=async()=>JSON.parse(await readFile(settingsFile,'utf8'));
+  async function launch(){
+    const child=spawn(process.execPath,[path.join(root,'scripts/desktop.mjs'),requestFile],{windowsHide:true,stdio:['ignore','pipe','pipe','ipc'],env:{...process.env,PORT:'0',MEDIASCOPE_DATA_DIR:dir,MEDIASCOPE_DESKTOP_HEADLESS:'1'}});
+    children.push(child);let output='';child.stdout.on('data',b=>output+=b);child.stderr.on('data',b=>output+=b);
+    await deadline(async()=>{if(child.exitCode!==null)throw Error(output);return output.includes('MediaScope 应用窗口已连接。')});
+    const base=output.match(/http:\/\/127\.0\.0\.1:\d+/)[0],page=await connectPage(child,base);
+    const {windowId}=await page.call('Browser.getWindowForTarget',{targetId:page.target.targetId},true);
+    return {page,windowId,bounds:async()=>(await page.call('Browser.getWindowBounds',{windowId},true)).bounds,
+      close:async()=>{await page.call('Browser.close',{},true).catch(()=>{});await deadline(async()=>child.exitCode!==null);assert.equal(child.exitCode,0,output);await assert.rejects(fetch(base));await assert.rejects(readFile(path.join(dir,'desktop-profile','Local State')),e=>e.code==='ENOENT')}};
+  }
+  let app=await launch();
+  const area=await app.page.evaluate('({left:screen.availLeft,top:screen.availTop,width:screen.availWidth,height:screen.availHeight})');
+  const adjusted={left:area.left+15,top:area.top+25,width:Math.round(area.width*.8),height:Math.round(area.height*.65)};
+  await app.page.call('Browser.setWindowBounds',{windowId:app.windowId,bounds:adjusted},true);
+  await deadline(async()=>JSON.stringify((await saved()).normal)===JSON.stringify(adjusted));await app.close();
+  app=await launch();assert.deepEqual(await app.bounds(),{...adjusted,windowState:'normal'});
+  await app.page.call('Browser.setWindowBounds',{windowId:app.windowId,bounds:{windowState:'maximized'}},true);
+  await deadline(async()=>(await saved()).maximized);assert.deepEqual((await saved()).normal,adjusted);
+  await app.page.call('Browser.setWindowBounds',{windowId:app.windowId,bounds:{windowState:'minimized'}},true);
+  await delay(450);assert.equal((await saved()).maximized,true);await app.close();
+  app=await launch();assert.equal((await app.bounds()).windowState,'maximized');
+  await app.page.call('Browser.setWindowBounds',{windowId:app.windowId,bounds:{windowState:'normal'}},true);
+  assert.deepEqual(await app.bounds(),{...adjusted,windowState:'normal'});await app.close();
+  await writeFile(settingsFile,'damaged window preferences');
+  app=await launch();assert.deepEqual(await app.bounds(),{...desktopWindowBounds(area),windowState:'normal'});await app.close();
+});
+
 test('[desktop-startup] owned browser opens automatically, refresh keeps the service alive, and closing its page stops the server',async()=>{
   const dir=path.join(work,'owned-'+randomUUID());await mkdir(dir,{recursive:true});
   const requestFile=path.join(dir,'launch.json');
@@ -67,6 +111,24 @@ test('[desktop-startup] owned browser opens automatically, refresh keeps the ser
     await deadline(async()=>{if(child.exitCode!==null)throw Error(output);return output.includes('MediaScope 应用窗口已连接。')});
     page=await connectPage(child,base);await page.call('Page.enable');
     await deadline(async()=>await page.evaluate('document.readyState === "complete"'));
+    const {windowId,bounds}=await page.call('Browser.getWindowForTarget',{targetId:page.target.targetId},true);
+    const area=await page.evaluate('({left:screen.availLeft,top:screen.availTop,width:screen.availWidth,height:screen.availHeight})');
+    assert.equal(bounds.windowState,'normal','The app must start as a regular window');
+    assert.equal(bounds.width,Math.round(area.width*.75));assert.equal(bounds.height,Math.round(area.height*.75));
+    assert.equal(bounds.left,area.left+Math.round((area.width-bounds.width)/2));
+    assert.equal(bounds.top,area.top+Math.round((area.height-bounds.height)/2));
+    // Inspect Edge's actual profile, rather than only asserting launch flags.
+    await page.call('Page.navigate',{url:'edge://version'});
+    const profilePath=await deadline(async()=>await page.evaluate('document.querySelector("#profile_path")?.textContent'));
+    assert.match(profilePath,/[\\/]Guest Profile(?:[\\/]|$)/,'The app must use a guest profile with no account sync');
+    await page.call('Page.navigate',{url:base});
+    await deadline(async()=>await page.evaluate('location.origin === '+JSON.stringify(base)+' && document.readyState === "complete"'));
+    const adjusted={left:area.left+20,top:area.top+30,width:Math.round(area.width*.8),height:Math.round(area.height*.8)};
+    await page.call('Browser.setWindowBounds',{windowId,bounds:adjusted},true);
+    await delay(450);
+    const current=(await page.call('Browser.getWindowBounds',{windowId},true)).bounds;
+    assert.deepEqual(current,{...adjusted,windowState:'normal'},'Polling must preserve user window changes');
+    await deadline(async()=>JSON.stringify(JSON.parse(await readFile(path.join(dir,'desktop-window.json'),'utf8')).normal)===JSON.stringify(adjusted));
     const loaded=page.event('Page.loadEventFired');await page.call('Page.reload');await loaded;
     assert.equal((await fetch(base)).status,200);
     await page.evaluate('document.querySelector("#theme-toggle").click()');
@@ -88,7 +150,8 @@ test('[desktop-startup] owned browser opens automatically, refresh keeps the ser
       assert.notEqual(status.status,'error',JSON.stringify(status));
       return status.status==='running';
     });
-    await page.call('Target.createTarget',{url:'about:blank'},true);
+    assert.equal(await page.evaluate('!!window.open("about:blank")'),true);
+    assert.ok((await page.call('Target.getTargets',{},true)).targetInfos.some(t=>t.type==='page'&&t.targetId!==page.target.targetId));
     const accepted=page.event('Page.javascriptDialogOpening');const secondClose=page.call('Page.close').catch(()=>{});
     await accepted;await page.call('Page.handleJavaScriptDialog',{accept:true}).catch(()=>{});await secondClose;
     // Shutdown can spend 3 + 10 + 10 + 10 + 3 seconds in its bounded stages.
@@ -97,6 +160,7 @@ test('[desktop-startup] owned browser opens automatically, refresh keeps the ser
     await assert.rejects(readFile(path.join(dir,activeJob.id,'job-input.json')),e=>e.code==='ENOENT','Closing the window must cancel and remove its encoding task');
     await assert.rejects(readFile(path.join(dir,'desktop-profile','Local State')),e=>e.code==='ENOENT');
     assert.notEqual(JSON.parse(await readFile(path.join(dir,'settings.json'),'utf8')).theme,'system');
+    assert.deepEqual(JSON.parse(await readFile(path.join(dir,'desktop-window.json'),'utf8')).normal,adjusted);
     await writeFile(path.join(dir,'launcher.log'),output);
   } finally {
     await writeFile(path.join(dir,'launcher.log'),output);

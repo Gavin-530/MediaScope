@@ -77,7 +77,7 @@ test('[basic-properties] presentation keeps specified unknown fields and differe
   const report={file:'<script>example</script>.mkv',size:0,raw:{format:{size:'0',duration:'0',start_time:'0',future_container:'container-value'},streams:[{index:0,codec_type:'video',codec_name:'test',color_range:'tv',future_stream:'stream-value',tags:{language:'zho',rotate:'0',custom_tag:'<img src=x>'},side_data_list:[{side_data_type:'Future side data',custom:'side-value'}]}],chapters:[],future_root:{custom:'root-value'}},frameSample:{frames:[{stream_index:0,pts_time:'0',color_range:'pc'}]}};
   const copy=structuredClone(report),html=basicInfoHTML(report);
   assert.deepEqual(report,copy);
-  for(const text of ['container-value','stream-value','root-value','side-value','Future side data','开头样本属性存在差异','0 byte','0 s'])assert.ok(html.includes(text),text);
+  for(const text of ['container-value','stream-value','root-value','side-value','Future side data','开头样本属性存在差异','0 B','0 s'])assert.ok(html.includes(text),text);
   assert.ok(!html.includes('<script>example</script>'));assert.ok(!html.includes('<img src=x>'));
   assert.ok(html.includes('&lt;script&gt;example&lt;/script&gt;'));
   assert.equal(componentDepth({components:[{index:1,bit_depth:0}]}),'分量 1 未指定（0）');

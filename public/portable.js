@@ -10,7 +10,7 @@ export const legacyPortableSchemas = {
   plan: "MediaScopePlan/1",
   bundle: "MediaScopeBundle/1",
 };
-export const maxPortableBytes = 256 * 1024 * 1024;
+export const maxPortableBytes = 256 * 1000 * 1000;
 
 const object = (value) =>
   value !== null && typeof value === "object" && !Array.isArray(value);

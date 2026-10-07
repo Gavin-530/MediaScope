@@ -81,6 +81,7 @@ test('[runtime-data] the byte limit evicts old records and oversized reports rem
   const id=randomUUID(),folder=path.join(dir,id);await mkdir(folder);const file=await open(path.join(folder,'report.json'),'w');await file.truncate(recentBytes+1);await file.close();
   const job={id,type:'inspect',status:'done',finishedAt:new Date(2000).toISOString(),reportPath:path.join(folder,'report.json')};jobs.set(id,job);
   await store.save(job,{type:'inspect',file:source});assert.equal(job.sessionOnly,true);assert.equal(await exists(job.reportPath),true);assert.equal(await exists(folder),false);
+  assert.equal(job.retentionMessage,'报告超过 100 MB，仅在本次会话可用；请导出保存');
   await store.prune(jobs,inputs,{clear:true});assert.equal(await exists(job.reportPath),false);assert.equal(jobs.size,0);
 });
 
@@ -110,4 +111,19 @@ test('[runtime-data] legacy explicitly retained real trial videos migrate outsid
   for(const file of report.experiment.retainedFiles)assert.equal(digest(await readFile(file)),originals.get(path.basename(file)));
   const jobs=new Map(records.map(r=>[r.job.id,r.job]));await store.prune(jobs,new Map(),{clear:true});
   for(const file of report.experiment.retainedFiles)assert.equal(await exists(file),true);
+});
+
+
+test('[runtime-data] mixed precision restoration and retention preserve the actual newest ten',async()=>{
+  const dir=await temp(),store=new RuntimeData(dir);await store.init();const jobs=new Map(),inputs=new Map();
+  const times=['2026-10-05T03:04:05Z','2026-10-05T03:04:05.123Z','2026-10-05T03:04:05.1230001Z',...Array.from({length:8},(_,i)=>'2026-10-05T03:04:'+String(6+i).padStart(2,'0')+'Z')];
+  for(const finishedAt of times){
+    const id=randomUUID(),folder=path.join(dir,id);await mkdir(folder);await writeFile(path.join(folder,'report.json'),'{}');
+    const job={id,type:'inspect',status:'done',finishedAt,reportPath:path.join(folder,'report.json')},input={type:'inspect',file:source};
+    jobs.set(id,job);inputs.set(id,input);await store.save(job,input);
+  }
+  assert.deepEqual((await new RuntimeData(dir).init()).map(r=>r.job.finishedAt),times);
+  await store.prune(jobs,inputs);
+  assert.deepEqual([...jobs.values()].map(j=>j.finishedAt),times.slice(1));
+  assert.deepEqual((await new RuntimeData(dir).init()).map(r=>r.job.finishedAt),times.slice(1));
 });

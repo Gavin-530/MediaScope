@@ -1,9 +1,10 @@
 {
   "schema": 1,
   "features": [
+    {"id":"units","purpose":"十进制容量与码率自适应、规范大小写、图轴单位稳定、原始字节提示及报告精确往返和旧字段兼容","files":["test/units.test.mjs","test/browser.test.mjs"],"names":"\\[units\\]"},
     {"id":"basic-properties","purpose":"真实多位深/采样与 RGB/灰度/透明格式、色彩/SAR/旋转/扫描/附加图像；原始证据、抽样状态、解析边界、性能观察及新旧报告浏览器往返","files":["test/basic-properties.test.mjs","test/report.test.mjs","test/browser.test.mjs"],"names":"\\[basic-properties\\]"},
     {"id":"runtime-data","purpose":"近期十次和容量淘汰、重启恢复、导出保护、清理界面、退出缓存回收与独立保存视频","files":["test/runtime-data.test.mjs","test/runtime-data-browser.test.mjs","test/desktop-browser.test.mjs"],"names":"\\[runtime-data\\]|owned browser opens"},
-    {"id":"desktop-startup","purpose":"日常启动跳过环境扫描，显式检查检测变化、页面先显示与环境就绪门槛、失败保留记录、独立窗口刷新和退出确认与服务清理；真实文件锁下的原子状态写入","files":["test/startup-desktop.test.mjs","test/desktop-browser.test.mjs","test/deployment-json.test.mjs"],"names":"\\[desktop-startup\\]"},
+    {"id":"desktop-startup","purpose":"日常启动跳过环境扫描，显式检查检测变化、页面先显示与环境就绪门槛、失败保留记录、专用访客窗口与同步隔离、首次可用工作区 75% 居中、窗口大小/位置/最大化跨启动恢复、缩放与屏幕外位置适配、最小化忽略及损坏设置恢复、独立窗口刷新和退出确认与服务清理；真实文件锁下的原子状态写入","files":["test/startup-desktop.test.mjs","test/desktop-browser.test.mjs","test/deployment-json.test.mjs"],"names":"\\[desktop-startup\\]"},
     {"id":"startup-security","purpose":"实际 HTTP 启动、会话令牌、本机访问保护，以及真实被禁端口的启动恢复","files":["test/server.test.mjs","test/browser.test.mjs","test/http-startup.test.mjs"],"names":"API protects|\\[startup\\]|\\[startup-infrastructure\\]"},
     {"id":"media-analysis","purpose":"真实多音轨媒体、显示帧/包体积、H.264/HEVC/AV1 头与 GOP","files":["test/engine.test.mjs","test/browser.test.mjs"],"names":"Unicode path|packet accounting|NAL headers|open GOP|AV1 trace|\\[analysis\\]"},
     {"id":"metrics-colors","purpose":"同文件恒等、有损误差、PSNR/SSIM/VMAF、8/10/12-bit 与颜色解释","files":["test/engine.test.mjs","test/bitdepth.test.mjs","test/browser.test.mjs"],"names":"PSNR|SSIM|YUV matrix|VMAF|exact 8/10|interlaced|\\[comparison\\]"},
