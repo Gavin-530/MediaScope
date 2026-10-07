@@ -25,6 +25,12 @@ jobs:
         run: |
           $ErrorActionPreference='Stop'
           . ./scripts/deployment.ps1
+          New-Item -ItemType Directory -Force .build/downloads | Out-Null
+          foreach($component in (Read-Json 'runtime-lock.json').components){
+            $archive=Join-Path (Get-Location).Path ".build/downloads/$($component.name).zip"
+            Invoke-WebRequest -UseBasicParsing -Uri $component.url -OutFile $archive -TimeoutSec 300
+            Assert-Hash $archive $component.sha256
+          }
           $runtime=Get-PrivateRuntime (Get-Location).Path (Join-Path (Get-Location).Path '.build/ci-runtime')
           Add-Content -LiteralPath $env:GITHUB_PATH -Value (Split-Path -Parent $runtime.node) -Encoding UTF8
           Add-Content -LiteralPath $env:GITHUB_ENV -Value "MEDIASCOPE_NODE_PATH=$($runtime.node)" -Encoding UTF8
