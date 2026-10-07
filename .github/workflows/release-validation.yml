@@ -1,0 +1,82 @@
+name: MediaScope 0.2.7 package validation
+
+on:
+  push:
+    branches: [codex/verify-release-0.2.7]
+
+permissions:
+  contents: read
+
+jobs:
+  exact-package:
+    name: Verify uploaded ZIP and real first online install
+    runs-on: windows-2022
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - name: Check out the exact release source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: cfe37d7161fc7d0f08e479ca814e87020ab02fe1
+          persist-credentials: false
+      - name: Prepare locked runtime
+        run: |
+          $ErrorActionPreference='Stop'
+          . ./scripts/deployment.ps1
+          $runtime=Get-PrivateRuntime (Get-Location).Path (Join-Path (Get-Location).Path '.build/ci-runtime')
+          Add-Content -LiteralPath $env:GITHUB_PATH -Value (Split-Path -Parent $runtime.node) -Encoding UTF8
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "MEDIASCOPE_NODE_PATH=$($runtime.node)" -Encoding UTF8
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "FFMPEG_PATH=$($runtime.ffmpeg)" -Encoding UTF8
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "FFPROBE_PATH=$($runtime.ffprobe)" -Encoding UTF8
+      - name: Download and verify the exact uploaded draft asset
+        env:
+          RELEASE_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference='Stop'
+          New-Item -ItemType Directory -Force releases,.build/release-validation | Out-Null
+          @'
+          import fs from 'node:fs/promises';
+          import {createHash} from 'node:crypto';
+          const url='https://api.github.com/repos/Gavin-530/MediaScope/releases/assets/618043563';
+          const response=await fetch(url,{headers:{Authorization:'Bearer '+process.env.RELEASE_TOKEN,Accept:'application/octet-stream','User-Agent':'MediaScope-release-validation'},redirect:'manual',signal:AbortSignal.timeout(60000)});
+          let download=response;
+          if([301,302,303,307,308].includes(response.status)){
+            const target=new URL(response.headers.get('location'));
+            if(target.protocol!=='https:'||target.hostname!=='release-assets.githubusercontent.com'||target.username||target.password)throw Error('Unexpected asset redirect');
+            download=await fetch(target,{redirect:'error',signal:AbortSignal.timeout(120000)});
+          }
+          if(!download.ok)throw Error('Asset download HTTP '+download.status);
+          const bytes=Buffer.from(await download.arrayBuffer()),hash=createHash('sha256').update(bytes).digest('hex');
+          if(bytes.length!==170316||hash!=='4cc24dd6cebc628fc87fe959e18c1ac5b79a195769db68478fdbfe3b8b4cf035')throw Error('ZIP size or SHA-256 mismatch');
+          await fs.writeFile('releases/MediaScope-0.2.7-win-x64.zip',bytes);
+          await fs.writeFile('.build/release-validation/asset.json',JSON.stringify({source:'cfe37d7161fc7d0f08e479ca814e87020ab02fe1',assetId:618043563,bytes:bytes.length,sha256:hash},null,2));
+          console.log('Verified exact uploaded ZIP: '+hash);
+          '@ | node --input-type=module
+          if($LASTEXITCODE -ne 0){throw 'Exact asset verification failed'}
+          if(git status --porcelain=v1 --untracked-files=normal){throw 'Release source is not clean'}
+      - name: Validate offline package, upgrade, rollback and report retention
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/record-test.ps1 -Kind Package -Archive releases/MediaScope-0.2.7-win-x64.zip -RequireClean -ResultPath .build/release-validation/package.json
+          if($LASTEXITCODE -ne 0){throw 'Package validation failed'}
+      - name: Validate a real first online deployment
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/record-test.ps1 -Kind OnlineDeployment -Archive releases/MediaScope-0.2.7-win-x64.zip -RequireClean -ResultPath .build/release-validation/online.json
+          if($LASTEXITCODE -ne 0){throw 'Real first online deployment failed'}
+      - name: Collect exact-asset validation evidence
+        if: always()
+        run: |
+          $proof=Join-Path (Get-Location).Path '.build/release-validation/proof'
+          New-Item -ItemType Directory -Force $proof | Out-Null
+          Get-ChildItem -LiteralPath .build/release-validation -Filter '*.json' | Copy-Item -Destination $proof
+          if(Test-Path -LiteralPath evidence-archive/records){Copy-Item -LiteralPath evidence-archive/records -Destination $proof -Recurse}
+      - name: Upload independent deployment records
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: mediascope-0.2.7-exact-package-evidence
+          path: .build/release-validation/proof
+          retention-days: 90
+          if-no-files-found: error
+          overwrite: false
