@@ -30,7 +30,7 @@ jobs:
           Add-Content -LiteralPath $env:GITHUB_ENV -Value "MEDIASCOPE_NODE_PATH=$($runtime.node)" -Encoding UTF8
           Add-Content -LiteralPath $env:GITHUB_ENV -Value "FFMPEG_PATH=$($runtime.ffmpeg)" -Encoding UTF8
           Add-Content -LiteralPath $env:GITHUB_ENV -Value "FFPROBE_PATH=$($runtime.ffprobe)" -Encoding UTF8
-      - name: Download and verify the exact uploaded draft asset
+      - name: Read and verify the exact candidate ZIP through read-only Git access
         env:
           RELEASE_TOKEN: ${{ github.token }}
         run: |
@@ -39,16 +39,11 @@ jobs:
           @'
           import fs from 'node:fs/promises';
           import {createHash} from 'node:crypto';
-          const url='https://api.github.com/repos/Gavin-530/MediaScope/releases/assets/618043563';
-          const response=await fetch(url,{headers:{Authorization:'Bearer '+process.env.RELEASE_TOKEN,Accept:'application/octet-stream','User-Agent':'MediaScope-release-validation'},redirect:'manual',signal:AbortSignal.timeout(60000)});
-          let download=response;
-          if([301,302,303,307,308].includes(response.status)){
-            const target=new URL(response.headers.get('location'));
-            if(target.protocol!=='https:'||target.hostname!=='release-assets.githubusercontent.com'||target.username||target.password)throw Error('Unexpected asset redirect');
-            download=await fetch(target,{redirect:'error',signal:AbortSignal.timeout(120000)});
-          }
-          if(!download.ok)throw Error('Asset download HTTP '+download.status);
-          const bytes=Buffer.from(await download.arrayBuffer()),hash=createHash('sha256').update(bytes).digest('hex');
+          const url='https://api.github.com/repos/Gavin-530/MediaScope/git/blobs/fb02905bac2ef661b5a4ade2765301f3d1e598d8';
+          const response=await fetch(url,{headers:{Authorization:'Bearer '+process.env.RELEASE_TOKEN,Accept:'application/vnd.github+json','User-Agent':'MediaScope-release-validation'},redirect:'error',signal:AbortSignal.timeout(60000)});
+          if(!response.ok)throw Error('Candidate blob read HTTP '+response.status);
+          const blob=await response.json();if(blob.encoding!=='base64')throw Error('Unexpected Git blob encoding');
+          const bytes=Buffer.from(blob.content.replace(/\s/g,''),'base64'),hash=createHash('sha256').update(bytes).digest('hex');
           if(bytes.length!==170316||hash!=='4cc24dd6cebc628fc87fe959e18c1ac5b79a195769db68478fdbfe3b8b4cf035')throw Error('ZIP size or SHA-256 mismatch');
           await fs.writeFile('releases/MediaScope-0.2.7-win-x64.zip',bytes);
           await fs.writeFile('.build/release-validation/asset.json',JSON.stringify({source:'cfe37d7161fc7d0f08e479ca814e87020ab02fe1',assetId:618043563,bytes:bytes.length,sha256:hash},null,2));
@@ -80,3 +75,4 @@ jobs:
           retention-days: 90
           if-no-files-found: error
           overwrite: false
+          include-hidden-files: true
