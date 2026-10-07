@@ -16,8 +16,8 @@ if(!['full','core','browser'].includes(suite))throw Error('Suite must be full, c
 if(release&&(suite!=='full'||ref))throw Error('--release requires the full suite against the clean current checkout');
 if(!Number.isSafeInteger(maxLogMiB)||maxLogMiB<1||maxLogMiB>256||!Number.isSafeInteger(warnTotalMiB)||warnTotalMiB<1)throw Error('Invalid evidence size limit');
 const now=()=>new Date().toISOString().replace(/\.\d{3}Z$/,'Z');
-const id=now().replace(/[-:]/g,'')+'-'+randomUUID().slice(0,8);
-const work=path.join(project,'evidence-archive','pending','test-runs',id),source=path.join(work,'source'),evidence=path.join(work,'evidence');
+let id=now().replace(/[-:]/g,'')+'-'+randomUUID().slice(0,4);
+let work=path.join(project,'evidence-archive','pending','test-runs',id),source=path.join(work,'source'),evidence=path.join(work,'evidence');
 const sha=b=>createHash('sha256').update(b).digest('hex');
 const git=(...a)=>execFileSync('git',['-C',project,...a],{encoding:'utf8',windowsHide:true}).trim();
 const psFile=path.join(project,'scripts','test-storage.ps1');
@@ -36,16 +36,19 @@ await fs.mkdir(path.dirname(work),{recursive:true});
 const lockPath=path.join(project,'evidence-archive','pending','test-run.lock');
 const lock=await fs.open(lockPath,'wx').catch(()=>{throw Error('Another test run is active, or an interrupted test-run.lock needs inspection')});
 await lock.writeFile(JSON.stringify({pid:process.pid,runId:id,started:now()}));
-let gate,exitCode=2,version=JSON.parse(await fs.readFile(path.join(project,'package.json'),'utf8')).version,output='',events=[],preflight={},command;
+let gate,allocated=false,exitCode=2,version=JSON.parse(await fs.readFile(path.join(project,'package.json'),'utf8')).version,output='',events=[],preflight={},command;
 const started=now();
 const manifest={schema:3,evidenceRevision:2,kind:'App',runId:id,startedAt:started,scope:suite,invocation:{executable:process.execPath,args:process.argv.slice(1),cwd:process.cwd()},releaseCheck:{requested:release,ready:false,reasons:['Not evaluated']},host:{platform:process.platform,architecture:process.arch,release:os.release()},source:{},harness:{},outcome:'blocked',exitCode:2};
 if(process.env.GITHUB_ACTIONS==='true')manifest.github={repository:process.env.GITHUB_REPOSITORY,runId:process.env.GITHUB_RUN_ID,runAttempt:process.env.GITHUB_RUN_ATTEMPT,sha:process.env.GITHUB_SHA,job:process.env.GITHUB_JOB,ref:process.env.GITHUB_REF,event:process.env.GITHUB_EVENT_NAME};
 try {
-  await json(path.join(evidence,'manifest.json'),{...manifest,version,blockedReason:'Execution has not completed'});
   gate=spawn('powershell.exe',psArgs('Lock'),{windowsHide:true,stdio:['pipe','pipe','pipe']});
   gate.stdin.on('error',()=>{});
   await new Promise((resolve,reject)=>{let message='';const timer=setTimeout(()=>reject(Error('Evidence lock timeout')),180000);gate.stdout.on('data',b=>{message+=b;if(message.includes('READY')){clearTimeout(timer);resolve()}});gate.stderr.on('data',b=>message+=b);gate.once('error',e=>{clearTimeout(timer);reject(e)});gate.once('exit',()=>{clearTimeout(timer);reject(Error('Evidence lock/verification failed: '+message))})});
-  await fs.mkdir(evidence,{recursive:true});await fs.mkdir(source,{recursive:true});
+  id=ps('Allocate').trim();manifest.runId=id;allocated=true;
+  work=path.join(project,'evidence-archive','pending','test-runs',id);source=path.join(work,'source');evidence=path.join(work,'evidence');
+  await lock.truncate(0);await lock.write(JSON.stringify({pid:process.pid,runId:id,started}),0,'utf8');
+  await json(path.join(evidence,'manifest.json'),{...manifest,version,blockedReason:'Execution has not completed'});
+  await fs.mkdir(source,{recursive:true});
   manifest.harness={commit:git('rev-parse','HEAD'),workingTree:git('status','--porcelain=v1','--untracked-files=normal').split('\n').filter(Boolean)};
   if(requireClean&&manifest.harness.workingTree.length)throw Error('TEST_INFRA: --require-clean requires a clean working tree');
   if(ref){
@@ -73,7 +76,7 @@ try {
   await copy(path.join(project,'test'),path.join(source,'test'));
   await copy(path.join(project,'scripts','check-environment.mjs'),path.join(source,'scripts','check-environment.mjs'));
   for(const name of ['desktop.mjs','runtime-data.mjs','time.mjs','deployment.ps1','validate-launch.ps1','manage.ps1','install-location.ps1','start-source.ps1'])await copy(path.join(project,'scripts',name),path.join(source,'scripts',name));
-  const harnessScripts=['test.mjs','test-evidence.mjs','test-storage.ps1','evidence-lib.ps1','local-data.ps1','github-evidence-lib.ps1','import-github-test-evidence.ps1','run-ci-tests.ps1','export-github-test-evidence.ps1','sync-github-test-evidence.mjs','migrate-test-evidence.ps1','organize-test-evidence.ps1','list-test-evidence.ps1','verify-test-evidence.ps1'];
+  const harnessScripts=['test.mjs','test-evidence.mjs','test-storage.ps1','evidence-lib.ps1','local-data.ps1','github-evidence-lib.ps1','import-github-test-evidence.ps1','run-ci-tests.ps1','export-github-test-evidence.ps1','sync-github-test-evidence.mjs','migrate-test-evidence.ps1','organize-test-evidence.ps1','rename-evidence-records.ps1','list-test-evidence.ps1','verify-test-evidence.ps1'];
   for(const name of harnessScripts)await copy(path.join(project,'scripts',name),path.join(source,'scripts',name));
   for(const name of (await fs.readdir(path.join(project,'scripts'))).filter(name=>name.startsWith('github-archive')&&/\.(mjs|ps1)$/.test(name)))await copy(path.join(project,'scripts',name),path.join(source,'scripts',name));
   const importerPath='evidence-archive/tools/import-local-test-evidence.ps1';
@@ -137,6 +140,7 @@ try {
 }catch(e){output+='\n'+e.stack+'\n';manifest.blockedReason=e.message;console.error(e.message)}
 finally {
   try {
+    if(!allocated)throw Error('No identity allocated under the evidence lock; no evidence files written');
     Object.assign(manifest,{version,endedAt:now(),exitCode,command});
     await json(path.join(evidence,'manifest.json'),manifest);
     const passedNames=events.filter(e=>e.type==='test:pass'&&!e.data.skip&&!e.data.todo).map(e=>e.data.name);

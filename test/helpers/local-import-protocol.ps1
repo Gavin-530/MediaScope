@@ -57,7 +57,7 @@ $destination=Join-Path $root $identity.path
 $importedHashes=@(Get-EvidenceFiles $destination|ForEach-Object {$_.path+':'+(Get-FileHash -LiteralPath $_.full).Hash})
 if(($originalHashes -join "`n") -ne ($importedHashes -join "`n") -or $identity.outcome -ne 'failed' -or $identity.origin -ne 'local' -or !$identity.path.StartsWith('records/')){throw 'Imported bytes, outcome or origin changed'}
 if(!(Test-Path $receivedFixture) -or @((Get-ChildItem (Join-Path $root 'pending') -Directory)).Count){throw 'Received originals lost or successful transaction left pending'}
-$audit=@(Get-EvidenceRecords $root|Where-Object {$_.relative -like 'records/*_local-evidence-import_*'})[0]
+$audit=@(Get-EvidenceRecords $root|Where-Object {Test-Path (Join-Path $_.source 'original/receipt.json')})[0]
 $receipt=Get-Content (Join-Path $audit.source 'original/receipt.json') -Raw|ConvertFrom-EvidenceJson
 $localReceipt=@($receipt.records|Where-Object {$_.path -eq $identity.path})[0]
 if($receipt.contributor -ne 'Alice Example' -or @($receipt.records).Count -ne 2 -or $localReceipt.sourceCommit -ne ('a'*40)){throw 'Attribution or source commit lost'}
@@ -160,7 +160,7 @@ try{
   [IO.Directory]::Delete($loopFull)
 }
 if((Get-FileHash $ownTool).Hash -ne $ownToolHash -or (Test-Path (Join-Path $root 'evidence-archive'))){throw 'Foreign tool overwritten or nested formal archive created'}
-$wholeAudit=@(Get-EvidenceRecords $root|Where-Object {$_.relative -like 'records/*_local-evidence-import_*'} | Where-Object {(Get-Content (Join-Path $_.source 'original/receipt.json') -Raw|ConvertFrom-EvidenceJson).batch -eq 'whole'})[0]
+$wholeAudit=@(Get-EvidenceRecords $root|Where-Object {Test-Path (Join-Path $_.source 'original/receipt.json')} | Where-Object {(Get-Content (Join-Path $_.source 'original/receipt.json') -Raw|ConvertFrom-EvidenceJson).batch -eq 'whole'})[0]
 $wholeReceipt=Get-Content (Join-Path $wholeAudit.source 'original/receipt.json') -Raw|ConvertFrom-EvidenceJson
 if(!$wholeReceipt.sourceCatalogs -or !$wholeReceipt.skippedSubtrees -or $wholeReceipt.records.Count -ne 4){throw 'Donor catalogs or skipped-tree provenance missing'}
 Write-Output 'PASS: whole archives flatten sealed records while skipping cyclic inboxes, foreign tools and pending data'

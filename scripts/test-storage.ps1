@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][ValidateSet('Validate','Lock','Zip','Commit','Clean')][string]$Action,[string]$Source,[string]$Destination)
+param([Parameter(Mandatory=$true)][ValidateSet('Validate','Lock','Allocate','Zip','Commit','Clean')][string]$Action,[string]$Source,[string]$Destination)
 $ErrorActionPreference='Stop'
 $project=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..')).TrimEnd('\')
 . (Join-Path $PSScriptRoot 'evidence-lib.ps1')
@@ -14,6 +14,7 @@ function Assert-Local([string]$Value) {
   return $full
 }
 switch($Action){
+  Allocate {New-EvidenceRunId $project}
   Validate {$null=Assert-Local $Source;$null=Assert-Local $root}
   Lock {
     $gate=$null
@@ -43,7 +44,7 @@ switch($Action){
   Clean {
     $src=Assert-Local $Source
     $allowed=Join-Path (Get-EvidencePendingRoot $project) 'test-runs'
-    if((Split-Path -Parent $src) -ne $allowed -or (Split-Path -Leaf $src) -notmatch '^\d{8}T\d{6}(?:\d{3}|\.[0-9]+)?Z-[a-f0-9]{8}$'){throw 'Invalid test sandbox'}
+    if((Split-Path -Parent $src) -ne $allowed -or (Split-Path -Leaf $src) -notmatch '^\d{8}T\d{6}(?:\d{3}|\.[0-9]+)?Z-(?:[a-f0-9]{4}|[a-f0-9]{8})$'){throw 'Invalid test sandbox'}
     foreach($item in Get-ChildItem -LiteralPath $src -Recurse -Force){if($item.Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Linked sandbox entry'}}
     Remove-Item -LiteralPath $src -Recurse -Force
   }

@@ -45,7 +45,8 @@ try {
       if($m.github.repository -ne $identity.repository -or $m.github.runId -ne $identity.runId -or $m.github.runAttempt -ne $identity.runAttempt -or $m.github.sha -ne $identity.sha){throw 'Unfinished evidence identity mismatch'}
     }else{
       $version=(Get-Content -LiteralPath (Join-Path $project 'package.json') -Raw|ConvertFrom-Json).version
-      $m=[pscustomobject]@{schema=3;evidenceRevision=2;kind='App';version=$version;runId=$id;scope='full';outcome='blocked';exitCode=2;startedAt=[DateTime]::UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", [Globalization.CultureInfo]::InvariantCulture);github=$identity;source=@{kind='working-tree';commit=$identity.sha};harness=@{commit=$identity.sha}}
+      $diagnosticRunId=New-EvidenceRunId $project
+      $m=[pscustomobject]@{schema=3;evidenceRevision=2;kind='App';version=$version;runId=$diagnosticRunId;scope='full';outcome='blocked';exitCode=2;startedAt=[DateTime]::UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", [Globalization.CultureInfo]::InvariantCulture);github=$identity;source=@{kind='working-tree';commit=$identity.sha};harness=@{commit=$identity.sha}}
       $raw=$null
     }
     # A forced interruption or bootstrap failure is blocked, never a fabricated pass.

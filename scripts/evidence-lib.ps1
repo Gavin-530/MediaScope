@@ -124,7 +124,7 @@ function Test-EvidenceRecord($Root,$Relative) {
       $a=$direct.archive
       if($a.schema -ne 1 -or $a.operation -ne 'historical-compaction' -or $a.previousChecksumsSha256 -notmatch '^[a-fA-F0-9]{64}$' -or !$a.originalRelative -or $a.rerun -ne $false){throw 'Invalid historical compaction metadata'}
       $time=Get-EvidenceRunTime $a.identifier
-      if($Relative.StartsWith('records/') -and $Relative -notin @(('records/'+(Convert-EvidenceRunName $a.identifier)),('records/'+(Convert-EvidenceRunName $a.identifier -Legacy)))){throw 'Compacted record location mismatch'}
+      if($Relative.StartsWith('records/') -and $Relative -notin @(('records/'+(Convert-EvidenceRunName $a.identifier)),('records/'+(Convert-EvidenceRunName $a.identifier -Legacy)),('records/'+(Get-EvidenceReadableName $direct $a.identifier)),('records/'+(Get-EvidenceReadableName $direct $a.identifier -Generic)))){throw 'Compacted record location mismatch'}
       if($direct.kind -notin @('App','Package','OnlineDeployment','Custom','build-maintenance','pull-request-merge-audit','test-system-audit','generated-fixture-snapshot','historical-evidence-collection')){throw 'Invalid historical record kind'}
       if($direct.runId -and $direct.runId -ne $a.identifier){throw 'Compacted run identity mismatch'}
       $originalOutcome=if($direct.outcome){$direct.outcome}else{'archived'}
@@ -151,7 +151,7 @@ function Test-EvidenceRecord($Root,$Relative) {
     if($direct.evidenceRevision -eq 2){
       if($direct.kind -notin @('App','Package','Deployment','OnlineDeployment','Custom')){throw 'Invalid independent record kind'}
       if(!$Relative.StartsWith('records/') -and !$Relative.StartsWith('runs/')){throw 'Invalid independent record location'}
-      if($Relative.StartsWith('records/') -and $Relative -notin @(('records/'+(Convert-EvidenceRunName $direct.runId)),('records/'+(Convert-EvidenceRunName $direct.runId -Legacy)))){throw 'Independent record location mismatch'}
+      if($Relative.StartsWith('records/') -and $Relative -notin @(('records/'+(Convert-EvidenceRunName $direct.runId)),('records/'+(Convert-EvidenceRunName $direct.runId -Legacy)),('records/'+(Get-EvidenceReadableName $direct $direct.runId)),('records/'+(Get-EvidenceReadableName $direct $direct.runId -Generic)))){throw 'Independent record location mismatch'}
       if($Relative.StartsWith('records/')){$Relative='runs/'+$direct.version+'/'+$direct.runId}
     }
   }
@@ -397,10 +397,10 @@ function Get-EvidencePayload($Record) {
   return @{source=$Record.source;relative=$relative}
 }
 function Get-EvidenceIdentifierPattern {
-  return '(?:[0-9]{8}(?:T[0-9]{6}(?:[0-9]{3}|\.[0-9]+)?Z)?|undated)-[a-f0-9]{8}'
+  return '(?:[0-9]{8}(?:T[0-9]{6}(?:[0-9]{3}|\.[0-9]+)?Z)?|undated)-(?:[a-f0-9]{4}|[a-f0-9]{8})'
 }
 function Get-EvidenceRunTime([string]$RunId) {
-  if($RunId -notmatch ('^(?<stamp>[0-9]{8}(?:T[0-9]{6}(?:[0-9]{3}|\.[0-9]+)?Z)?|undated)-(?<nonce>[a-f0-9]{8})$')){throw 'Invalid evidence run identifier'}
+  if($RunId -notmatch ('^(?<stamp>[0-9]{8}(?:T[0-9]{6}(?:[0-9]{3}|\.[0-9]+)?Z)?|undated)-(?<nonce>[a-f0-9]{4}|[a-f0-9]{8})$')){throw 'Invalid evidence run identifier'}
   $stamp=$Matches.stamp;$nonce=$Matches.nonce
   if($stamp -eq 'undated'){return @{namePart='undated';nonce=$nonce;value=$null;precision='unknown';timeZone=$null;identifier=$RunId}}
   $styles=[Globalization.DateTimeStyles]::None
@@ -431,10 +431,91 @@ function Convert-EvidenceRunName([string]$RunId,[switch]$Legacy) {
   $namePart=if($Legacy -and $time.timeZone -eq 'UTC'){$time.value.Replace(':','-')}else{$time.namePart}
   return $namePart+'-'+$time.nonce
 }
+function Get-EvidenceReadableName($Manifest,[string]$Identifier,[switch]$Generic) {
+  # A directory is a derived display name, never a replacement for sealed identity.
+  if(!$Identifier){$Identifier=if($Manifest.archiveRevision -eq 1){$Manifest.archive.identifier}else{$Manifest.runId}}
+  $time=Get-EvidenceRunTime $Identifier
+  $stamp=$time.namePart -replace '\.[0-9]+(?=Z$)',''
+  if($time.precision -eq 'day'){$stamp=$stamp.Replace('-','')}
+  $kind=if($Manifest){$Manifest.kind}else{'historical-evidence-collection'}
+  if($kind -isnot [string] -or $kind -cnotmatch '^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*$' -or $kind.Length -gt 32){throw 'Invalid evidence kind for directory description'}
+  $label=$kind
+  if($Manifest.scope -and (!$Generic -or $kind -eq 'App')){
+    $scope=$Manifest.scope
+    if($scope -isnot [string] -or $scope -cnotmatch '^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$'){throw 'Invalid evidence scope for directory description'}
+    if(($kind.Length+1+$scope.Length) -le 32){$label+='-'+$scope}
+  }elseif(!$Generic -and $kind -eq 'Custom' -and $Manifest.label -is [string] -and $Manifest.label -cmatch '^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$' -and ($kind.Length+1+$Manifest.label.Length) -le 32){
+    $label+='-'+$Manifest.label
+  }
+  if($label.Length -gt 32){throw 'Evidence description exceeds 32 characters'}
+  return $stamp+'_'+$time.nonce.Substring($time.nonce.Length-4)+'_'+$label
+}
+function New-EvidenceRunId([string]$Project,[scriptblock]$TokenGenerator={ [guid]::NewGuid().ToString('N').Substring(0,4) },[scriptblock]$Clock={ [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ') }) {
+  # Caller holds recording.lock. Reserve the whole second/short-token space,
+  # including legacy names and unfinished runs, without relying on a catalog.
+  $root=Get-EvidenceRoot $Project
+  $occupied=@{}
+  foreach($record in Get-EvidenceRecords $root){
+    try{
+      $leaf=Split-Path -Leaf $record.source
+      if($leaf -match '^(?<stamp>[0-9]{8}(?:T[0-9]{6}Z)?|undated)_(?<token>[a-f0-9]{4})_[A-Za-z][A-Za-z0-9-]{0,31}$'){
+        $time=Get-EvidenceRunTime ($Matches.stamp+'-'+$Matches.token)
+      }else{$time=Get-EvidenceLocationTime $record.relative}
+      $stamp=$time.namePart -replace '\.[0-9]+(?=Z$)',''
+      $occupied[$stamp+'-'+$time.nonce.Substring($time.nonce.Length-4)]=$true
+    }catch{continue} # Unrelated damaged content must not prevent a new record.
+  }
+  for($attempt=0;$attempt -lt 1024;$attempt++){
+    $stamp=& $Clock
+    $token=& $TokenGenerator
+    if($stamp -notmatch '^[0-9]{8}T[0-9]{6}Z$' -or $token -notmatch '^[a-f0-9]{4}$'){throw 'Invalid identity allocator output'}
+    $id=$stamp+'-'+$token
+    if($occupied.ContainsKey($id)){continue}
+    $pending=Join-Path $root 'pending'
+    $unfinished=@(foreach($parent in @('test-runs','staging')){
+      $base=Assert-EvidencePath $Project (Join-Path $pending $parent)
+      if(Test-Path -LiteralPath $base){foreach($dir in Get-ChildItem -LiteralPath $base -Directory -Force){
+        if($dir.Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Linked unfinished run'}
+        if($dir.Name -eq $id){$dir}
+      }}
+    })
+    if(!$unfinished.Count){return $id}
+  }
+  throw 'Could not allocate a unique four-character run identity; no record overwritten'
+}
+function Get-EvidenceRecordReadableName([string]$Root,[switch]$Generic) {
+  $rp=Join-Path $Root 'record.json'
+  if(Test-Path -LiteralPath $rp){
+    $r=Get-Content -LiteralPath $rp -Raw -Encoding UTF8|ConvertFrom-EvidenceJson
+    $mp=Join-Path $Root 'original/manifest.json'
+    $m=if(Test-Path -LiteralPath $mp){Get-Content -LiteralPath $mp -Raw -Encoding UTF8|ConvertFrom-EvidenceJson}else{$null}
+    $id=if($m){(Get-EvidenceOriginalTime $r.originalRelative).identifier}else{'undated-'+$r.originalChecksumsSha256.Substring(0,8).ToLowerInvariant()}
+    return (Get-EvidenceReadableName $m $id -Generic:$Generic)
+  }
+  $m=Get-Content -LiteralPath (Join-Path $Root 'manifest.json') -Raw -Encoding UTF8|ConvertFrom-EvidenceJson
+  return (Get-EvidenceReadableName $m -Generic:$Generic)
+}
+function Resolve-EvidenceLocation([string]$Root,[string]$Relative) {
+  if($Relative -notmatch '^records/[^/]+(?:/.*)?$' -or $Relative -match '(^|/)\.\.?(?:/|$)|[\\:]'){throw 'Invalid evidence lookup path'}
+  $parts=$Relative.Split('/');$leaf=$parts[1]
+  $candidates=@()
+  foreach($record in Get-EvidenceRecords $Root){
+    try{
+      $p=Get-EvidencePayload $record
+      $id=(Get-EvidenceOriginalTime $p.relative).identifier
+      $names=@((Split-Path -Leaf $record.source),(Convert-EvidenceRunName $id),(Convert-EvidenceRunName $id -Legacy),(Get-EvidenceRecordReadableName $record.source),(Get-EvidenceRecordReadableName $record.source -Generic))
+    }catch{continue}
+    if($leaf -in $names){$candidates+=@($record.source)}
+  }
+  if($candidates.Count -ne 1){throw 'Missing or ambiguous evidence location'}
+  $result=$candidates[0]
+  if($parts.Count -gt 2){$result=Join-Path $result ($parts[2..($parts.Count-1)] -join '/')}
+  return $result
+}
 function Get-EvidenceLocationTime([string]$Relative) {
   $leaf=$Relative.Split('/')[-1]
   $stamp='(?:[0-9]{8}T[0-9]{6}(?:\.[0-9]+)?Z|[0-9]{4}-[0-9]{2}-[0-9]{2}(?:T[0-9]{2}-[0-9]{2}-[0-9]{2}(?:\.[0-9]+)?Z)?|undated)'
-  if($leaf -notmatch ('^(?<stamp>'+ $stamp +')(?:(?:_[a-z][a-z0-9-]{0,31}_)|-)(?<nonce>[a-f0-9]{8})$')){throw 'Invalid evidence location time'}
+  if($leaf -notmatch ('^(?<stamp>'+ $stamp +')(?:(?:_[a-z][a-z0-9-]{0,31}_)|-)(?<nonce>[a-f0-9]{4}|[a-f0-9]{8})$')){throw 'Invalid evidence location time'}
   $stamp=$Matches.stamp;$nonce=$Matches.nonce
   if($stamp -match '^[0-9]{4}-'){$stamp=$stamp -replace '[-:]',''}
   $identifier=$stamp+'-'+$nonce
@@ -472,6 +553,7 @@ function Get-EvidenceDestination($Project,$OriginalRelative,$Manifest) {
   $root=Get-EvidenceRoot $Project
   $category=Get-EvidenceCategory $OriginalRelative $Manifest
   $time=Get-EvidenceOriginalTime $OriginalRelative
+  if($Manifest){return (Assert-EvidencePath $Project (Join-Path $root ('records/'+(Get-EvidenceReadableName $Manifest $time.identifier))))}
   $name=$time.namePart+'-'+$time.nonce
   if($category -eq 'maintenance'){
     $label=$OriginalRelative.Substring(0,$OriginalRelative.Length-$time.identifier.Length-1)
@@ -494,7 +576,7 @@ function Publish-EvidenceRecord($Project,$Source,$OriginalRelative,[string]$Tran
   $manifestPath=Join-Path $src 'manifest.json'
   $manifest=if(Test-Path -LiteralPath $manifestPath){Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson}else{$null}
   $destination=Get-EvidenceDestination $Project $OriginalRelative $manifest
-  if($manifest.archiveRevision -eq 1){$destination=Join-Path $root ('records/'+(Convert-EvidenceRunName $manifest.archive.identifier))}
+  if($manifest.archiveRevision -eq 1){$destination=Join-Path $root ('records/'+(Get-EvidenceReadableName $manifest $manifest.archive.identifier))}
   if(Test-Path -LiteralPath $destination){throw "Evidence destination exists: $destination"}
   if(!(Test-Path -LiteralPath (Join-Path $src 'SHA256SUMS.txt'))){Write-EvidenceChecksums $src}
   $null=Test-EvidenceRecord $src $OriginalRelative
@@ -587,6 +669,15 @@ function Write-EvidenceRecordReadme($Root,$Record,$Manifest) {
 function Test-EvidenceEnvelope($Root,$Relative) {
   $r=Get-Content -LiteralPath (Join-Path $Root 'record.json') -Raw -Encoding UTF8| ConvertFrom-EvidenceJson
   $physical=$Relative
+  $readable=$false
+  if($Relative.StartsWith('records/') -and $Relative -in @(('records/'+(Get-EvidenceRecordReadableName $Root)),('records/'+(Get-EvidenceRecordReadableName $Root -Generic)))){
+    $readable=$true
+    if($r.path -match '_[a-f0-9]{4}_[A-Za-z][A-Za-z0-9-]{0,31}$'){
+      $id=if($r.kind -eq 'historical-evidence-collection'){'undated-'+$r.originalChecksumsSha256.Substring(0,8).ToLowerInvariant()}else{(Get-EvidenceOriginalTime $r.originalRelative).identifier}
+      $parent=if($r.category -eq 'tests'){'tests/'+$r.origin}else{$r.category}
+      $Relative=$parent+'/'+(Convert-EvidenceRunName $id)
+    }else{$Relative=$r.path}
+  }
   if($Relative.StartsWith('records/')){
     if($Relative -notmatch '^records/[^/]+$' -or $r.category -notin @('tests','maintenance','fixtures')){throw 'Invalid evidence envelope identity'}
     # Old sealed bytes retain their original identity. Validate the same dated
@@ -594,14 +685,14 @@ function Test-EvidenceEnvelope($Root,$Relative) {
     $parent=if($r.category -eq 'tests'){'tests/'+$r.origin}else{$r.category}
     $Relative=$parent+'/'+$Relative.Split('/')[-1]
   }
-  $samePath=($physical.StartsWith('records/') -and $r.path -eq $physical) -or $r.path -eq $Relative -or ($Relative.StartsWith('maintenance/') -and $r.path -eq (Get-EvidenceCanonicalLocation $Relative))
+  $samePath=$readable -or ($physical.StartsWith('records/') -and $r.path -eq $physical) -or $r.path -eq $Relative -or ($Relative.StartsWith('maintenance/') -and $r.path -eq (Get-EvidenceCanonicalLocation $Relative))
   # Moving a sealed legacy envelope changes its location, not its saved bytes.
   $recordLocation=if($r.path -match '^records/[^/]+$'){$Relative.Substring(0,$Relative.LastIndexOf('/')+1)+$r.path.Split('/')[-1]}else{$r.path}
   $samePath=$samePath -or (Convert-EvidenceLocationSpelling $recordLocation) -eq (Convert-EvidenceLocationSpelling $Relative) -or
     ($Relative.StartsWith('maintenance/') -and (Convert-EvidenceLocationSpelling $recordLocation) -eq (Convert-EvidenceLocationSpelling (Get-EvidenceCanonicalLocation $Relative)))
   $dated='(?:[0-9]{8}T[0-9]{6}(?:\.[0-9]+)?Z|[0-9]{4}-[0-9]{2}-[0-9]{2}(?:T[0-9]{2}-[0-9]{2}-[0-9]{2}(?:\.[0-9]+)?Z)?|undated)'
-  $validLocation=$Relative -match ('^(tests/(local|github-actions)|maintenance|fixtures)/'+$dated+'-[a-f0-9]{8}$') -or
-    $Relative -match ('^maintenance/'+$dated+'_[a-z][a-z0-9-]{0,31}_[a-f0-9]{8}$') -or
+  $validLocation=$Relative -match ('^(tests/(local|github-actions)|maintenance|fixtures)/'+$dated+'-(?:[a-f0-9]{4}|[a-f0-9]{8})$') -or
+    $Relative -match ('^maintenance/'+$dated+'_[a-z][a-z0-9-]{0,31}_(?:[a-f0-9]{4}|[a-f0-9]{8})$') -or
     $Relative -match '^maintenance/undated_release-materials_[a-f0-9]{8}$'
   if($r.schema -notin @(1,2,3) -or !$samePath -or !$validLocation -or $r.archiveState -ne 'sealed' -or $r.origin -notin @('local','github-actions')){throw 'Invalid evidence envelope identity'}
   $locationTime=Get-EvidenceLocationTime $Relative

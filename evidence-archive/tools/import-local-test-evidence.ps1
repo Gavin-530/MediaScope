@@ -121,7 +121,7 @@ function Get-ReceivedPlan([string]$Records) {
     $recordFile=Join-Path $item.source 'record.json'
     $record=Get-ImportIdentity $item.source
     if($record.github -and $project -eq [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..')).TrimEnd('\')){throw 'Received cloud evidence needs repository-bound github:import or reviewed archive merge; original retained, old cloud destination refused'}
-    $relative=Get-EvidenceFlatLocation ([string]$item.relative)
+    $relative='records/'+(Get-EvidenceRecordReadableName $item.source)
     $identity=$record.category+'|'+$record.origin+'|'+$record.originalRelative
     $destination=Assert-EvidencePath $project (Join-Path $root $relative)
     $sum=(Get-FileHash -LiteralPath (Join-Path $item.source 'SHA256SUMS.txt') -Algorithm SHA256).Hash

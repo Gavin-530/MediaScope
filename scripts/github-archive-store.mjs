@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
-import {existsSync} from 'node:fs';
+import {existsSync,readdirSync,readFileSync,lstatSync} from 'node:fs';
+import {evidenceNameAliases} from './github-archive-evidence-names.mjs';
 import path from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
 
@@ -32,10 +33,36 @@ export function canonicalTimePath(name){
   }
   return parts.join('/');
 }
-export function resolveArchivePath(root,relative){
+export function evidenceLocationAliases(root){
+  const aliases=new Map(),records=path.join(root,'records');
+  if(!existsSync(records))return aliases;
+  if(lstatSync(records).isSymbolicLink())throw Error('Linked evidence records');
+  for(const entry of readdirSync(records,{withFileTypes:true})){
+    const dir=inside(root,path.join(records,entry.name));
+    if(entry.isSymbolicLink())throw Error('Linked evidence record');
+    if(!entry.isDirectory())continue;
+    const rp=path.join(dir,'record.json'),mp=path.join(dir,existsSync(rp)?'original/manifest.json':'manifest.json');
+    if(!existsSync(mp))continue;
+    if(lstatSync(mp).isSymbolicLink()||existsSync(rp)&&lstatSync(rp).isSymbolicLink()||existsSync(rp)&&lstatSync(path.join(dir,'original')).isSymbolicLink())throw Error('Linked evidence manifest');
+    const read=p=>JSON.parse(readFileSync(p,'utf8').replace(/^\uFEFF/,''));
+    const envelope=existsSync(rp)?read(rp):null,manifest=read(mp);
+    for(const alias of new Set([entry.name,...evidenceNameAliases(manifest,envelope)])){
+      aliases.set(alias,[...(aliases.get(alias)??[]),dir]);
+    }
+  }
+  return aliases;
+}
+export function resolveArchivePath(root,relative,{aliases}={}){
   safeRelative(relative);
   const old=inside(root,path.join(root,relative)),current=inside(root,path.join(root,canonicalTimePath(relative)));
   if(old!==current&&existsSync(old)&&existsSync(current))throw Error('Ambiguous old and current archive locations');
+  // Old sealed receipts keep their original paths. Resolve only the record
+  // component, using each record's own complete identity, never a short token.
+  if(relative.startsWith('records/')&&existsSync(path.join(root,'records'))){
+    const parts=relative.split('/'),matches=(aliases??evidenceLocationAliases(root)).get(parts[1])??[];
+    if(matches.length>1)throw Error('Ambiguous evidence identity locations');
+    if(matches.length===1)return inside(root,path.join(matches[0],...parts.slice(2)));
+  }
   return existsSync(old)?old:current;
 }
 export function archiveObject(name){

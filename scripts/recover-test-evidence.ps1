@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][ValidatePattern('^[0-9]{8}T[0-9]{6}(?:[0-9]{3}|\.[0-9]+)?Z-[a-f0-9]{8}$')][string]$RunId)
+param([Parameter(Mandatory=$true)][ValidatePattern('^[0-9]{8}T[0-9]{6}(?:[0-9]{3}|\.[0-9]+)?Z-(?:[a-f0-9]{4}|[a-f0-9]{8})$')][string]$RunId)
 $ErrorActionPreference='Stop'
 $project=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..')).TrimEnd('\')
 . (Join-Path $PSScriptRoot 'evidence-lib.ps1')
@@ -24,10 +24,10 @@ try {
     $src=if($found.Count){$found[0].source}else{$candidates[0].FullName}
     if(Test-Path -LiteralPath (Join-Path $src 'record.json')){
       $r=Get-Content -LiteralPath (Join-Path $src 'record.json') -Raw -Encoding UTF8|ConvertFrom-EvidenceJson
-      $relative=$r.path
+      $relative=if($found.Count){$found[0].relative}else{$r.path}
     }else{
       $m=Get-Content -LiteralPath (Join-Path $src 'manifest.json') -Raw -Encoding UTF8|ConvertFrom-EvidenceJson
-      $relative='records/'+(Convert-EvidenceRunName $m.runId)
+      $relative=if($found.Count){$found[0].relative}else{'records/'+(Get-EvidenceRecordReadableName $src)}
     }
     $null=Test-EvidenceRecord $src $relative
     $dest=Assert-EvidencePath $project (Join-Path $root $relative)

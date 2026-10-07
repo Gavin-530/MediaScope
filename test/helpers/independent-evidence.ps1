@@ -53,12 +53,12 @@ $receiver=Join-Path $project 'receiver';$drop=Join-Path (Get-EvidenceRoot $recei
 $null=New-Item -ItemType Directory -Path (Split-Path -Parent $drop) -Force
 Copy-Item -LiteralPath $copy -Destination $drop -Recurse
 & (Join-Path $source 'evidence-archive/tools/import-local-test-evidence.ps1') -Project $receiver -Folder standalone -Contributor 'Protocol test' -Apply | Out-Null
-$imported=@(Get-EvidenceRecords (Get-EvidenceRoot $receiver)|Where-Object {$_.relative -match '1234ab02$'})[0]
+$imported=@(Get-EvidenceRecords (Get-EvidenceRoot $receiver)|Where-Object {$_.relative -eq 'records/20261002T010203Z_ab02_Custom'})[0]
 if(!(Test-Path (Join-Path $imported.source 'manifest.json')) -or (Get-FileHash (Join-Path $imported.source 'SHA256SUMS.txt')).Hash -ne (Get-FileHash (Join-Path $copy 'SHA256SUMS.txt')).Hash){throw 'Standalone import changed bytes or added an envelope'}
 Write-Output 'PASS: actual collaborator import accepts one independent folder without a sender catalog'
 
 $cloudProject=Join-Path $project 'cloud';$previousProject=$project;$project=$cloudProject
-$app=Publish (New-Run '20261002T010203000Z-1234ab05' 'App')
+$app=Publish (New-Run '20261002T010203Z-ab05' 'App')
 $project=$previousProject
 $prior=@{}
 foreach($name in @('GITHUB_ACTIONS','RUNNER_ENVIRONMENT','GITHUB_REPOSITORY','GITHUB_RUN_ID','GITHUB_RUN_ATTEMPT','GITHUB_SHA')){$prior[$name]=[Environment]::GetEnvironmentVariable($name)}
@@ -103,6 +103,7 @@ foreach($mode in @('bootstrap','interrupted')){
     $blocked=Import-GitHubEvidence $failedReceiver $transport 'protocol/example' $env:GITHUB_RUN_ID '1' ('a'*40)
   }finally{foreach($name in $prior.Keys){[Environment]::SetEnvironmentVariable($name,$prior[$name])}}
   $record=Get-Content (Join-Path $blocked 'manifest.json') -Raw|ConvertFrom-EvidenceJson
+  if($mode -eq 'bootstrap' -and ($record.runId -notmatch '^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{4}$' -or (Split-Path -Leaf $blocked) -ne (Get-EvidenceReadableName $record))){throw 'Bootstrap CI did not use the new product identity and display directory'}
   if($record.outcome -ne 'blocked' -or $record.releaseCheck.ready -or $record.testSummary.passed -gt 0 -or @(Get-EvidenceFiles $blocked).Count -ne 5){throw 'Incomplete CI fabricated passes or retained unnecessary files'}
   if(!(Test-Path (Join-Path $blocked 'bootstrap.log.gz')) -or (Test-Path (Join-Path $blocked 'README.md'))){throw 'Incomplete CI lost diagnostics or retained source'}
   Write-Output "PASS: actual $mode CI export/import retains only blocked results and compressed diagnostics"

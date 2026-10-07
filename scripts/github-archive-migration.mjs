@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {TARGET,now,hash,canonical,tree,readJson,writeJson,exists,inside,noLinks,seal,snapshots,verifySnapshot,verifySnapshotLocation,insideCleanup,verifyArchive,safeRelative,canonicalTimePath,resolveArchivePath} from './github-archive-store.mjs';
+import {TARGET,now,hash,canonical,tree,readJson,writeJson,exists,inside,noLinks,seal,snapshots,verifySnapshot,verifySnapshotLocation,insideCleanup,verifyArchive,safeRelative,canonicalTimePath,resolveArchivePath,evidenceLocationAliases} from './github-archive-store.mjs';
 import {latestInventory} from './github-archive-inventory.mjs';
 
 export function verifyEvidence(project,record,relative,timeout=120000){
@@ -88,9 +88,12 @@ export async function importTransport(project,root,archive,identity,{reader,arti
 }
 export async function boundaryBaseline(project){
   const baseline=await latestInventory(project),releases=await tree(path.join(project,'releases')),evidence=await tree(path.join(project,'evidence-archive'));
-  const changed=(old,current)=>{const items=new Map(current.map(f=>[canonicalTimePath(f.path),{...f,path:canonicalTimePath(f.path)}]));return old.filter(f=>JSON.stringify(canonical(items.get(canonicalTimePath(f.path))))!==JSON.stringify(canonical({...f,path:canonicalTimePath(f.path)}))).map(f=>f.path)};
-  const evidenceChanges=changed(baseline.evidenceInventory,evidence),cacheChanges=evidenceChanges.filter(p=>/^catalog\.json(?:\.|$)/.test(p)),toolChanges=evidenceChanges.filter(p=>p==='tools/import-local-test-evidence.ps1');
-  const baselinePaths=new Set(baseline.evidenceInventory.map(f=>canonicalTimePath(f.path)));
+  const evidenceRoot=path.join(project,'evidence-archive');
+  const aliases=evidenceLocationAliases(evidenceRoot);
+  const evidencePath=p=>p.startsWith('records/')?path.relative(evidenceRoot,resolveArchivePath(evidenceRoot,p,{aliases})).replaceAll('\\','/'):canonicalTimePath(p);
+  const changed=(old,current,normalize=canonicalTimePath)=>{const items=new Map(current.map(f=>[normalize(f.path),{...f,path:normalize(f.path)}]));return old.filter(f=>JSON.stringify(canonical(items.get(normalize(f.path))))!==JSON.stringify(canonical({...f,path:normalize(f.path)}))).map(f=>f.path)};
+  const evidenceChanges=changed(baseline.evidenceInventory,evidence,evidencePath),cacheChanges=evidenceChanges.filter(p=>/^catalog\.json(?:\.|$)/.test(p)),toolChanges=evidenceChanges.filter(p=>p==='tools/import-local-test-evidence.ps1');
+  const baselinePaths=new Set(baseline.evidenceInventory.map(f=>evidencePath(f.path)));
   const removedMigratedSources=[],expectedRemovedFiles=new Set(),root=path.join(project,'github-archive');
   if(await exists(path.join(root,'repository.json'))){
     for(const dir of await snapshots(root)){
@@ -112,7 +115,7 @@ export async function boundaryBaseline(project){
       }
     }
   }
-  return {checkedAt:now(),releaseChanges:changed(baseline.releaseInventory,releases),oldEvidenceChanges:evidenceChanges.filter(p=>!cacheChanges.includes(p)&&!toolChanges.includes(p)&&!expectedRemovedFiles.has(p)),removedMigratedSources,rebuildableCacheChanges:cacheChanges,archiveToolCodeChanges:toolChanges,addedEvidenceFiles:evidence.filter(f=>!baselinePaths.has(canonicalTimePath(f.path))).length};
+  return {checkedAt:now(),releaseChanges:changed(baseline.releaseInventory,releases),oldEvidenceChanges:evidenceChanges.filter(p=>!cacheChanges.includes(p)&&!toolChanges.includes(p)&&!expectedRemovedFiles.has(p)),removedMigratedSources,rebuildableCacheChanges:cacheChanges,archiveToolCodeChanges:toolChanges,addedEvidenceFiles:evidence.filter(f=>!baselinePaths.has(evidencePath(f.path))).length};
 }
 export async function mergeCopy(root,source){
   const records=await snapshots(source),existing=await snapshots(root),known=new Map();

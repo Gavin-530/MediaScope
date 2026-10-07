@@ -58,7 +58,7 @@ if($Kind -in @('Package','OnlineDeployment')){
 $gitCommit=(& git -C $project rev-parse HEAD).Trim()
 $gitStatus=@(& git -C $project status --porcelain=v1 --untracked-files=normal)
 if($RequireClean -and $gitStatus.Count){throw 'The source tree is not clean'}
-$runId=(Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')+'-'+[guid]::NewGuid().ToString('N').Substring(0,8)
+$runId=New-EvidenceRunId $project
 $staging=Join-Path (Get-EvidencePendingRoot $project) "staging/$runId"
 $localRun=Join-Path $root "runs/$version/$runId"
 $log=Join-Path $staging 'output.log'

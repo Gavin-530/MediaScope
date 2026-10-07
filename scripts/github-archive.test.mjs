@@ -140,10 +140,10 @@ test('real archive CLI refuses forced Git tracking of local notes before archive
   assert.equal(await exists(path.join(project,'github-archive')),false);
   assert.equal(await fs.readFile(note,'utf8'),'private protocol note');
 });
-async function pruneFixture(t,relative='records/protocol-cloud'){
+async function pruneFixture(t,relative='records/protocol-cloud',runId){
   const project=await fixture(t),root=path.join(project,'github-archive');await initialize(root,TARGET);
   const source='evidence-archive/'+relative,dir=path.join(project,source);
-  await fs.mkdir(dir,{recursive:true});await writeJson(path.join(dir,'manifest.json'),{kind:'App',github:{repository:TARGET.repository,runId:'123',runAttempt:'1',sha:'a'.repeat(40),job:'full-regression'}});
+  await fs.mkdir(dir,{recursive:true});await writeJson(path.join(dir,'manifest.json'),{kind:'App',...(runId?{runId,scope:'full'}:{}),github:{repository:TARGET.repository,runId:'123',runAttempt:'1',sha:'a'.repeat(40),job:'full-regression'}});
   await fs.writeFile(path.join(dir,'SHA256SUMS.txt'),'isolated removal protocol; not a product result\n');await fs.mkdir(path.join(dir,'nested'));await fs.writeFile(path.join(dir,'nested/result.txt'),'protocol source bytes');
   const files=await tree(dir),originalContentSha256=hash(JSON.stringify(canonical(files))),identity=await evidenceIdentity(dir,relative);
   const content={'provenance.json':{format:1,...TARGET,source:'local-migration',sourcePath:source,identity,originalContentSha256}};
@@ -166,6 +166,25 @@ test('exact migrated source removal preserves local/original data and restores t
   await restorePrunedSource(f.project,f.root,plan,f.source,f.options);assert.deepEqual(await tree(f.dir),f.files);
   await assert.rejects(restorePrunedSource(f.project,f.root,plan,f.source,f.options),/overwrite/);
   await assert.rejects(applyPrune(f.project,f.root,plan,f.options),/reappeared/);
+});
+test('readable evidence names keep old Actions cleanup plans and boundary baselines linked to the full original identity',async t=>{
+  const old='records/20261001T102030.123Z-1234abcd';
+  const f=await pruneFixture(t,old,'20261001T102030123Z-1234abcd'),base=path.join(f.project,'evidence-archive');
+  const work=path.join(f.project,'.build/github-archive-implementation');
+  await writeJson(path.join(work,'baseline.json'),{target:TARGET,evidenceInventory:await tree(base),releaseInventory:await tree(path.join(f.project,'releases')),records:[{path:old,github:{repository:TARGET.repository},files:f.files}]});
+  await writeJson(path.join(work,'latest-inventory.json'),{path:'baseline.json'});
+  const plan=await preparePrune(f.project,f.root,f.options),current=path.join(base,'records/20261001T102030Z_abcd_App-full');
+  await fs.rename(f.dir,current);
+  assert.equal(resolveArchivePath(base,old),current);
+  assert.equal(resolveArchivePath(base,old+'/nested/result.txt'),path.join(current,'nested/result.txt'));
+  assert.deepEqual((await boundaryBaseline(f.project)).oldEvidenceChanges,[]);
+  const duplicate=path.join(base,'records/duplicate');await fs.cp(current,duplicate,{recursive:true});
+  assert.throws(()=>resolveArchivePath(base,old),/Ambiguous/);
+  inside(base,duplicate);await fs.rm(duplicate,{recursive:true});
+  const result=await applyPrune(f.project,f.root,plan,f.options);
+  assert.equal(result.removedRecords,1);assert.equal(await exists(current),false);
+  await restorePrunedSource(f.project,f.root,plan,f.source,f.options);
+  assert.deepEqual(await tree(f.dir),f.files);
 });
 
 test('old removal plans and boundary inventories remain valid after time path migration',async t=>{

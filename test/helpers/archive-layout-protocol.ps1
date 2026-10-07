@@ -82,7 +82,7 @@ $realAdd=(Get-Item Function:Add-EvidenceCatalogRecord).ScriptBlock
 Set-Item -LiteralPath Function:Add-EvidenceCatalogRecord -Value {throw 'Injected ledger interruption'}
 Reject {Publish-EvidenceRecord $project $stage2 $logical2} 'ledger interruption'
 Set-Item -LiteralPath Function:Add-EvidenceCatalogRecord -Value $realAdd
-$final2=Get-EvidenceDestination $project $logical2
+$final2=Get-EvidenceDestination $project $logical2 $m
 $relative2=$final2.Substring($root.Length+1).Replace('\','/')
 $null=Test-EvidenceRecord $final2 $relative2
 if(!(Test-Path (Join-Path $final2 'original/output.log'))){throw 'Interrupted ledger update lost original evidence'}
@@ -195,14 +195,14 @@ foreach($case in $cases){
   $manifestBytes=[IO.File]::ReadAllBytes((Join-Path $stage 'manifest.json'))
   $path4=Publish-EvidenceRecord $precisionProject $stage ('runs/0.2.2/'+$case.id)
   $r4=Get-Content (Join-Path $path4 'record.json') -Raw| ConvertFrom-EvidenceJson
-  if((Split-Path -Leaf $path4) -ne $case.name -or $r4.schema -ne 3 -or $r4.identifierTimePrecision -ne $case.precision -or $r4.identifierTimeZone -ne $case.zone -or
+  if((Split-Path -Leaf $path4) -ne (Get-EvidenceReadableName $manifest4 $case.id) -or $r4.schema -ne 3 -or $r4.identifierTimePrecision -ne $case.precision -or $r4.identifierTimeZone -ne $case.zone -or
      [Convert]::ToBase64String($manifestBytes) -ne [Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $path4 'original/manifest.json')))){throw 'Precision or original manifest changed'}
   $maintenancePath=Get-EvidenceDestination $precisionProject ('test-system-audit-'+$case.id)
   if((Split-Path -Leaf $maintenancePath) -ne ($case.name.Substring(0,$case.name.Length-9)+'_test-system-audit_'+$case.id.Substring($case.id.Length-8))){throw 'Maintenance label assumes fixed timestamp width'}
 }
 if((Test-EvidenceCatalog $precisionRoot) -ne $cases.Count){throw 'Precision records not all valid'}
 Write-Output 'PASS: millisecond, second, day and unknown identities publish without invented digits or timezone'
-$second=Join-Path $precisionRoot 'records/20261001T102030Z-1234ab02'
+$second=Join-Path $precisionRoot 'records/20261001T102030Z_ab02_Custom'
 $recordBytes=[IO.File]::ReadAllBytes((Join-Path $second 'record.json'))
 $sumBytes=[IO.File]::ReadAllBytes((Join-Path $second 'SHA256SUMS.txt'))
 $r4=Get-Content (Join-Path $second 'record.json') -Raw| ConvertFrom-EvidenceJson
