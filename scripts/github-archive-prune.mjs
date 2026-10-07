@@ -3,7 +3,7 @@ import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {execFileSync} from 'node:child_process';
-import {TARGET,now,canonical,hash,fileHash,tree,exists,noLinks,inside,safeRelative,readJson,writeJson,assertIdentity,assertRoot,verifySnapshot,verifySnapshotLocation,insideCleanup,seal,lock} from './github-archive-store.mjs';
+import {TARGET,now,canonical,hash,fileHash,tree,exists,noLinks,inside,safeRelative,readJson,writeJson,assertIdentity,assertRoot,verifySnapshot,verifySnapshotLocation,insideCleanup,seal,lock,resolveArchivePath} from './github-archive-store.mjs';
 import {verifyEvidence,evidenceIdentity} from './github-archive-migration.mjs';
 
 const digest=files=>hash(JSON.stringify(canonical(files)));
@@ -11,11 +11,11 @@ const same=(a,b)=>JSON.stringify(canonical(a))===JSON.stringify(canonical(b));
 function sourcePath(project,source){
   safeRelative(source);
   if(!/^evidence-archive\/records\/[A-Za-z0-9_.-]+$/.test(source))throw Error('Removal is limited to exact migrated records children');
-  return inside(path.join(project,'evidence-archive','records'),path.join(project,source));
+  return resolveArchivePath(path.join(project,'evidence-archive'),source.slice('evidence-archive/'.length));
 }
 async function targetRecord(project,root,row,validate){
   const source=sourcePath(project,row.source);safeRelative(row.target);
-  const target=inside(root,path.join(root,row.target));await noLinks(target);
+  const target=resolveArchivePath(root,row.target);await noLinks(target);
   const manifest=await verifySnapshot(target);verifySnapshotLocation(root,target,manifest);
   const provenance=await readJson(path.join(target,'provenance.json'));assertIdentity(provenance);
   if(provenance.source!=='local-migration'||provenance.sourcePath!==row.source||provenance.originalContentSha256!==row.originalContentSha256)throw Error('Exact original migration provenance required');
@@ -29,7 +29,7 @@ async function targetRecord(project,root,row,validate){
 }
 async function preserved(project,plan){
   for(const file of plan.preservedFiles){
-    safeRelative(file.path);const name=inside(path.join(project,'evidence-archive'),path.join(project,'evidence-archive',file.path));
+    safeRelative(file.path);const name=resolveArchivePath(path.join(project,'evidence-archive'),file.path);
     await noLinks(name);const stat=await fs.stat(name);
     if(!stat.isFile()||stat.size!==file.bytes||await fileHash(name)!==file.sha256)throw Error('Protected local/original file changed: '+file.path);
   }
@@ -108,7 +108,7 @@ export async function applyPrune(project,root,plan,{validate=verifyEvidence,onSt
   if(journal.state==='completed'){
     for(const row of journal.records){await targetRecord(project,root,row,validate);if(await exists(sourcePath(project,row.source)))throw Error('Removed source reappeared; do not treat the old receipt as a new removal');}
     if(!journal.receipt){journal.receipt=(await seal(root,'migration-reports/prune-'+journal.startedAt.replace(/[-:]/g,''),{'report.json':journal})).path;await writeJson(journalFile,journal);}
-    else{safeRelative(journal.receipt);const receipt=inside(root,path.join(root,journal.receipt));verifySnapshotLocation(root,receipt,await verifySnapshot(receipt));}
+    else{safeRelative(journal.receipt);const receipt=resolveArchivePath(root,journal.receipt);verifySnapshotLocation(root,receipt,await verifySnapshot(receipt));}
     if(await exists(task)){const remaining=await tree(task),owner=await readJson(path.join(task,'owner.json'));if(owner.owner!=='mediascope-github-archive'||owner.planSha256!==journal.planSha256||remaining.length!==1||remaining[0].path!=='owner.json')throw Error('Completed removal task contains unexpected files; retained');await insideCleanup(root,task);}
     return journal;
   }
@@ -162,7 +162,7 @@ export async function restorePrunedSource(project,root,plan,source,{validate=ver
   const restored=path.join(task,'original');await fs.cp(checked.original,restored,{recursive:true,errorOnExist:true,force:false});
   if(!same(await tree(restored),row.files))throw Error('Restored original bytes differ');await validate(project,restored,checked.relative);
   await noLinks(checked.source);await fs.mkdir(path.dirname(checked.source),{recursive:true});await fs.rename(restored,checked.source);await insideCleanup(root,task);
-  return {source:row.source,restoredAt:now(),bytes:row.bytes};
+  return {source:row.source,restoredPath:path.relative(project,checked.source).replaceAll('\\','/'),restoredAt:now(),bytes:row.bytes};
 }
 
 async function main(){
@@ -178,7 +178,7 @@ async function main(){
       const plan=await preparePrune(project,root),file=path.join(work,'prune-plan-'+now({milliseconds:true}).replace(/[-:]/g,'')+'.json');await writeJson(file,plan);
       console.log(JSON.stringify({plan:file,records:plan.records.length,bytes:plan.records.reduce((n,r)=>n+r.bytes,0),removed:false}));
     }else{
-      if(!planFile)throw Error('Explicit reviewed plan file required');const file=inside(work,path.resolve(planFile));await noLinks(file);
+      if(!planFile)throw Error('Explicit reviewed plan file required');const reviewed=inside(work,path.resolve(planFile)),file=resolveArchivePath(work,path.relative(work,reviewed).replaceAll('\\','/'));await noLinks(file);
       const plan=await readJson(file),result=command==='apply'?await applyPrune(project,root,plan):await restorePrunedSource(project,root,plan,source);
       console.log(JSON.stringify(result,null,2));
     }

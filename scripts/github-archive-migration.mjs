@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {TARGET,now,hash,canonical,tree,readJson,writeJson,exists,inside,noLinks,seal,snapshots,verifySnapshot,verifySnapshotLocation,insideCleanup,verifyArchive,safeRelative} from './github-archive-store.mjs';
+import {TARGET,now,hash,canonical,tree,readJson,writeJson,exists,inside,noLinks,seal,snapshots,verifySnapshot,verifySnapshotLocation,insideCleanup,verifyArchive,safeRelative,canonicalTimePath,resolveArchivePath} from './github-archive-store.mjs';
 import {latestInventory} from './github-archive-inventory.mjs';
 
 export function verifyEvidence(project,record,relative,timeout=120000){
@@ -88,8 +88,9 @@ export async function importTransport(project,root,archive,identity,{reader,arti
 }
 export async function boundaryBaseline(project){
   const baseline=await latestInventory(project),releases=await tree(path.join(project,'releases')),evidence=await tree(path.join(project,'evidence-archive'));
-  const changed=(old,current)=>{const items=new Map(current.map(f=>[f.path,f]));return old.filter(f=>JSON.stringify(canonical(items.get(f.path)))!==JSON.stringify(canonical(f))).map(f=>f.path)};
+  const changed=(old,current)=>{const items=new Map(current.map(f=>[canonicalTimePath(f.path),{...f,path:canonicalTimePath(f.path)}]));return old.filter(f=>JSON.stringify(canonical(items.get(canonicalTimePath(f.path))))!==JSON.stringify(canonical({...f,path:canonicalTimePath(f.path)}))).map(f=>f.path)};
   const evidenceChanges=changed(baseline.evidenceInventory,evidence),cacheChanges=evidenceChanges.filter(p=>/^catalog\.json(?:\.|$)/.test(p)),toolChanges=evidenceChanges.filter(p=>p==='tools/import-local-test-evidence.ps1');
+  const baselinePaths=new Set(baseline.evidenceInventory.map(f=>canonicalTimePath(f.path)));
   const removedMigratedSources=[],expectedRemovedFiles=new Set(),root=path.join(project,'github-archive');
   if(await exists(path.join(root,'repository.json'))){
     for(const dir of await snapshots(root)){
@@ -100,8 +101,8 @@ export async function boundaryBaseline(project){
       for(const row of report.records){
         safeRelative(row.source);safeRelative(row.target);
         if(row.state!=='removed'||!/^evidence-archive\/records\/[A-Za-z0-9_.-]+$/.test(row.source))throw Error('Removal receipt source scope mismatch');
-        if(await exists(inside(path.join(project,'evidence-archive','records'),path.join(project,row.source))))continue;
-        const target=inside(root,path.join(root,row.target)),manifest=await verifySnapshot(target);verifySnapshotLocation(root,target,manifest);
+        if(await exists(resolveArchivePath(path.join(project,'evidence-archive'),row.source.slice('evidence-archive/'.length))))continue;
+        const target=resolveArchivePath(root,row.target),manifest=await verifySnapshot(target);verifySnapshotLocation(root,target,manifest);
         const provenance=await readJson(path.join(target,'provenance.json')),files=await tree(path.join(target,'original'));
         if(provenance.source!=='local-migration'||provenance.sourcePath!==row.source||provenance.originalContentSha256!==row.originalContentSha256||hash(JSON.stringify(canonical(files)))!==row.originalContentSha256||JSON.stringify(canonical(files))!==JSON.stringify(canonical(row.files)))throw Error('Removal recovery target does not match original bytes');
         const relative=row.source.slice('evidence-archive/'.length),original=baseline.records.find(r=>r.path===relative);
@@ -111,14 +112,14 @@ export async function boundaryBaseline(project){
       }
     }
   }
-  return {checkedAt:now(),releaseChanges:changed(baseline.releaseInventory,releases),oldEvidenceChanges:evidenceChanges.filter(p=>!cacheChanges.includes(p)&&!toolChanges.includes(p)&&!expectedRemovedFiles.has(p)),removedMigratedSources,rebuildableCacheChanges:cacheChanges,archiveToolCodeChanges:toolChanges,addedEvidenceFiles:evidence.filter(f=>!baseline.evidenceInventory.some(x=>x.path===f.path)).length};
+  return {checkedAt:now(),releaseChanges:changed(baseline.releaseInventory,releases),oldEvidenceChanges:evidenceChanges.filter(p=>!cacheChanges.includes(p)&&!toolChanges.includes(p)&&!expectedRemovedFiles.has(p)),removedMigratedSources,rebuildableCacheChanges:cacheChanges,archiveToolCodeChanges:toolChanges,addedEvidenceFiles:evidence.filter(f=>!baselinePaths.has(canonicalTimePath(f.path))).length};
 }
 export async function mergeCopy(root,source){
   const records=await snapshots(source),existing=await snapshots(root),known=new Map();
-  for(const dir of existing){const m=await verifySnapshot(dir);known.set(m.object+'/'+m.contentSha256,path.relative(root,dir).replaceAll('\\','/'))}
+  for(const dir of existing){const m=await verifySnapshot(dir);known.set(canonicalTimePath(m.object)+'/'+m.contentSha256,path.relative(root,dir).replaceAll('\\','/'))}
   const receipt={format:1,...TARGET,operation:'receive-archive-history',startedAt:now(),sourceRetained:true,records:[],credentialsLocksAndProgressAdopted:false,latestPointersAdopted:false};
   for(const dir of records){
-    const manifest=await verifySnapshot(dir),key=manifest.object+'/'+manifest.contentSha256;
+    const manifest=await verifySnapshot(dir),key=canonicalTimePath(manifest.object)+'/'+manifest.contentSha256;
     if(known.has(key)){receipt.records.push({sourceObject:manifest.object,sha256:manifest.contentSha256,state:'duplicate',target:known.get(key)});continue}
     const content={'received-provenance.json':{...TARGET,sourceObject:manifest.object,sourceDeclaredCapture:manifest.fetchedAt,verificationGrade:'self-consistent-foreign-copy; platform-authenticity-not-confirmed',sourceIdentityIsDeclaration:true,localLatestUnaffected:true}};
     for(const f of await tree(dir))content['received/'+f.path]={archiveSourceFile:path.join(dir,f.path)};

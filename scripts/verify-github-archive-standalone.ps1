@@ -39,7 +39,11 @@ foreach($file in @($all|Where-Object {$_.Name -eq 'archive-manifest.json'})){
   if(!$outerSnapshotFound){
     if($m.object -notmatch '^(releases|actions|issues|pull-requests|discussions|repository|supplements|migration-reports|sync-reports)/.+$'){throw 'Object outside original archive categories'}
     if($m.object.StartsWith('actions/') -and $m.object -notmatch '^actions/[1-9]\d*(/attempts/[1-9]\d*/(jobs/[1-9]\d*|artifacts/[1-9]\d*|evidence/[a-f0-9]{20,64}))?$'){throw 'Actions layout differs from original plan'}
+    # A time spelling migration preserves the sealed manifest's original bytes.
     $relativeDirectory=$dir.Substring($base.Length+1).Replace('\','/');$objectPrefix=$m.object+'/revisions/'
+    $oldTime='([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2})-([0-9]{2})-([0-9]{2})(?=(?:\.[0-9]+)?Z)'
+    $relativeDirectory=$relativeDirectory -replace $oldTime,'$1$2$3T$4$5$6'
+    $objectPrefix=$objectPrefix -replace $oldTime,'$1$2$3T$4$5$6'
     if(!$relativeDirectory.StartsWith($objectPrefix,[StringComparison]::Ordinal) -or !$relativeDirectory.Substring($objectPrefix.Length) -or $relativeDirectory.Substring($objectPrefix.Length).Contains('/')){throw 'Snapshot directory does not match declared object path'}
   }
   $actual=@(Get-PlainFiles $dir);$expected=@{};$observedDigests=@{}

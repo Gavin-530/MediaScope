@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import {existsSync} from 'node:fs';
 import path from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
 
@@ -15,6 +16,27 @@ export function canonical(value){
 export function safeRelative(name){
   if(typeof name!=='string'||!name||name.includes('\\')||name.startsWith('/')||name.split('/').some(p=>!p||p==='.'||p==='..'||/[<>:"|?*\x00-\x1f]/.test(p)||/[. ]$/.test(p)||/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i.test(p)))throw Error('Unsafe relative archive path');
   return name;
+}
+// Only current archive locations are normalized. Embedded original paths remain evidence.
+export function canonicalTimePath(name){
+  safeRelative(name);
+  const parts=name.split('/');
+  for(let i=0;i<parts.length;i++){
+    if(parts[i]==='original'||parts[i]==='received'&&parts.slice(0,i).includes('revisions'))break;
+    if(!(i===0&&parts.length===1&&/^(inventory|prune-plan)-/.test(parts[0]))&&!(i===1&&['records','sync-reports','migration-reports'].includes(parts[0]))&&parts[i-1]!=='revisions')continue;
+    parts[i]=parts[i].replace(/(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})(\.\d+)?Z/g,(whole,y,m,d,h,min,s,fraction='')=>{
+      const base=`${y}-${m}-${d}T${h}:${min}:${s}`;
+      if(!Number.isFinite(Date.parse(base+'Z'))||new Date(base+'Z').toISOString().slice(0,19)!==base)throw Error('Invalid UTC archive timestamp: '+whole);
+      return `${y}${m}${d}T${h}${min}${s}${fraction}Z`;
+    });
+  }
+  return parts.join('/');
+}
+export function resolveArchivePath(root,relative){
+  safeRelative(relative);
+  const old=inside(root,path.join(root,relative)),current=inside(root,path.join(root,canonicalTimePath(relative)));
+  if(old!==current&&existsSync(old)&&existsSync(current))throw Error('Ambiguous old and current archive locations');
+  return existsSync(old)?old:current;
 }
 export function archiveObject(name){
   safeRelative(name);
@@ -88,7 +110,7 @@ export async function verifySnapshot(dir){
   return manifest;
 }
 export function verifySnapshotLocation(root,dir,manifest){
-  const relative=path.relative(root,dir).replaceAll('\\','/'),prefix=archiveObject(manifest.object)+'/revisions/';
+  const relative=canonicalTimePath(path.relative(root,dir).replaceAll('\\','/')),prefix=canonicalTimePath(archiveObject(manifest.object))+'/revisions/';
   if(!relative.startsWith(prefix)||!relative.slice(prefix.length)||relative.slice(prefix.length).includes('/'))throw Error('Snapshot directory does not match declared object path');
 }
 export async function snapshots(root){
@@ -103,6 +125,7 @@ export async function snapshots(root){
   return result.sort();
 }
 export async function seal(root,relative,content,metadata={}){
+  relative=canonicalTimePath(relative);
   await assertRoot(root);archiveObject(relative);const object=inside(root,path.join(root,relative));await noLinks(object);
   const pairs=Object.entries(content).sort(([a],[b])=>a.localeCompare(b,'en'));
   const files=[];

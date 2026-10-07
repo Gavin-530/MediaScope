@@ -5,6 +5,10 @@ $project=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $root=Get-EvidenceRoot $project
 if($Record){
   $selected=if([IO.Path]::IsPathRooted($Record)){[IO.Path]::GetFullPath($Record)}else{Join-Path $root $Record}
+  if(!(Test-Path -LiteralPath $selected) -and $selected.StartsWith($root+'\',[StringComparison]::OrdinalIgnoreCase)){
+    $relative=$selected.Substring($root.Length+1).Replace('\','/')
+    if($relative -match '^records/[^/]+$'){$selected=Join-Path $root (Convert-EvidenceLocationSpelling $relative)}
+  }
   $null=Get-EvidenceFiles $selected
   $mp=Join-Path $selected 'manifest.json';$rp=Join-Path $selected 'record.json'
   if(Test-Path -LiteralPath $rp){$identity=(Get-Content -LiteralPath $rp -Raw -Encoding UTF8|ConvertFrom-EvidenceJson).path}

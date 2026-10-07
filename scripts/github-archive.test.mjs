@@ -1,4 +1,5 @@
 import {test} from 'node:test';
+import {compareTimes} from './time.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -13,9 +14,85 @@ import {evidenceIdentity} from './github-archive-migration.mjs';
 import {boundaryBaseline} from './github-archive-migration.mjs';
 import {canonical,exists} from './github-archive-store.mjs';
 import {capacityWarnings,capacityReport} from './github-archive-capacity.mjs';
+import {canonicalTimePath,resolveArchivePath} from './github-archive-store.mjs';
+import {planTimePaths,applyTimePaths,rollbackTimePaths} from './migrate-time-paths.mjs';
+import {latestInventory} from './github-archive-inventory.mjs';
 
 const owned=path.resolve('.build/github-archive-tests');
 async function fixture(t){await fs.mkdir(owned,{recursive:true});const dir=await fs.mkdtemp(path.join(owned,'case-'));await initialize(dir,TARGET);t.after(async()=>{inside(owned,dir);await fs.rm(dir,{recursive:true})});return dir}
+
+async function timeFixture(t){
+  const project=await fixture(t),root=path.join(project,'github-archive');await initialize(root,TARGET);
+  const object='sync-reports/sync-2026-10-01T10-20-30.1200000Z',currentObject=canonicalTimePath(object);
+  const saved=await seal(root,currentObject,{'report.json':{source:'historical bytes',time:'2026-10-01T18:20:30.1200000+08:00'}});
+  const oldRevision='2026-10-01T10-20-31.1230000Z-'+saved.path.split('-').at(-1),oldPath=object+'/revisions/'+oldRevision;
+  await fs.rename(path.join(root,currentObject),path.join(root,object));
+  const renamed=path.join(root,object,'revisions',saved.path.split('/').at(-1));
+  await fs.rename(renamed,path.join(root,oldPath));
+  const manifestFile=path.join(root,oldPath,'archive-manifest.json'),manifest=await readJson(manifestFile);manifest.object=object;await writeJson(manifestFile,manifest);
+  const sums=path.join(root,oldPath,'SHA256SUMS.txt');await fs.writeFile(sums,(await fs.readFile(sums,'utf8')).replace(/^[a-f0-9]{64}  archive-manifest.json$/m,hash(await fs.readFile(manifestFile))+'  archive-manifest.json'));
+  await writeJson(path.join(root,object,'latest.json'),{format:1,revision:'revisions/'+oldRevision,contentSha256:manifest.contentSha256,lastCheckedAt:'2026-10-01T10:20:31.1230000Z',observationStatus:'observed'});
+  const record='records/2026-10-01T10-20-30.1200000Z-12345678',evidence=path.join(project,'evidence-archive');
+  await fs.mkdir(path.join(evidence,record,'original/records/2026-10-01T10-20-29.900Z-abcdef12'),{recursive:true});
+  await fs.writeFile(path.join(evidence,record,'original/records/2026-10-01T10-20-29.900Z-abcdef12/raw.txt'),'immutable source');
+  await writeJson(path.join(evidence,'catalog.json'),{schema:2,records:[{path:record,checksumsSha256:'original'}]});
+  await writeJson(path.join(root,'index/records.json'),{format:1,records:[{object,path:oldPath,sha256:manifest.contentSha256}]});
+  const work=path.join(project,'.build/github-archive-implementation'),inventoryName='inventory-2026-10-01T10-20-30.1200000Z.json';
+  await writeJson(path.join(work,inventoryName),{target:TARGET,checkedAt:'2026-10-01T10:20:30.1200000Z'});
+  await writeJson(path.join(work,'latest-inventory.json'),{path:inventoryName});
+  await writeJson(path.join(work,'prune-plan-2026-10-01T10-20-30.1200000Z.json'),{historicalPlan:true});
+  const verify=async()=>assert.deepEqual((await verifyArchive(root)).errors,[]);
+  return {project,root,object,oldPath,record,evidence,verify};
+}
+
+test('time paths retain exact fractional digits, reject invalid dates and leave originals untouched',()=>{
+  assert.equal(canonicalTimePath('records/2026-10-01T10-20-30.1200000Z-12345678'),'records/20261001T102030.1200000Z-12345678');
+  assert.equal(canonicalTimePath('records/2026-10-01T10-20-30Z-12345678/original/records/2026-10-01T10-20-29Z-abcdef12'),'records/20261001T102030Z-12345678/original/records/2026-10-01T10-20-29Z-abcdef12');
+  assert.equal(canonicalTimePath('records/2026-10-01-12345678'),'records/2026-10-01-12345678');
+  assert.equal(canonicalTimePath('supplements/received/abcdef/revisions/2026-10-01T10-20-30.120Z-12345678/received/records/2026-10-01T10-20-29Z-abcdef12'),'supplements/received/abcdef/revisions/20261001T102030.120Z-12345678/received/records/2026-10-01T10-20-29Z-abcdef12');
+  assert.throws(()=>canonicalTimePath('records/2026-02-30T10-20-30Z-12345678'),/Invalid UTC/);
+  assert.throws(()=>canonicalTimePath('records/../escape'),/Unsafe/);
+});
+
+test('time migration preserves sealed bytes, observation pointers and independent original-path restoration',async t=>{
+  const f=await timeFixture(t),before=await tree(path.join(f.root,f.oldPath)),original=await tree(path.join(f.evidence,f.record));
+  const result=await applyTimePaths(f.project,{verify:f.verify});assert.equal(result.moves.length,4);assert.equal(result.proofs,4);
+  assert.deepEqual(await tree(resolveArchivePath(f.root,f.oldPath)),before);assert.deepEqual(await tree(resolveArchivePath(f.evidence,f.record)),original);
+  const pointer=await readJson(path.join(f.root,canonicalTimePath(f.object),'latest.json'));
+  assert.equal(pointer.lastCheckedAt,'2026-10-01T10:20:31.1230000Z');assert.equal(pointer.observationStatus,'observed');assert.equal(pointer.revision,canonicalTimePath(f.oldPath).split('/').slice(-2).join('/'));
+  assert.equal((await readJson(path.join(f.evidence,'catalog.json'))).records[0].path,canonicalTimePath(f.record));
+  assert.equal((await latestInventory(f.project)).checkedAt,'2026-10-01T10:20:30.1200000Z');
+  assert.equal((await planTimePaths(f.project)).length,0);assert.equal(await exists(path.join(f.root,'pending/time-path-restore-proof')),false);
+  execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',path.resolve('scripts/verify-github-archive-standalone.ps1'),'-Root',f.root],{windowsHide:true,stdio:'pipe'});
+});
+
+test('time migration rolls back after pointer writes and refuses destination collisions and tampered recovery',async t=>{
+  const f=await timeFixture(t),beforePlatform=await tree(path.join(f.root,f.oldPath)),beforeEvidence=await tree(f.evidence),pointer=await fs.readFile(path.join(f.root,f.object,'latest.json'));
+  let calls=0;await assert.rejects(applyTimePaths(f.project,{verify:async()=>{if(++calls===2)throw Error('injected verification failure');await f.verify();}}),/injected/);
+  assert.deepEqual(await tree(path.join(f.root,f.oldPath)),beforePlatform);assert.deepEqual(await tree(f.evidence),beforeEvidence);assert.deepEqual(await fs.readFile(path.join(f.root,f.object,'latest.json')),pointer);
+  await fs.mkdir(path.join(f.evidence,canonicalTimePath(f.record)));await assert.rejects(planTimePaths(f.project),/collision/);
+  const journal=path.join(f.root,'pending/time-path-migration.json'),saved=await readJson(journal);saved.moves[0].to='records/other';await writeJson(journal,saved);
+  await assert.rejects(rollbackTimePaths(f.project,{verify:f.verify}),/integrity/);
+});
+
+test('time migration recovers an interrupted rename without trusting a saved progress counter',async t=>{
+  const f=await timeFixture(t),before=await tree(f.evidence);
+  await assert.rejects(applyTimePaths(f.project,{verify:f.verify,onStage:async stage=>{if(stage==='moved')throw Error('interrupted move');}}),/interrupted move/);
+  assert.deepEqual(await tree(f.evidence),before);
+  const file=path.join(f.root,'pending/time-path-migration.json'),journal=await readJson(file);
+  const row=journal.moves.find(r=>r.root==='evidence-archive');await fs.rename(path.join(f.evidence,row.from),path.join(f.evidence,row.to));
+  const {journalSha256,...interrupted}=journal;interrupted.state='moving';
+  await writeJson(file,{...interrupted,journalSha256:hash(JSON.stringify(canonical(interrupted)))});
+  await rollbackTimePaths(f.project,{verify:f.verify});assert.deepEqual(await tree(f.evidence),before);
+});
+
+test('verified time migration finalizes an interrupted receipt without repeating moves or duplicating history',async t=>{
+  const f=await timeFixture(t),file=path.join(f.root,'pending/time-path-migration.json');let saved;
+  const result=await applyTimePaths(f.project,{verify:f.verify,onStage:async stage=>{if(stage==='restored')saved=await readJson(file);}});
+  saved.state='completed';saved.finishedAt=result.finishedAt;
+  const {journalSha256,...payload}=saved;await writeJson(file,{...payload,journalSha256:hash(JSON.stringify(canonical(payload)))});
+  const resumed=await applyTimePaths(f.project,{verify:f.verify});assert.equal(resumed.receipt,result.receipt);assert.equal(resumed.proofs,4);assert.equal(await exists(file),false);
+});
 test('capacity warnings report storage pressure without removing sealed or pending data',async t=>{
   assert.deepEqual(capacityWarnings({freeBytes:1024**3,formalBytes:0,pendingBytes:0}),[]);
   assert.deepEqual(capacityWarnings({freeBytes:0,formalBytes:1024**3,pendingBytes:512*1024**2}),['free-space-below-1-GiB','formal-archive-at-least-1-GiB','pending-at-least-512-MiB']);
@@ -34,7 +111,7 @@ test('transport result uses its structured record instead of diagnostic stdout a
 });
 async function documentationProject(t){
   const project=await fixture(t),scripts=path.join(project,'scripts');await fs.mkdir(scripts);
-  for(const name of (await fs.readdir('scripts')).filter(name=>/^github-archive.*\.mjs$/.test(name)&&!name.endsWith('.test.mjs')))await fs.copyFile(path.resolve('scripts',name),path.join(scripts,name));
+  for(const name of (await fs.readdir('scripts')).filter(name=>(name==='time.mjs'||/^github-archive.*\.mjs$/.test(name)&&!name.endsWith('.test.mjs'))))await fs.copyFile(path.resolve('scripts',name),path.join(scripts,name));
   await fs.mkdir(path.join(project,'docs'));await fs.copyFile(path.resolve('docs/data-and-archives.md'),path.join(project,'docs/data-and-archives.md'));
   await fs.writeFile(path.join(project,'.gitignore'),'/local-notes/\n/github-archive/\n');
   execFileSync('git',['init','--quiet',project],{windowsHide:true});
@@ -63,9 +140,9 @@ test('real archive CLI refuses forced Git tracking of local notes before archive
   assert.equal(await exists(path.join(project,'github-archive')),false);
   assert.equal(await fs.readFile(note,'utf8'),'private protocol note');
 });
-async function pruneFixture(t){
+async function pruneFixture(t,relative='records/protocol-cloud'){
   const project=await fixture(t),root=path.join(project,'github-archive');await initialize(root,TARGET);
-  const relative='records/protocol-cloud',source='evidence-archive/'+relative,dir=path.join(project,source);
+  const source='evidence-archive/'+relative,dir=path.join(project,source);
   await fs.mkdir(dir,{recursive:true});await writeJson(path.join(dir,'manifest.json'),{kind:'App',github:{repository:TARGET.repository,runId:'123',runAttempt:'1',sha:'a'.repeat(40),job:'full-regression'}});
   await fs.writeFile(path.join(dir,'SHA256SUMS.txt'),'isolated removal protocol; not a product result\n');await fs.mkdir(path.join(dir,'nested'));await fs.writeFile(path.join(dir,'nested/result.txt'),'protocol source bytes');
   const files=await tree(dir),originalContentSha256=hash(JSON.stringify(canonical(files))),identity=await evidenceIdentity(dir,relative);
@@ -89,6 +166,21 @@ test('exact migrated source removal preserves local/original data and restores t
   await restorePrunedSource(f.project,f.root,plan,f.source,f.options);assert.deepEqual(await tree(f.dir),f.files);
   await assert.rejects(restorePrunedSource(f.project,f.root,plan,f.source,f.options),/overwrite/);
   await assert.rejects(applyPrune(f.project,f.root,plan,f.options),/reappeared/);
+});
+
+test('old removal plans and boundary inventories remain valid after time path migration',async t=>{
+  const f=await pruneFixture(t,'records/2026-10-01T10-20-30.1200000Z-12345678');
+  const oldTarget=path.dirname(f.target)+'/2026-10-01T10-20-31.1230000Z-'+path.basename(f.target).split('-').at(-1);await fs.rename(f.target,oldTarget);
+  const migration=await readJson(path.join(f.root,'pending/migration-journal.json'));migration.records[0].target=path.relative(f.root,oldTarget).replaceAll('\\','/');await writeJson(path.join(f.root,'pending/migration-journal.json'),migration);
+  const pointerFile=path.join(path.dirname(path.dirname(oldTarget)),'latest.json'),pointer=await readJson(pointerFile);pointer.revision='revisions/'+path.basename(oldTarget);await writeJson(pointerFile,pointer);
+  const work=path.join(f.project,'.build/github-archive-implementation');
+  await writeJson(path.join(work,'baseline.json'),{target:TARGET,evidenceInventory:await tree(path.join(f.project,'evidence-archive')),releaseInventory:await tree(path.join(f.project,'releases')),records:[{path:f.source.slice('evidence-archive/'.length),github:{repository:TARGET.repository},files:f.files}]});await writeJson(path.join(work,'latest-inventory.json'),{path:'baseline.json'});
+  const plan=await preparePrune(f.project,f.root,f.options);
+  await applyTimePaths(f.project,{verify:async()=>assert.deepEqual((await verifyArchive(f.root)).errors,[])});
+  const renamedBoundary=await boundaryBaseline(f.project);assert.deepEqual(renamedBoundary.oldEvidenceChanges,[]);assert.equal(renamedBoundary.addedEvidenceFiles,0);
+  await applyPrune(f.project,f.root,plan,f.options);assert.deepEqual((await boundaryBaseline(f.project)).oldEvidenceChanges,[]);
+  await restorePrunedSource(f.project,f.root,plan,f.source,f.options);
+  assert.deepEqual(await tree(resolveArchivePath(path.join(f.project,'evidence-archive'),f.source.slice('evidence-archive/'.length))),f.files);
 });
 test('changed sources, extra files and damaged targets block all source removal',async t=>{
   for(const mutation of ['source','extra','target']){
@@ -127,7 +219,7 @@ test('changing active diagnostics stays outside removal scope and is preserved',
 });
 test('real listing scripts preserve unique maintenance that references the same Actions run as product evidence',async t=>{
   const f=await pruneFixture(t),scripts=path.join(f.project,'scripts');await fs.mkdir(scripts);
-  for(const name of (await fs.readdir('scripts')).filter(name=>/^github-archive.*\.mjs$/.test(name)&&!name.endsWith('.test.mjs')).concat(['list-test-evidence.ps1','evidence-lib.ps1']))await fs.copyFile(path.resolve('scripts',name),path.join(scripts,name));
+  for(const name of (await fs.readdir('scripts')).filter(name=>(name==='time.mjs'||/^github-archive.*\.mjs$/.test(name)&&!name.endsWith('.test.mjs'))).concat(['list-test-evidence.ps1','evidence-lib.ps1']))await fs.copyFile(path.resolve('scripts',name),path.join(scripts,name));
   const maintenance=path.join(f.project,'evidence-archive/records/unique-maintenance');await fs.mkdir(maintenance);
   await writeJson(path.join(maintenance,'manifest.json'),{kind:'test-system-audit',github:{repository:TARGET.repository,runId:'123',runAttempt:'1'}});await fs.writeFile(path.join(maintenance,'report.md'),'unique repair report; isolated listing protocol');
   const list=scope=>JSON.parse(execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',path.join(scripts,'list-test-evidence.ps1'),'-Scope',scope,'-Json'],{encoding:'utf8',windowsHide:true,timeout:30000}));
@@ -273,4 +365,31 @@ test('GraphQL only executes fixed repository read queries and validates reposito
   await assert.rejects(repositoryGraphql(reader,'mutation'),/Unknown/);await assert.rejects(repositoryGraphql(reader,'threads',{number:-1}),/Invalid/);
   const wrong=new GitHubReader({token:'protocol-only',fetchImpl:async()=>new Response(JSON.stringify({data:{repository:{databaseId:123,nameWithOwner:TARGET.repository}}}))});await assert.rejects(repositoryGraphql(wrong,'threads',{number:1}),/identity mismatch/);
   const forbidden=new GitHubReader({token:'protocol-only',fetchImpl:async()=>new Response(JSON.stringify({errors:[{type:'INSUFFICIENT_SCOPES'}]}))});await assert.rejects(repositoryGraphql(forbidden,'projects'),e=>e.state==='no-permission');
+});
+
+
+test('mixed timestamp precisions sort by instant including sub-millisecond differences',()=>{
+  const ordered=['2026-10-05T03:04:05Z','2026-10-05T03:04:05.123Z','2026-10-05T03:04:05.1230001Z','2026-10-05T03:04:05.1230002Z','2026-10-05T03:04:06Z'];
+  assert.deepEqual([...ordered].reverse().sort(compareTimes),ordered);
+  assert.deepEqual([...ordered].sort((a,b)=>compareTimes(b,a)),[...ordered].reverse());
+  assert.equal(compareTimes(ordered[1],'2026-10-05T11:04:05.1230000+08:00'),0);
+  assert.equal(compareTimes(ordered[0],'2026-10-05T03:04:05.000Z'),0);
+  assert.ok(compareTimes('2026-10-05T03:04:05.999999999Z',ordered[4])<0);
+  assert.ok(compareTimes('',ordered[0])<0);
+});
+
+
+test('reindex selects the latest mixed precision capture and preserves valid observed pointers',async t=>{
+  const root=await fixture(t),object='repository/metadata';
+  const a=await seal(root,object,{'body.json':{n:1}},{fetchedAt:'2026-10-05T03:04:05Z'});
+  const b=await seal(root,object,{'body.json':{n:2}},{fetchedAt:'2026-10-05T03:04:05.1230002Z'});
+  await seal(root,object,{'body.json':{n:3}},{fetchedAt:'2026-10-05T03:04:05.1230001Z'});
+  const latest=path.join(root,object,'latest.json');await fs.unlink(latest);
+  const entry=path.resolve('scripts/github-archive.mjs');
+  execFileSync(process.execPath,[entry,'reindex','--root',root],{encoding:'utf8',windowsHide:true});
+  assert.equal((await readJson(latest)).revision,b.path.slice(object.length+1));
+  const observed={format:1,revision:a.path.slice(object.length+1),contentSha256:(await verifySnapshot(path.join(root,a.path))).contentSha256,lastCheckedAt:'2026-10-06T01:02:03Z'};
+  await writeJson(latest,observed);
+  execFileSync(process.execPath,[entry,'reindex','--root',root],{encoding:'utf8',windowsHide:true});
+  assert.deepEqual(await readJson(latest),observed);
 });

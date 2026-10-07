@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {GitHubReader} from './github-archive-api.mjs';
-import {TARGET,now,tree,readJson,writeJson,noLinks} from './github-archive-store.mjs';
+import {TARGET,now,tree,readJson,writeJson,noLinks,resolveArchivePath} from './github-archive-store.mjs';
 
 export async function inventory(project,{online=true}={}){
   const work=path.join(project,'.build','github-archive-implementation');await noLinks(work);await fs.mkdir(work,{recursive:true});
@@ -35,4 +35,4 @@ export async function inventory(project,{online=true}={}){
   report.completedAt=now();const file=path.join(work,'inventory-'+run+'.json');await writeJson(file,report);await writeJson(path.join(work,'latest-inventory.json'),{path:path.basename(file)});
   console.log('Inventory report: '+file);return {file,report};
 }
-export async function latestInventory(project){const root=path.join(project,'.build','github-archive-implementation');const pointer=await readJson(path.join(root,'latest-inventory.json'));if(path.basename(pointer.path)!==pointer.path)throw Error('Invalid inventory pointer');const report=await readJson(path.join(root,pointer.path));if(report.target.repositoryId!==TARGET.repositoryId)throw Error('Inventory target mismatch');return report}
+export async function latestInventory(project){const root=path.join(project,'.build','github-archive-implementation');const pointer=await readJson(path.join(root,'latest-inventory.json'));if(path.basename(pointer.path)!==pointer.path)throw Error('Invalid inventory pointer');const report=await readJson(resolveArchivePath(root,pointer.path));if(report.target.repositoryId!==TARGET.repositoryId)throw Error('Inventory target mismatch');return report}

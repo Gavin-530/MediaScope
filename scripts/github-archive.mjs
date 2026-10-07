@@ -1,8 +1,9 @@
 import fs from 'node:fs/promises';
+import {compareTimes} from './time.mjs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {execFileSync} from 'node:child_process';
-import {TARGET,now,initialize,assertRoot,lock,verifyArchive,verifySnapshot,snapshots,readJson,writeJson,exists,inside,noLinks,tree,seal,hash,safeRelative} from './github-archive-store.mjs';
+import {TARGET,now,initialize,assertRoot,lock,verifyArchive,verifySnapshot,snapshots,readJson,writeJson,exists,inside,noLinks,tree,seal,hash,safeRelative,canonicalTimePath} from './github-archive-store.mjs';
 import {inventory,latestInventory} from './github-archive-inventory.mjs';
 import {migrate,boundaryBaseline,evidenceRecords,verifyEvidence,importTransport,mergeCopy} from './github-archive-migration.mjs';
 import {sync} from './github-archive-collect.mjs';
@@ -46,7 +47,7 @@ export async function main(args=process.argv.slice(2)){
         rows.push({Time:m.startedAt??m.startedAtUtc??m.createdAtUtc??null,Origin:'github-actions',Version:m.version??null,Kind:m.kind,Outcome:m.outcome??m.testStepOutcome??'unknown',CIStep:identity.testStepOutcome,Passed:m.testSummary?.passed??null,Failed:m.testSummary?.failed??null,Scope:m.scope??null,Validation:m.validation?.status??null,Run:m.runId,GitHubRun:identity.github.runId,Attempt:identity.github.runAttempt,Path:'github-archive/'+path.relative(root,r.dir).replaceAll('\\','/'),Original:path.join(r.dir,'original',identity.payloadRelative)});
       }console.log(JSON.stringify(rows,null,2));return rows;
     }
-    const rows=[];for(const dir of await snapshots(root)){const m=await verifySnapshot(dir);rows.push({object:m.object,path:path.relative(root,dir).replaceAll('\\','/'),fetchedAt:m.fetchedAt,bytes:m.files.reduce((n,f)=>n+f.bytes,0),sha256:m.contentSha256})}console.log(JSON.stringify(rows,null,2));return rows;
+    const rows=[];for(const dir of await snapshots(root)){const m=await verifySnapshot(dir);rows.push({object:canonicalTimePath(m.object),path:path.relative(root,dir).replaceAll('\\','/'),fetchedAt:m.fetchedAt,bytes:m.files.reduce((n,f)=>n+f.bytes,0),sha256:m.contentSha256})}console.log(JSON.stringify(rows,null,2));return rows;
   }
   if(opts.command==='status'){const result={identity:await assertRoot(root),coverage:await exists(path.join(root,'coverage.json'))?await readJson(path.join(root,'coverage.json')):{state:'not-synchronized'},formal:await verifyArchive(root),pending:await exists(path.join(root,'pending'))?await tree(path.join(root,'pending')):[],continuousFreshness:false};console.log(JSON.stringify(result,null,2));return result}
   const gate=await lock(root,opts.command);
@@ -69,12 +70,12 @@ export async function main(args=process.argv.slice(2)){
     }
     if(opts.command==='reindex'){
       if((await verifyArchive(root)).errors.length)throw Error('Cannot rebuild pointers from damaged or misplaced formal records');
-      const rows=[];for(const dir of await snapshots(root)){const m=await verifySnapshot(dir);rows.push({object:m.object,path:path.relative(root,dir).replaceAll('\\','/'),sha256:m.contentSha256,fetchedAt:m.fetchedAt})}
+      const rows=[];for(const dir of await snapshots(root)){const m=await verifySnapshot(dir);rows.push({object:canonicalTimePath(m.object),path:path.relative(root,dir).replaceAll('\\','/'),sha256:m.contentSha256,fetchedAt:m.fetchedAt})}
       // Preserve valid observed pointers. Missing pointers can only recover the latest sealed capture, not lost check state.
       for(const object of new Set(rows.map(r=>r.object))){
         const file=path.join(root,object,'latest.json');let valid=false;
         if(await exists(file)){try{const pointer=await readJson(file);safeRelative(pointer.revision);valid=rows.some(r=>r.path===object+'/'+pointer.revision&&r.sha256===pointer.contentSha256)}catch{valid=false}}
-        if(!valid){const candidate=rows.filter(r=>r.object===object).sort((a,b)=>b.fetchedAt.localeCompare(a.fetchedAt))[0];await writeJson(file,{format:1,revision:candidate.path.slice(object.length+1),contentSha256:candidate.sha256,lastCheckedAt:null,observationStatus:'rebuilt-from-sealed-capture; current-state-unconfirmed'})}
+        if(!valid){const candidate=rows.filter(r=>r.object===object).sort((a,b)=>compareTimes(b.fetchedAt,a.fetchedAt))[0];await writeJson(file,{format:1,revision:candidate.path.slice(object.length+1),contentSha256:candidate.sha256,lastCheckedAt:null,observationStatus:'rebuilt-from-sealed-capture; current-state-unconfirmed'})}
       }
       await writeJson(path.join(root,'index','records.json'),{format:1,rebuiltAt:now(),records:rows});console.log('Rebuilt '+rows.length+' entries from sealed records');return rows;
     }
