@@ -2,6 +2,7 @@ name: MediaScope tests
 
 on:
   push:
+    branches-ignore: [codex/verify-release-0.2.8]
   pull_request:
   merge_group:
   workflow_dispatch:
