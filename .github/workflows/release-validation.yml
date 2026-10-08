@@ -19,7 +19,7 @@ jobs:
       - name: Check out the exact release source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          ref: 3262819d0c6f71671526506ad7e50b5b4845303e
+          ref: c4c543892318059aca5e8e7aa75726053eaf96b8
           persist-credentials: false
       - name: Prepare locked runtime
         run: |
@@ -52,7 +52,7 @@ jobs:
           const bytes=Buffer.from(blob.content.replace(/\s/g,''),'base64'),hash=createHash('sha256').update(bytes).digest('hex');
           if(bytes.length!==175312||hash!=='5485a858cfafb4c38a1e104aedf1ef8fc33d618ac89c177bc9d9c3d746cf8dc5')throw Error('ZIP size or SHA-256 mismatch');
           await fs.writeFile('releases/MediaScope-0.2.8-win-x64.zip',bytes);
-          await fs.writeFile('.build/release-validation/asset.json',JSON.stringify({source:'3262819d0c6f71671526506ad7e50b5b4845303e',assetId:null,bytes:bytes.length,sha256:hash},null,2));
+          await fs.writeFile('.build/release-validation/asset.json',JSON.stringify({source:'c4c543892318059aca5e8e7aa75726053eaf96b8',assetId:null,bytes:bytes.length,sha256:hash},null,2));
           console.log('Verified exact uploaded ZIP: '+hash);
           '@ | node --input-type=module
           if($LASTEXITCODE -ne 0){throw 'Exact asset verification failed'}
