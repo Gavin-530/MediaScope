@@ -43,6 +43,11 @@ function scenario(name,body){
     }finally{try{await context?.close()}finally{await app?.stop()}}
   });
 }
+async function importReport(page,file){
+  await page.locator('#import-report').setInputFiles(file);
+  // The async import handler clears the input only after rendering and polling finish.
+  await page.waitForFunction(()=>document.querySelector('#import-report').value==='');
+}
 async function preview(page,file=media.source){
   await page.locator('#file').fill(file);
   const response=page.waitForResponse(r=>r.url().endsWith('/api/probe')&&r.request().method()==='POST');
@@ -101,7 +106,7 @@ scenario('[bitrate-window] [units] calculation selection and display aggregation
   assert.equal(await page.locator('#bitrate .plot-axis-y').textContent(),'纵轴：'+rateUnit,'zoom does not change units');
   await page.locator('#bitrate-display').selectOption('100');
   const file=path.join(dir,'bitrate.json');await writeFile(file,JSON.stringify(report));
-  await page.locator('#import-report').setInputFiles(file);
+  await importReport(page,file);
   assert.equal(await page.locator('#bitrate-optional').evaluate(el=>el.open),false);
   await page.locator('#bitrate-optional > summary').click();
   assert.equal(await page.locator('#bitrate-display').inputValue(),'100');
@@ -143,11 +148,11 @@ scenario('[queue-removal] GUI removes waiting tasks and completed/imported resul
   await assert.rejects(app.request('jobs/'+completed.id+'/report'),/404/);
   const inspected=await preview(page);
   const file=path.join(dir,'import-removal.json');await writeFile(file,JSON.stringify(inspected));
-  await page.locator('#import-report').setInputFiles(file);
+  await importReport(page,file);
   await page.locator('#result-list [data-result-remove]').waitFor();await page.locator('#result-list [data-result-remove]').click();
   assert.equal(await page.locator('#result-list .queue-item').count(),0);
   assert.equal(await page.locator('#inspect-result').isVisible(),false,'removing the displayed imported result releases its report view');
-  await page.locator('#import-report').setInputFiles(file);
+  await importReport(page,file);
   const done=await app.request('jobs','POST',{type:'inspect',file:media.source});await waitForJob(app.request,done.id);
   await page.locator(`[data-result-remove="${done.id}"]`).waitFor();
   await page.locator('#result-clear').click();
@@ -197,12 +202,12 @@ scenario('[basic-properties] actual preview omits automatic sampling and preserv
   assert.equal(await details.locator('[data-track-main] [data-property="component-depth"]').count(),0);
   const file=path.join(dir,'properties-new.json'),saved=await download(page,'#inspect-export',file);
   assert.deepEqual(saved.results[0].report,report);
-  await page.locator('#import-report').setInputFiles(file);
+  await importReport(page,file);
   const restored=await download(page,'#inspect-export',path.join(dir,'properties-restored.json'));
   assert.deepEqual(restored.results[0].report,report);
   const timeoutCommands=[],timed=await probe(report.file,{probeSupplementTimeoutMs:1,commands:timeoutCommands});
   const failed={...report,...timed,commands:timeoutCommands,metadata:metadataSummary(timed)},failedFile=path.join(dir,'properties-failed.json');
-  await writeFile(failedFile,JSON.stringify(failed));await page.locator('#import-report').setInputFiles(failedFile);
+  await writeFile(failedFile,JSON.stringify(failed));await importReport(page,failedFile);
   await page.waitForFunction(()=>document.querySelector('#inspect-details').textContent.includes('读取失败'));
   assert.equal(await details.locator('.notice').filter({hasText:'读取失败'}).count(),1,'pixel descriptor failure stays visible outside folded evidence');
   await details.locator('.basic-info-evidence > summary').click();
@@ -213,13 +218,13 @@ scenario('[basic-properties] actual preview omits automatic sampling and preserv
   const legacyCommands=[],sample=await legacyFrameSample(report.file,report.raw.streams,{commands:legacyCommands});
   const legacy={...report,...sample,commands:[...report.commands,...legacyCommands]};legacy.metadata=metadataSummary(legacy);
   const legacyFile=path.join(dir,'properties-with-samples.json');await writeFile(legacyFile,JSON.stringify(legacy));
-  await page.locator('#import-report').setInputFiles(legacyFile);
+  await importReport(page,legacyFile);
   await page.waitForFunction(()=>document.querySelector('#inspect-details').textContent.includes('个实际样本'));
   await details.locator('.basic-info-evidence > summary').click();
   assert.match(await details.innerText(),new RegExp(`${sample.frameSampleRead.tracks[0].count} 个实际样本`));
   assert.deepEqual((await download(page,'#inspect-export',path.join(dir,'legacy-samples-restored.json'))).results[0].report,legacy);
   const old=structuredClone(report);old.schema='MediaScope/0.1';delete old.pixelFormats;delete old.frameSampleRead;delete old.frameSample;delete old.frameSampleScope;
-  const oldFile=path.join(dir,'properties-old.json');await writeFile(oldFile,JSON.stringify(old));await page.locator('#import-report').setInputFiles(oldFile);
+  const oldFile=path.join(dir,'properties-old.json');await writeFile(oldFile,JSON.stringify(old));await importReport(page,oldFile);
   await page.waitForFunction(()=>document.querySelector('#inspect-details').textContent.includes('旧报告未保存抽样结果'));
   const oldSaved=await download(page,'#inspect-export',path.join(dir,'properties-old-restored.json'));
   assert.deepEqual(oldSaved.results[0].report,old);
@@ -344,7 +349,7 @@ scenario('[trial] [units] real x264 trial encodes both CRFs, preserves frame met
   assert.match(await page.locator('#rd canvas').getAttribute('aria-label'),new RegExp(`视频包体积（${unit}）`));
   const exported=await download(page,'#trial-export',path.join(dir,'units-trial.json'));
   assert.deepEqual(exported.results[0].report,report);
-  await page.locator('#import-report').setInputFiles(path.join(dir,'units-trial.json'));
+  await importReport(page,path.join(dir,'units-trial.json'));
   await page.locator('#rd-axis').selectOption('videoBytes');
   assert.match(await page.locator('#rd canvas').getAttribute('aria-label'),new RegExp(`视频包体积（${unit}）`));
   await page.locator('#trial-crfs').fill('0');
@@ -377,14 +382,14 @@ scenario('[packet-distribution] actual audio packets, optional rates and frame a
   await page.locator('#frame-full').click();assert.equal(Number(await page.locator('#frame-plot [data-field="from"]').inputValue()),0);
   const file=path.join(dir,'packets-export.json'),exported=await download(page,'#inspect-export',file);
   assert.deepEqual(exported.results[0].report,report);
-  await page.locator('#import-report').setInputFiles(file);
+  await importReport(page,file);
   assert.equal(await page.locator('#frame-axis').inputValue(),'time');
   assert.ok(await page.locator('#audio-packets-1 canvas').isVisible());
   assert.equal(await page.locator('#bitrate-optional').evaluate(el=>el.open),false);
   await page.screenshot({path:path.join(dir,'packet-distribution.png'),fullPage:true});
   const legacy=structuredClone(report);for(const track of legacy.tracks)delete track.packetDistribution;
   const legacyFile=path.join(dir,'legacy-packets.json');await writeFile(legacyFile,JSON.stringify(legacy));
-  await page.locator('#import-report').setInputFiles(legacyFile);
+  await importReport(page,legacyFile);
   assert.equal(await page.locator('[id^="audio-packets-"] canvas').count(),0);
   assert.equal(await page.getByText(/此旧报告未保存音轨逐包数据/).count(),2);
   await page.locator('#bitrate-optional > summary').click();assert.ok(await page.locator('#audio-1 canvas').isVisible());
@@ -396,7 +401,7 @@ scenario('[portable] real export/import restores measured frames without queuing
   const saved=await download(page,'#inspect-export',file);
   await page.reload();await page.waitForFunction(()=>document.querySelector('#environment')?.textContent.includes('ffmpeg version'));
   const before=(await app.request('status')).jobs.length;
-  await page.locator('#import-report').setInputFiles(file);
+  await importReport(page,file);
   await page.locator('#inspect-details').getByRole('heading',{name:'帧结构与 GOP',exact:true}).waitFor();
   const restored=await download(page,'#inspect-export',path.join(dir,'restored.json'));
   assert.deepEqual(restored.results[0].report,report);assert.deepEqual(saved.results[0].report,report);
@@ -407,7 +412,7 @@ scenario('[portable-invalid] damaged real export is rejected and the currently v
   const {report}=await analyze(page,app),file=path.join(dir,'original.json');
   const saved=await download(page,'#inspect-export',file);
   saved.schema='MediaScope/unsupported';const broken=path.join(dir,'deliberately-corrupted.json');
-  await writeFile(broken,JSON.stringify(saved));await page.locator('#import-report').setInputFiles(broken);
+  await writeFile(broken,JSON.stringify(saved));await importReport(page,broken);
   await page.waitForFunction(()=>document.querySelector('#task-label')?.textContent==='任务未完成');
   const after=await download(page,'#inspect-export',path.join(dir,'after-rejection.json'));
   assert.deepEqual(after.results[0].report,report);
@@ -426,7 +431,7 @@ scenario('[queue-plans] GUI captures actual inputs; plan export/import preserves
   const file=path.join(dir,'actual-plan.json'),exported=await download(page,'#export-portable',file);
   assert.deepEqual(exported.plans,plans.plans);assert.deepEqual(exported.results,[]);
   await page.locator('#import-results').uncheck();await page.locator('#import-plan-mode').selectOption('replace');
-  await page.locator('#import-report').setInputFiles(file);
+  await importReport(page,file);
   await page.waitForFunction(()=>document.querySelector('#task-message')?.textContent.includes('已导入'));
   state=await app.request('status');assert.equal(state.queueRunning,false);
   const after=await app.request('plans');assert.deepEqual(after.plans.map(p=>p.input),plans.plans.map(p=>p.input));
