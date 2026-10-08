@@ -1,4 +1,5 @@
 import {validateBitrateCurve} from './bitrate-model.js';
+import {validateAudioPacketDistribution} from './distribution-model.js';
 // Validate the saved data without normalizing, rounding or discarding evidence.
 export function parseReport(text) {
   let r;
@@ -116,6 +117,10 @@ export function validateReport(r) {
           index(x.index, "tracks.index");
           objects(x.bins, "tracks.bins");
           if (x.bitrateCurve) validateBitrateCurve(x.bitrateCurve);
+          if (x.packetDistribution !== undefined) {
+            if (x.type !== 'audio') fail('tracks.packetDistribution.type');
+            validateAudioPacketDistribution(x.packetDistribution);
+          }
         });
       }
       if (r.content?.available) {

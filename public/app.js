@@ -1,4 +1,5 @@
 import {bitrateView} from "./bitrate-model.js";
+import {audioPacketPoints, packetSeconds, frameTimePoints, frameTimeRange} from "./distribution-model.js";
 import {formatBytes, formatBitrate, byteEvidence, byteLimit, quantityScale, quantityNumber, scalePlotData} from "./units.js";
 import { parsePortable, makePortable, maxPortableBytes, utcFilename } from "./portable.js";
 import { plot, gopOverview } from "./charts.js";
@@ -986,28 +987,24 @@ function renderMedia(r) {
     ])}</div>`;
     html += section(
       "帧结构与 GOP",
-      `<p class="hint">显示顺序视图。I / P / B 是预测类型；IDR / CRA / BLA 是码流访问类型，二者不混用。GOP 以随机访问/关键帧区间呈现，不据此猜测开放或闭合。</p><div id="gop-overview"></div><div class="pager"><button id="gop-prev" class="secondary">上一 GOP</button><label>GOP #<input id="gop-index" type="number" min="0" max="${gops.length - 1}" value="0"></label><button id="gop-next" class="secondary">下一 GOP</button><span id="gop-info"></span></div><div id="frame-plot"></div><div id="frame-detail" class="frame-detail"></div><details><summary>逐帧列表 / CSV</summary><div class="pager"><button id="prev" class="secondary">上一页</button><span id="page"></span><button id="next" class="secondary">下一页</button><button id="csv" class="secondary">导出帧 CSV</button></div><div id="frames"></div></details>`,
+      `<p class="hint">显示顺序视图。I / P / B 是预测类型；IDR / CRA / BLA 是码流访问类型，二者不混用。GOP 以随机访问/关键帧区间呈现，不据此猜测开放或闭合。</p><div class="row"><label for="frame-axis">大小图横轴</label><select id="frame-axis"><option value="time">呈现时间（s）</option><option value="frame">显示帧序号</option></select><button id="frame-full" class="secondary">查看全片</button></div><p class="hint" id="frame-axis-note"></p><div id="gop-overview"></div><div class="pager"><button id="gop-prev" class="secondary">上一 GOP</button><label>GOP #<input id="gop-index" type="number" min="0" max="${gops.length - 1}" value="0"></label><button id="gop-next" class="secondary">下一 GOP</button><span id="gop-info"></span></div><div id="frame-plot"></div><div id="frame-detail" class="frame-detail"></div><details><summary>逐帧列表 / CSV</summary><div class="pager"><button id="prev" class="secondary">上一页</button><span id="page"></span><button id="next" class="secondary">下一页</button><button id="csv" class="secondary">导出帧 CSV</button></div><div id="frames"></div></details>`,
     );
     if (r.coding?.codec === "av1")
       html += section(
         "AV1 编码帧 / 显示事件",
         `<p>新编码帧 ${r.coding.counts.encoded} · 隐藏帧 ${r.coding.counts.hidden} · SHOW_EXISTING ${r.coding.counts.showExisting} · 显示事件 ${r.coding.counts.shown}</p><p class="hint">按码流编码顺序列出所有帧头事件，包含 KEY / INTER / INTRA_ONLY / SWITCH、隐藏帧和 SHOW_EXISTING。H=隐藏、S=显示已有帧、V=新帧直接显示。点击色带查看结构字段、刷新掩码与参考槽。OBU 负载字节不一定等于完整图像大小。</p><div id="av1-plot"></div><label>编码事件 #<input id="av1-index" type="number" min="0" max="${r.coding.events.length - 1}" value="0"></label><div id="av1-detail"></div>${raw(r.coding.sequences, "AV1 序列头（去重）")}`,
       );
-    html += section(
-      r.packets.bitrateCurve ? "视频区间平均码率" : "视频码率 · 1 秒窗口（旧报告）",
-      `${displayControl(r.packets.bitrateCurve, "bitrate-display")}${r.packets.bitrateCurve ? `<p class="hint">计算窗口 ${r.packets.bitrateCurve.windowMs} ms；按 PTS 归属包负载，首尾使用实际时长。${r.packets.bitrateCurve.status === "ok" ? "" : esc(r.packets.bitrateCurve.reasons.join("；"))}</p>` : ""}<div id="bitrate"></div><p class="hint">全程平均（独立口径） ${cellHTML(rate(r.packets.averageMbps))} · 缺少时间戳 ${r.packets.missing} 包。放大不改变统计窗口。</p>`,
-    );
     const audio = (r.tracks || []).filter((t) => t.type === "audio");
+    if (audio.length) html += section("音轨包大小时间分布", audio.map(audioPacketHTML).join(""));
+    let bitrateHTML = `<h4>${r.packets.bitrateCurve ? "视频包负载码率（PTS 归属）" : "视频码率 · 1 秒窗口（旧报告）"}</h4>${displayControl(r.packets.bitrateCurve, "bitrate-display")}${r.packets.bitrateCurve ? `<p class="hint">计算窗口 ${r.packets.bitrateCurve.windowMs} ms；整包按起始 PTS 归属，跨窗口包不拆分，首尾使用实际时长。边界归属可使恒定码率产生波动，短尾窗口偏差可能更大；不代表采样码率或传输瞬时码率。${r.packets.bitrateCurve.status === "ok" ? "" : esc(r.packets.bitrateCurve.reasons.join("；"))}</p>` : ""}<div id="bitrate"></div><p class="hint">缺少时间戳 ${r.packets.missing} 包。放大不改变统计窗口。</p>`;
     if (audio.length)
-      html += section(
-        r.packets.bitrateCurve ? "音轨区间平均码率" : "音轨码率 · 1 秒窗口（旧报告）",
-        audio
+      bitrateHTML += audio
           .map(
             (t) =>
-              `<h4>音轨 #${t.index} · ${esc(t.codec)} · 全程平均（独立口径） ${t.averageMbps == null ? "不可计算" : cellHTML(rate(t.averageMbps))}</h4>${displayControl(t.bitrateCurve, `audio-${t.index}-display`)}<div id="audio-${t.index}"></div>${t.bitrateCurve?.status === "unavailable" ? `<p class="hint">不可计算：${esc(t.bitrateCurve.reasons.join("；"))}</p>` : ""}`,
+              `<h4>音轨 #${t.index} · ${esc(t.codec)} · 窗口码率</h4>${displayControl(t.bitrateCurve, `audio-${t.index}-display`)}${t.bitrateCurve ? '<p class="hint">整包按起始 PTS 归属，跨窗口包不拆分；恒定 PCM 也可能波动，短尾窗口偏差可能更大。曲线不代表采样码率或传输瞬时码率。</p>' : ''}<div id="audio-${t.index}"></div>${t.bitrateCurve?.status === "unavailable" ? `<p class="hint">不可计算：${esc(t.bitrateCurve.reasons.join("；"))}</p>` : ""}`,
           )
-          .join(""),
-      );
+          .join("");
+    html += section("音视频码率统计（可选曲线）", table(["轨道", "全程平均（原有独立口径）"], [[`视频 #${r.stream}`, rate(r.packets.averageMbps)], ...audio.map(t => [`音轨 #${t.index} · ${t.codec}`, t.averageMbps == null ? "不可计算" : rate(t.averageMbps)])]) + `<details id="bitrate-optional"><summary>展开音视频窗口码率曲线</summary>${bitrateHTML}</details>`);
     if (r.tracks)
       html += section(
         "体积构成",
@@ -1060,17 +1057,18 @@ function renderMedia(r) {
   if (r.frames) {
     if (r.frames.length) initFrames(r);
     else $("#gop-overview").textContent = "报告中没有显示帧";
+    initAudioPackets(r);
     const bitratePlots = new Map();
     for (const [id, t] of [["bitrate", r.packets], ...(r.tracks || []).filter(t => t.type === "audio").map(t => ["audio-" + t.index, t])]) {
       const control = $("#" + (id === "bitrate" ? "bitrate-display" : id + "-display"));
       const drawBitrate = () => {
         const windowMs = Number(control?.value ?? 1000);
-        const data = t.bitrateCurve ? bitrateView(t.bitrateCurve, windowMs).map(b => [b.start, b.mbps * 1e6, b]) : t.bins.map(b => [b.second, b.mbps * 1e6, b]);
+        const data = t.bitrateCurve ? bitrateView(t.bitrateCurve, windowMs).map(b => [b.start, b.mbps * 1e6, b]) : t.bins.map(b => [b.second, b.mbps * 1e6, {...b, start: b.second, end: b.second + 1}]);
         const scale = quantityScale(data.map(p => p[1]), 'bit/s');
         const previous = bitratePlots.get(id);
         previous?.dispose?.();
         if (previous) { const i = charts.indexOf(previous); if (i >= 0) charts.splice(i, 1); }
-        bitratePlots.set(id, draw(id, scalePlotData(data, {y: scale}), {unit: scale.unit, describe: p => `${quantityNumber(p[0], 6)} s · ${formatBitrate(p[2].mbps * 1e6)}`}));
+        bitratePlots.set(id, draw(id, scalePlotData(data, {y: scale}), {unit: scale.unit, intervals: true, describe: p => `[${quantityNumber(p[2].start, 6)}, ${quantityNumber(p[2].end, 6)}) s · ${formatBitrate(p[2].mbps * 1e6)}${p[2].bytes == null ? '' : ` · ${p[2].bytes} B`}`}));
         if (t.bitrateCurve?.status === "unavailable") $("#" + id).textContent = "不可计算";
       };
       drawBitrate();
@@ -1102,10 +1100,45 @@ function legacyGops(frames) {
     label: frames[start].key ? "KEY_FLAG" : "前置片段",
   }));
 }
+function audioPacketHTML(track) {
+  const d = track.packetDistribution, id = `audio-packets-${track.index}`;
+  const title = `<h4>音轨 #${track.index} · ${esc(track.codec)}</h4>`;
+  if (!d) return title + '<p class="hint">此旧报告未保存音轨逐包数据，无法从窗口码率还原；原有码率仍可展开查看。</p>';
+  if (d.status !== 'ok') return title + `<p class="hint">${esc(d.reason)}</p>`;
+  return title + `<p class="hint">${d.count.toLocaleString()} 个解复用包；按包起始 PTS 展示负载大小，不按持续时间摊分。包大小也受分包时长影响。单位按整条音轨选择；密集时同一像素列保留最大高度，放大或查看列表可逐包核对。</p><p class="hint" id="${id}-status"></p><div id="${id}"></div><div id="${id}-detail" class="frame-detail"></div><details><summary>音轨 #${track.index} 逐包列表 / CSV</summary><div class="pager"><button id="${id}-prev" class="secondary">上一页</button><span id="${id}-page"></span><button id="${id}-next" class="secondary">下一页</button><button id="${id}-csv" class="secondary">导出音轨包 CSV</button></div><div id="${id}-list"></div></details>`;
+}
+function initAudioPackets(r) {
+  for (const track of (r.tracks || []).filter(t => t.type === 'audio' && t.packetDistribution?.status === 'ok')) {
+    const d = track.packetDistribution, id = `audio-packets-${track.index}`, points = audioPacketPoints(d),
+      scale = quantityScale(d.packets.map(row => row[3]));
+    const seconds = ticks => packetSeconds(ticks, d.timeBase);
+    const fields = (row, index) => [index, seconds(row[0]) == null ? '未报告' : `${quantityNumber(seconds(row[0]), 6)} s`, seconds(row[1]) == null ? '未报告' : `${quantityNumber(seconds(row[1]), 6)} s`, seconds(row[2]) > 0 ? `${quantityNumber(seconds(row[2]), 6)} s` : '未知或非正', size(row[3]), row[0] ?? '未报告', row[1] ?? '未报告', row[2] ?? '未报告'];
+    const headers = ['包序号', '呈现时间', '解码时间', '持续时间', '包大小', '原始 PTS', '原始 DTS', '原始 duration'];
+    const missing = d.count - points.length;
+    $(`#${id}-status`).textContent = `时间基 ${d.timeBase ?? '未报告'}；${missing ? `${missing} 个包缺少有效 PTS 或时间基，仅在逐包列表中保留，不回退 DTS。` : '全部包都有可定位的呈现时间。'}`;
+    draw(id, scalePlotData(points, {y: scale}), {unit: `包大小（${scale.unit}）`, axis: '呈现时间 s', stems: true,
+      describe: p => `包 ${p[2].index} · PTS ${quantityNumber(p[0], 6)} s · ${formatBytes(p[2].row[3])} · ${byteEvidence(p[2].row[3])}`,
+      onPick: p => {$(`#${id}-detail`).innerHTML = table(headers, [fields(p[2].row, p[2].index)]);}
+    });
+    if (d.packets.length) $(`#${id}-detail`).innerHTML = table(headers, [fields(d.packets[0], 0)]);
+    let page = 0;
+    const drawPage = () => {
+      $(`#${id}-page`).textContent = `${page + 1} / ${Math.max(1, Math.ceil(d.count / 100))}`;
+      $(`#${id}-prev`).disabled = page === 0;
+      $(`#${id}-next`).disabled = (page + 1) * 100 >= d.count;
+      $(`#${id}-list`).innerHTML = table(headers, d.packets.slice(page * 100, page * 100 + 100).map((row, i) => fields(row, page * 100 + i)));
+    };
+    $(`#${id}-prev`).onclick = () => {page--;drawPage();};
+    $(`#${id}-next`).onclick = () => {page++;drawPage();};
+    $(`#${id}-csv`).onclick = () => download('packet,pts_tick,dts_tick,duration_tick,size_bytes,time_base,pts_s,dts_s,duration_s\n' + d.packets.map((row, i) => [i, ...row, d.timeBase, ...row.slice(0, 3).map(seconds)].join(',')).join('\n'), `audio-${track.index}-packets.csv`, 'text/csv');
+    drawPage();
+  }
+}
 function initFrames(r) {
   const gops = r.coding?.gops || legacyGops(r.frames),
     frameScale = quantityScale(r.frames.map(f => f.bytes)),
-    fdata = r.frames.map((f, i) => [i, f.bytes == null ? null : f.bytes / frameScale.divisor, f]);
+    fdata = r.frames.map((f, i) => [i, f.bytes == null ? null : f.bytes / frameScale.divisor, f, i]),
+    tdata = frameTimePoints(r.frames).map(p => [p[0], p[1] == null ? null : p[1] / frameScale.divisor, p[2], p[3]]);
   const detail = (p) => {
     const f = p[2],
       packet = r.coding?.packets?.[f.packetIndex];
@@ -1114,7 +1147,7 @@ function initFrames(r) {
         ["显示帧", "时间", "预测类型", "访问类型", "关键帧标记", "包体积"],
         [
           [
-            p[0],
+            p[3],
             `${fmt(f.t, 6)} s`,
             f.type,
             f.special ?? "旧版未解析",
@@ -1124,21 +1157,27 @@ function initFrames(r) {
         ],
       ) + raw(packet ?? f, "码流包 / 单帧证据");
   };
-  const ribbon = draw("frame-plot", fdata, {
-    unit: `包体积（${frameScale.unit}）`,
-    axis: "显示帧",
-    frames: true,
-    initial: [0, gops[0].end + 1],
-    onPick: detail,
-    describe: (p) =>
-      `帧 ${p[0]} · ${fmt(p[2].t, 6)} s · ${p[2].type} / ${p[2].special ?? "未解析"} · ${formatBytes(p[2].bytes)}`,
-  });
-  let selected = 0;
+  let ribbon, selected = 0, fullView = true;
+  const axisPicker = $("#frame-axis");
+  const drawFrames = () => {
+    if (ribbon) {ribbon.dispose?.();const index = charts.indexOf(ribbon);if (index >= 0) charts.splice(index, 1);}
+    const time = axisPicker.value === 'time', g = gops[selected],
+      range = time ? frameTimeRange(r.frames, ...(fullView ? [] : [g.start, g.end])) : fullView ? [0, r.frames.length] : [g.start, g.end + 1];
+    $("#frame-axis-note").textContent = time ? `显示帧关联包大小；时间取解码器报告／推定的显示时间，不按帧率估算。每帧一根竖线，密集时同一像素列保留最大高度；包与帧不保证一一对应。${tdata.length < r.frames.length ? ` ${r.frames.length - tdata.length} 帧缺少有效时间，仅在帧序号视图中保留。` : ''}` : '沿用显示帧序号与解码器报告的关联包大小；不据此重复相加估算轨道体积。';
+    ribbon = draw("frame-plot", time ? tdata : fdata, {
+      unit: `关联包大小（${frameScale.unit}）`, axis: time ? '呈现时间 s' : '显示帧', frames: !time, stems: time,
+      xEnd: time ? frameTimeRange(r.frames)?.[1] : undefined, initial: range ?? undefined,
+      onPick: detail,
+      describe: p => `帧 ${p[3]} · ${fmt(p[2].t, 6)} s · ${p[2].type} / ${p[2].special ?? "未解析"} · ${formatBytes(p[2].bytes)}`,
+    });
+    const reset = $("#frame-plot [data-op=reset]");
+    if (reset) {const original = reset.onclick;reset.onclick = () => {fullView = true;original();};}
+  };
   const overview = gopOverview($("#gop-overview"), gops, r.frames.length, (i) =>
     select(i),
   );
   charts.push(overview);
-  const select = (i) => {
+  const select = (i, focus = true) => {
     selected = Math.max(0, Math.min(gops.length - 1, Math.round(i) || 0));
     const g = gops[selected];
     $("#gop-index").value = selected;
@@ -1146,14 +1185,17 @@ function initFrames(r) {
       `${g.label} · 帧 ${g.start}–${g.end} · ${g.count} 帧${g.boundary ? " · " + g.boundary : ""}`;
     $("#gop-prev").disabled = selected === 0;
     $("#gop-next").disabled = selected === gops.length - 1;
-    ribbon.setRange(g.start, g.end + 1);
+    if (focus) {fullView = false;drawFrames();}
     overview.select(selected);
     detail(fdata[g.start]);
   };
   $("#gop-prev").onclick = () => select(selected - 1);
   $("#gop-next").onclick = () => select(selected + 1);
   $("#gop-index").onchange = (e) => select(Number(e.target.value));
-  select(0);
+  select(0, false);
+  drawFrames();
+  axisPicker.onchange = drawFrames;
+  $("#frame-full").onclick = () => {fullView = true;drawFrames();};
   let page = 0;
   const drawPage = () => {
     $("#page").textContent =

@@ -176,12 +176,12 @@ async function execute(job,input){
       let frames,tracks,coding;
       frames=await stage('完整扫描视频帧',c=>scan(input.file,input.stream,c),{phaseIndex:2,phaseCount});
       if(process.env.MEDIASCOPE_SEQUENTIAL_ANALYSIS==='1'){
-        tracks=await stage('统计全部轨道的压缩包',c=>allPackets(input.file,info.raw.streams,{...c,bitrateWindowMs}),{phaseIndex:3,phaseCount,subtask:'packets'});
+        tracks=await stage('统计全部轨道的压缩包',c=>allPackets(input.file,info.raw.streams,{...c,bitrateWindowMs,audioPacketDistribution:true}),{phaseIndex:3,phaseCount,subtask:'packets'});
         coding=await stage('解析全流编码帧头 / NAL / OBU',c=>structure(input.file,stream,frames,c),{phaseIndex:3,phaseCount,subtask:'headers'});
       }else{
         const group='包统计与码流头并行读取';publish({stage:group,detail:'两项并行执行',phaseIndex:3,phaseCount});
         const completed=await Promise.allSettled([
-          stage('统计全部轨道的压缩包',c=>allPackets(input.file,info.raw.streams,{...c,bitrateWindowMs}),{phaseIndex:3,phaseCount,concurrentGroup:group,subtask:'packets'}),
+          stage('统计全部轨道的压缩包',c=>allPackets(input.file,info.raw.streams,{...c,bitrateWindowMs,audioPacketDistribution:true}),{phaseIndex:3,phaseCount,concurrentGroup:group,subtask:'packets'}),
           stage('解析全流编码帧头 / NAL / OBU',c=>traceStructure(input.file,stream,c),{phaseIndex:3,phaseCount,concurrentGroup:group,subtask:'headers'})
         ]);
         const failed=completed.find(x=>x.status==='rejected');if(failed)throw failed.reason;
@@ -321,7 +321,7 @@ const server=http.createServer(async(req,res)=>{
       }
       send(res,404,{error:'接口不存在'});return;
     }
-    const files={'/':'index.html','/app.js':'app.js','/report.js':'report.js','/properties.js':'properties.js','/basic-info.js':'basic-info.js','/portable.js':'portable.js','/bitrate-model.js':'bitrate-model.js','/charts.js':'charts.js','/trial-model.js':'trial-model.js','/units.js':'units.js','/style.css':'style.css'};
+    const files={'/':'index.html','/app.js':'app.js','/report.js':'report.js','/properties.js':'properties.js','/basic-info.js':'basic-info.js','/portable.js':'portable.js','/bitrate-model.js':'bitrate-model.js','/distribution-model.js':'distribution-model.js','/charts.js':'charts.js','/trial-model.js':'trial-model.js','/units.js':'units.js','/style.css':'style.css'};
     if(req.method!=='GET'||!files[url.pathname]){res.writeHead(404);res.end();return}
     const name=files[url.pathname];let data=await readFile(path.join(root,'public',name));if(name==='index.html')data=Buffer.from(data.toString().replace('__TOKEN__',token).replace('__APP_VERSION__',appVersion).replace('__LOCAL_THEME__',localData.settings.theme).replace('__PORTABLE_LIMIT__',byteLimit(maxPortableBytes)).replace('__RECENT_LIMIT__',byteLimit(recentBytes)));
     res.writeHead(200,{'Content-Type':name.endsWith('.html')?'text/html; charset=utf-8':name.endsWith('.js')?'text/javascript; charset=utf-8':'text/css; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' blob:; object-src 'none'; frame-ancestors 'none'"});res.end(data);

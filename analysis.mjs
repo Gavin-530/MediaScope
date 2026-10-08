@@ -1,5 +1,6 @@
 import {measureSiti} from './siti.mjs';
 import {createBitrateAccumulator} from './public/bitrate-model.js';
+import {createAudioPacketDistribution} from './public/distribution-model.js';
 import {byteLimit} from './public/units.js';
 import {mkdir,unlink,access} from 'node:fs/promises';
 import path from 'node:path';
@@ -13,10 +14,12 @@ export function distribution(values){const a=values.filter(Number.isFinite).sort
 // All selected streams share the same absolute PTS-based bins, including explicit empty seconds.
 export async function allPackets(file,streams,ctx){
   const curves=ctx.bitrateWindowMs==null?null:new Map(streams.filter(s=>['video','audio'].includes(s.codec_type)).map(s=>[s.index,createBitrateAccumulator(s.time_base,ctx.bitrateWindowMs)]));
+  const audioPackets=ctx.audioPacketDistribution===true?new Map(streams.filter(s=>s.codec_type==='audio').map(s=>[s.index,createAudioPacketDistribution(s.time_base)])):null;
   const tracks=new Map(streams.map(s=>[s.index,{index:s.index,codec:s.codec_name,type:s.codec_type,bytes:0,count:0,missing:0,fallbackDts:0,map:new Map(),start:null,end:null}]));let processed=0;
-  await run(FP,['-v','error','-show_packets','-show_entries','packet=stream_index,pts,duration,pts_time,dts_time,duration_time,size','-of','compact=p=0:nk=0',file],ctx,line=>{
+  await run(FP,['-v','error','-show_packets','-show_entries','packet=stream_index,pts,duration,pts_time,dts_time,duration_time,size'+(audioPackets?',dts':''),'-of','compact=p=0:nk=0',file],ctx,line=>{
     const o=Object.fromEntries(line.split('|').map(x=>x.split('='))),r=tracks.get(Number(o.stream_index));if(!r)return;
     curves?.get(r.index)?.add(o);
+    audioPackets?.get(r.index)?.add(o);
     if(!o.size)return;
     const bytes=Number(o.size);r.bytes+=bytes;r.count++;processed++;
     if(processed===1||processed%500===0)ctx.update?.({detail:`已统计 ${processed.toLocaleString()} 个压缩包`,completed:processed,total:null,unit:'个压缩包'});
@@ -24,7 +27,7 @@ export async function allPackets(file,streams,ctx){
     const second=Math.floor(t);r.map.set(second,(r.map.get(second)||0)+bytes);r.start=r.start===null?t:Math.min(t,r.start);r.end=Math.max(r.end??t,t+(num(o.duration_time)||0));
   });
   ctx.update?.({detail:`已统计 ${processed.toLocaleString()} 个压缩包`,completed:processed,total:processed,unit:'个压缩包'});
-  return [...tracks.values()].map(({map,...r})=>{const keys=[...map.keys()].sort((a,b)=>a-b);if(keys.length&&keys.at(-1)-keys[0]>1000000)throw Error('时间戳跨度异常，无法生成码率图');const bins=[];if(keys.length)for(let s=keys[0];s<=keys.at(-1);s++)bins.push({second:s,mbps:(map.get(s)||0)*8/1e6});return {...r,bins,...(curves?.has(r.index)?{bitrateCurve:curves.get(r.index).finish()}:{}),averageMbps:r.end>r.start?r.bytes*8/(r.end-r.start)/1e6:null,windowStats:distribution(bins.map(b=>b.mbps))}});
+  return [...tracks.values()].map(({map,...r})=>{const keys=[...map.keys()].sort((a,b)=>a-b);if(keys.length&&keys.at(-1)-keys[0]>1000000)throw Error('时间戳跨度异常，无法生成码率图');const bins=[];if(keys.length)for(let s=keys[0];s<=keys.at(-1);s++)bins.push({second:s,mbps:(map.get(s)||0)*8/1e6});return {...r,bins,...(curves?.has(r.index)?{bitrateCurve:curves.get(r.index).finish()}:{}),...(audioPackets?.has(r.index)?{packetDistribution:audioPackets.get(r.index).finish()}:{}),averageMbps:r.end>r.start?r.bytes*8/(r.end-r.start)/1e6:null,windowStats:distribution(bins.map(b=>b.mbps))}});
 }
 
 // AV1 specification § Set frame refs: derive the seven references when short signaling is used.

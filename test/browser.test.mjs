@@ -75,6 +75,8 @@ scenario('[bitrate-window] [units] calculation selection and display aggregation
   const {report}=await runTask(page,app,'#analyze');
   assert.equal(report.packets.bitrateCurve.windowMs,100);
   assert.equal(report.packets.bitrateCurve.status,'ok');
+  assert.equal(await page.locator('#bitrate-optional').evaluate(el=>el.open),false);
+  await page.locator('#bitrate-optional > summary').click();
   assert.equal(await page.locator('#bitrate-display').inputValue(),'100');
   assert.equal(await page.locator('[id^="audio-"][id$="-display"]').count(),2);
   const videoWidth=await page.locator('#bitrate-display').evaluate(el=>el.getBoundingClientRect().width);
@@ -88,12 +90,20 @@ scenario('[bitrate-window] [units] calculation selection and display aggregation
   assert.equal(await page.locator('#audio-2-display').inputValue(),'100');
   assert.equal(await videoCanvas.evaluate(el=>el.isConnected),true,'audio selection must not redraw video');
   const rateUnit=quantityScale(bitrateView(report.packets.bitrateCurve,1000).map(b=>b.mbps*1e6),'bit/s').unit;
+  const view=bitrateView(report.packets.bitrateCurve,1000);
+  assert.equal(Number(await page.locator('#bitrate [data-field="to"]').inputValue()),Number(view.at(-1).end.toFixed(6)),'full view includes the final measured interval');
+  await page.locator('#bitrate canvas').scrollIntoViewIfNeeded();
+  const canvasBox=await page.locator('#bitrate canvas').boundingBox();
+  await page.mouse.move(canvasBox.x+76+(canvasBox.width-101)*0.25,canvasBox.y+40);
+  assert.match(await page.locator('#bitrate .chart-label').textContent(),/\[[^\]]+, [^\]]+\) s.* B/,'tooltip reports interval boundaries and bytes');
   assert.equal(await page.locator('#bitrate .plot-axis-y').textContent(),'纵轴：'+rateUnit);
   await page.locator('#bitrate [data-op="in"]').click();
   assert.equal(await page.locator('#bitrate .plot-axis-y').textContent(),'纵轴：'+rateUnit,'zoom does not change units');
   await page.locator('#bitrate-display').selectOption('100');
   const file=path.join(dir,'bitrate.json');await writeFile(file,JSON.stringify(report));
   await page.locator('#import-report').setInputFiles(file);
+  assert.equal(await page.locator('#bitrate-optional').evaluate(el=>el.open),false);
+  await page.locator('#bitrate-optional > summary').click();
   assert.equal(await page.locator('#bitrate-display').inputValue(),'100');
   await page.locator('#bitrate-window').selectOption('1000');
   const next=await runTask(page,app,'#analyze');
@@ -250,7 +260,7 @@ scenario('[analysis] [units] actual multi-audio file, frame scan, GOP, SI/TI and
   assert.equal(info.raw.streams.length,3);
   await page.locator('#complexity').check();await page.locator('#siti-workers').selectOption('8');
   const {report}=await runTask(page,app,'#analyze');
-  assert.deepEqual(await page.locator('#inspect-details > .section > h3').allTextContents(),['文件基本信息','帧结构与 GOP','视频区间平均码率','音轨区间平均码率','体积构成','SI/TI 内容复杂度']);
+  assert.deepEqual(await page.locator('#inspect-details > .section > h3').allTextContents(),['文件基本信息','帧结构与 GOP','音轨包大小时间分布','音视频码率统计（可选曲线）','体积构成','SI/TI 内容复杂度']);
   assert.equal(await page.locator('#inspect-details > .cards .card').count(),4);
   assert.equal(report.frames.length,12);assert.equal(report.tracks.filter(s=>s.type==='audio').length,2);
   assert.equal(report.content.points.length,report.frames.length);
@@ -261,12 +271,17 @@ scenario('[analysis] [units] actual multi-audio file, frame scan, GOP, SI/TI and
   assert.equal(await fileSize.textContent(),formatBytes(report.size));
   assert.equal(await fileSize.getAttribute('title'),byteEvidence(report.size));
   const frameUnit=quantityScale(report.frames.map(f=>f.bytes)).unit;
-  assert.equal(await page.locator('#frame-plot .plot-axis-y').textContent(),`纵轴：包体积（${frameUnit}）`);
+  assert.equal(await page.locator('#frame-plot .plot-axis-y').textContent(),`纵轴：关联包大小（${frameUnit}）`);
+  assert.equal(await page.locator('#frame-axis').inputValue(),'time');
+  assert.match(await page.locator('#frame-plot canvas').getAttribute('aria-label'),/呈现时间 s/);
+  assert.equal(Number(await page.locator('#frame-plot [data-field="to"]').inputValue()),1);
   assert.ok(!(await page.locator('#inspect-details').innerText()).includes('MiB'));
   assert.equal(await page.locator('#gop-index').inputValue(),'0');
   assert.equal(report.coding.gops.length,2);
   await page.locator('#gop-next').click();assert.equal(await page.locator('#gop-index').inputValue(),'1');
   assert.match(await page.locator('#gop-info').textContent(),/帧 6–11/);
+  assert.equal(Number(await page.locator('#frame-plot [data-field="from"]').inputValue()),.5);
+  await page.locator('#frame-axis').selectOption('frame');
   const plot=page.locator('#frame-plot'),span=async()=>Number(await plot.locator('[data-field="to"]').inputValue())-Number(await plot.locator('[data-field="from"]').inputValue());
   assert.equal(await span(),6);await plot.locator('[data-op="in"]').click();assert.ok(await span()<6);
   await plot.locator('[data-op="reset"]').click();assert.equal(await span(),12);
@@ -337,6 +352,43 @@ scenario('[trial] [units] real x264 trial encodes both CRFs, preserves frame met
   assert.equal(lossless.report.rows[0].metrics.psnr.pooled,'Infinity');
   await page.locator('#trial-psnr canvas').hover({position:{x:60,y:50}});
   assert.match(await page.locator('#trial-psnr .chart-label').innerText(),/Infinity/,'infinite quality is not presented as a missing measurement');
+});
+
+scenario('[packet-distribution] actual audio packets, optional rates and frame axes survive export/import with legacy fallback',async({page,app,dir})=>{
+  const {report}=await analyze(page,app);
+  assert.equal(await page.locator('#frame-plot canvas').count(),1,'video reuses the existing graph');
+  assert.equal(await page.locator('#bitrate-optional').evaluate(el=>el.open),false);
+  for(const track of report.tracks.filter(t=>t.type==='audio')){
+    const id=`audio-packets-${track.index}`,d=track.packetDistribution;
+    assert.ok(await page.locator(`#${id} canvas`).isVisible());
+    assert.equal(await page.locator(`#${id} .plot-axis-y`).textContent(),`纵轴：包大小（${quantityScale(d.packets.map(row=>row[3])).unit}）`);
+    assert.equal(d.packets.reduce((n,row)=>n+BigInt(row[3]),0n),BigInt(track.bytes));
+    const unit=await page.locator(`#${id} .plot-axis-y`).textContent();
+    await page.locator(`#${id} [data-op="in"]`).click();assert.equal(await page.locator(`#${id} .plot-axis-y`).textContent(),unit);
+    await page.getByText(`音轨 #${track.index} 逐包列表 / CSV`,{exact:true}).click();
+    const pending=page.waitForEvent('download');await page.locator(`#${id}-csv`).click();
+    const csvFile=path.join(dir,`audio-${track.index}.csv`);await(await pending).saveAs(csvFile);
+    const rows=(await readFile(csvFile,'utf8')).trim().split('\n');assert.equal(rows.length,d.count+1);
+    assert.deepEqual(rows.slice(1).map(row=>row.split(',').slice(1,5)),d.packets.map(row=>row.map(v=>v??'')));
+  }
+  await page.locator('#frame-axis').selectOption('frame');assert.match(await page.locator('#frame-plot canvas').getAttribute('aria-label'),/显示帧/);
+  await page.locator('#frame-axis').selectOption('time');
+  await page.locator('#gop-next').click();assert.match(await page.locator('#frame-detail').innerText(),/6/);
+  await page.locator('#frame-full').click();assert.equal(Number(await page.locator('#frame-plot [data-field="from"]').inputValue()),0);
+  const file=path.join(dir,'packets-export.json'),exported=await download(page,'#inspect-export',file);
+  assert.deepEqual(exported.results[0].report,report);
+  await page.locator('#import-report').setInputFiles(file);
+  assert.equal(await page.locator('#frame-axis').inputValue(),'time');
+  assert.ok(await page.locator('#audio-packets-1 canvas').isVisible());
+  assert.equal(await page.locator('#bitrate-optional').evaluate(el=>el.open),false);
+  await page.screenshot({path:path.join(dir,'packet-distribution.png'),fullPage:true});
+  const legacy=structuredClone(report);for(const track of legacy.tracks)delete track.packetDistribution;
+  const legacyFile=path.join(dir,'legacy-packets.json');await writeFile(legacyFile,JSON.stringify(legacy));
+  await page.locator('#import-report').setInputFiles(legacyFile);
+  assert.equal(await page.locator('[id^="audio-packets-"] canvas').count(),0);
+  assert.equal(await page.getByText(/此旧报告未保存音轨逐包数据/).count(),2);
+  await page.locator('#bitrate-optional > summary').click();assert.ok(await page.locator('#audio-1 canvas').isVisible());
+  await page.screenshot({path:path.join(dir,'legacy-packet-distribution.png'),fullPage:true});
 });
 
 scenario('[portable] real export/import restores measured frames without queuing or changing the report',async({page,app,dir})=>{

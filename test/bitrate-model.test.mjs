@@ -1,6 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createBitrateAccumulator,bitrateView,validateBitrateCurve} from '../public/bitrate-model.js';
+import {visibleIntervals} from '../public/charts.js';
 function calculate(packets,windowMs,timeBase='1/1000') {
   const a=createBitrateAccumulator(timeBase,windowMs); packets.forEach(p=>a.add(p)); const c=a.finish();validateBitrateCurve(c);return c;
 }
@@ -31,4 +32,26 @@ test('missing PTS never falls back to DTS; unknown duration and invalid bytes ar
 test('portable curve validation rejects broken accounting intervals',()=>{
   const c=calculate([{pts:'0',duration:'250',size:'10'}],100);
   c.bins[1].startNumerator='1';assert.throws(()=>validateBitrateCurve(c));
+});
+
+test('constant PCM demonstrates packet attribution ripple and a zero-byte occupied tail',()=>{
+  // Mathematical oracle: stereo f32, 48 kHz, 1024 samples per full packet.
+  const samples=48000*29+48,packets=[];
+  for(let pts=0;pts<samples;pts+=1024){
+    const duration=Math.min(1024,samples-pts);
+    packets.push({pts:String(pts),duration:String(duration),size:String(duration*8)});
+  }
+  const c=calculate(packets,1000,'1/48000'),view=bitrateView(c);
+  assert.equal(view[0].mbps,3.080192);
+  assert.equal(view[7].mbps,3.014656);
+  assert.deepEqual(view.at(-1),{start:29,end:29.001,mbps:0,bytes:'0'});
+  assert.equal(c.bins.reduce((n,b)=>n+BigInt(b.bytes),0n),BigInt(samples*8));
+  assert.deepEqual(bitrateView(calculate(packets,100,'1/48000'),1000),view);
+});
+
+test('interval viewport includes the containing bin and respects half-open boundaries',()=>{
+  const data=[[0,3,{end:1}],[1,2,{end:2}],[2,1,{end:2.312}]];
+  assert.deepEqual(visibleIntervals(data,0.7,1.7),data.slice(0,2));
+  assert.deepEqual(visibleIntervals(data,1,2),data.slice(1,2));
+  assert.deepEqual(visibleIntervals(data,2.1,2.312),data.slice(2));
 });

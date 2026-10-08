@@ -2,7 +2,7 @@ import {test,before} from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdir,mkdtemp} from 'node:fs/promises';
 import path from 'node:path';
-import {FF,probe,run,scan,packets,summarize,alignment,compare,comparisonProfile,normalizeMediaPath} from '../engine.mjs';
+import {FF,FP,probe,run,scan,packets,summarize,alignment,compare,comparisonProfile,normalizeMediaPath} from '../engine.mjs';
 import {allPackets,structure,metadataSummary,complexity,trial,av1ShortRefs} from '../analysis.mjs';
 import {readdir} from 'node:fs/promises';
 import {bitrateView} from '../public/bitrate-model.js';
@@ -50,6 +50,19 @@ test('AV1 MP4: probe, decode and identical-frame metrics',async()=>{
 test('packet accounting separates both audio tracks and matches every packet byte',async()=>{
  const p=await probe(source),tracks=await allPackets(source,p.raw.streams,context());assert.equal(tracks.length,3);assert.equal(tracks.filter(t=>t.type==='audio').length,2);
  for(const t of tracks){assert.ok(t.bytes>0);assert.ok(Math.abs(t.bins.reduce((s,b)=>s+b.mbps,0)*1e6/8-t.bytes)<.001)}
+});
+
+test('[packet-distribution] audio packet evidence matches independent FFprobe output without changing existing accounting',async()=>{
+ const ctx=context(),p=await probe(source,ctx),plain=await allPackets(source,p.raw.streams,ctx),recorded=await allPackets(source,p.raw.streams,{...ctx,audioPacketDistribution:true});
+ const oracle=JSON.parse(await run(FP,['-v','error','-show_packets','-show_entries','packet=stream_index,pts,dts,duration,size','-of','json',source],ctx));
+ for(const track of recorded){
+  const {packetDistribution,...unchanged}=track;assert.deepEqual(unchanged,plain.find(t=>t.index===track.index));
+  if(track.type!=='audio'){assert.equal(packetDistribution,undefined);continue;}
+  const packets=oracle.packets.filter(x=>x.stream_index===track.index),normalize=v=>v==null||v==='N/A'?null:String(v);
+  assert.equal(packetDistribution.count,packets.length);assert.equal(packetDistribution.timeBase,p.raw.streams.find(s=>s.index===track.index).time_base);
+  assert.deepEqual(packetDistribution.packets,packets.map(x=>[x.pts,x.dts,x.duration,x.size].map(normalize)));
+  assert.equal(packetDistribution.packets.reduce((n,row)=>n+BigInt(row[3]),0n),BigInt(track.bytes));
+ }
 });
 test('real video and two audio tracks: 100 ms aggregation matches direct 1 s without changing legacy accounting',async()=>{
  const ctx=context(),p=await probe(source,ctx),fine=await allPackets(source,p.raw.streams,{...ctx,bitrateWindowMs:100}),coarse=await allPackets(source,p.raw.streams,{...ctx,bitrateWindowMs:1000}),legacy=await allPackets(source,p.raw.streams,ctx);

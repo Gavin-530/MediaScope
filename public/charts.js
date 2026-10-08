@@ -72,6 +72,13 @@ export function visiblePoints(data, a, b, frames = false) {
   return data.slice(indexAt(data, a), lo).filter((p) => !frames || p[0] < b);
 }
 
+// Interval measurements apply to [start,end), including a bin whose start is
+// outside the viewport. They must not be linearly interpolated between starts.
+export function visibleIntervals(data, a, b) {
+  const first = Math.max(0, indexAt(data, a) - 1);
+  return data.slice(first, indexAt(data, b)).filter(p => p[2].end > a);
+}
+
 // Shared bounded viewport. Aggregation preserves extrema; it never recomputes measurement windows.
 export function plot(
   host,
@@ -86,6 +93,9 @@ export function plot(
     series = [],
     connect = true,
     markers = true,
+    intervals = false,
+    stems = false,
+    xEnd,
     height,
   } = {},
 ) {
@@ -116,14 +126,14 @@ export function plot(
     canvas.before(legend);
   }
   const minimum = data[0][0],
-    last = data.at(-1)[0] + (frames ? 1 : 0),
+    last = Number.isFinite(xEnd) && xEnd > data.at(-1)[0] ? xEnd : intervals ? data.at(-1)[2].end : data.at(-1)[0] + (frames ? 1 : 0),
     maximum = last > minimum ? last : minimum + 1,
-    minSpan = frames ? 1 : Math.min(1, (maximum - minimum) / 10);
+    minSpan = frames ? 1 : stems ? Math.min(1e-6, (maximum - minimum) / 10) : Math.min(1, (maximum - minimum) / 10);
   let a = minimum,
     b = maximum,
     w = 0,
     drag = null;
-  const fullExtent = extent(data, frames);
+  const fullExtent = extent(data, frames || stems);
   const left = 76,
     right = 25;
   const xValue = (x) =>
@@ -146,10 +156,10 @@ export function plot(
     const c = canvas.getContext("2d");
     c.scale(dpr, dpr);
     c.font = "11px Segoe UI";
-    const visible = visiblePoints(data, a, b, frames),
+    const visible = intervals ? visibleIntervals(data, a, b) : visiblePoints(data, a, b, frames),
       finite = visible.filter((p) => Number.isFinite(p[1]));
     const [lo, hi] =
-      scale.value === "visible" ? extent(visible, frames) : fullExtent;
+      scale.value === "visible" ? extent(visible, frames || stems) : fullExtent;
     const base = h - 50,
       top = 12,
       px = (x) => left + ((x - a) / (b - a)) * (w - left - right),
@@ -194,6 +204,22 @@ export function plot(
           c.fillText(f.type ?? "?", x + 2, base + 13);
         }
       }
+    } else if (stems) {
+      // A packet/frame remains a discrete observation. Dense columns show the
+      // largest observation, never a sum or an interpolated rate.
+      const columns = new Map();
+      for (const point of finite) {
+        const x = Math.floor(px(point[0])), prior = columns.get(x);
+        if (!prior || point[1] > prior.point[1]) columns.set(x, {point, key: prior?.key || point[2]?.key});
+        else prior.key ||= point[2]?.key;
+      }
+      c.lineWidth = 1;
+      for (const [x, {point, key}] of columns) {
+        const f = point[2];
+        c.strokeStyle = f?.type || f?.special ? colorFor(f.special === 'NON_IDR' ? f.type : f.special || f.type) : '#10b981';
+        c.beginPath();c.moveTo(x, base);c.lineTo(x, py(point[1]));c.stroke();
+        if (key) { c.fillStyle = '#f5f1ce';c.fillRect(x, top, 2, 4); }
+      }
     } else {
       for (const group of series.length ? series : [{ color: "#10b981" }]) {
         const points = series.length
@@ -203,6 +229,20 @@ export function plot(
         c.fillStyle = group.color;
         c.lineWidth = 2;
         c.setLineDash(group.dash || []);
+        if (intervals) {
+          c.beginPath();
+          let previous = null;
+          for (const p of points) {
+            if (!Number.isFinite(p[1])) { previous = null; continue; }
+            const x = px(Math.max(a, p[0])), end = px(Math.min(b, p[2].end));
+            if (previous && previous[2].end === p[0]) c.lineTo(x, py(p[1]));
+            else c.moveTo(x, py(p[1]));
+            c.lineTo(end, py(p[1]));
+            previous = p;
+          }
+          c.stroke();
+          continue;
+        }
         for (const segment of finiteSegments(points)) {
           // Dense traces retain each pixel column's extrema; gaps stay separate.
           const buckets = new Map();
@@ -284,8 +324,9 @@ export function plot(
       data.length - 1,
       indexAt(data, frames ? Math.floor(x) : x),
     );
+    if (intervals && idx > 0 && data[idx][0] > x) idx--;
     if (
-      !frames &&
+      !frames && !intervals &&
       idx > 0 &&
       Math.abs(data[idx - 1][0] - x) < Math.abs(data[idx][0] - x)
     )

@@ -39,6 +39,20 @@ test('future nonmeasurement fields survive parsing and malformed JSON is rejecte
  const extended={...reports.inspect,futureField:{note:'parser preservation contract'}};
  assert.deepEqual(parseReport(JSON.stringify(extended)),extended);assert.throws(()=>parseReport('{'),/JSON/);
 });
+
+test('[packet-distribution] real audio evidence round trips, legacy omission remains valid and damaged records are rejected',()=>{
+ const report=reports.analyze,tracks=report.tracks.filter(t=>t.type==='audio');assert.equal(tracks.length,2);
+ assert.ok(tracks.every(t=>t.packetDistribution.packets.length===t.count));
+ assert.deepEqual(parseReport(JSON.stringify(report)),report);
+ const legacy=structuredClone(report);for(const track of legacy.tracks)delete track.packetDistribution;
+ assert.deepEqual(parseReport(JSON.stringify(legacy)),legacy);
+ for(const change of [d=>d.count++,d=>d.packets[0][3]='-1',d=>d.packets[0][0]=0]){
+  const broken=structuredClone(report);change(broken.tracks.find(t=>t.type==='audio').packetDistribution);
+  assert.throws(()=>parseReport(JSON.stringify(broken)),/音轨逐包/);
+ }
+ const broken=structuredClone(report);broken.tracks.find(t=>t.type==='audio').packetDistribution=null;
+ assert.throws(()=>parseReport(JSON.stringify(broken)),/音轨逐包/);
+});
 test('[basic-properties] new descriptors and explicit no-sampling status preserve legacy sample reports',async()=>{
  const current=reports.inspect;assert.ok(current.pixelFormats.raw.pixel_formats.length);assert.equal(current.frameSample,null);
  assert.equal(current.frameSampleRead.status,'not-requested');
