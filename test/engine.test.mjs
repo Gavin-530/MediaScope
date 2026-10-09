@@ -1,12 +1,13 @@
 import {test,before} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdir,mkdtemp} from 'node:fs/promises';
+import {mkdir,mkdtemp,writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {FF,FP,probe,run,scan,packets,summarize,alignment,compare,comparisonProfile,normalizeMediaPath} from '../engine.mjs';
 import {allPackets,structure,metadataSummary,complexity,trial,av1ShortRefs} from '../analysis.mjs';
 import {readdir} from 'node:fs/promises';
 import {bitrateView} from '../public/bitrate-model.js';
 import {saveBitrateEvidence} from './helpers/bitrate-evidence.mjs';
+import {parseMetricSummary} from '../public/metric-summary.js';
 const dir=path.resolve('test-work'),source=path.join(dir,'参考 多音轨.mp4'),candidate=path.join(dir,'candidate.mp4');
 const context=()=>({cwd:dir,commands:[],update:()=>{}});
 before(async()=>{
@@ -26,6 +27,41 @@ test('same-file PSNR is infinite; SSIM is one; VMAF produces all frames',async()
 test('lossy candidate yields finite PSNR and reduced SSIM',async()=>{
  const result=await compare(source,candidate,0,0,['psnr','ssim'],context());assert.ok(Number.isFinite(result.metrics.psnr.pooled));assert.ok(result.metrics.ssim.pooled<1);assert.equal(result.metrics.psnr.values.length,12);
 });
+
+test('PSNR and SSIM overall and component scores exactly match official aggregates rather than rounded frame pooling',async()=>{
+ const cwd=await mkdtemp(path.join(dir,'metrics-equivalence-')),ctx={...context(),cwd},official={};
+ // Independent documented PTS pairing and summary extraction; do not use the application parser as the oracle.
+ for(const metric of ['psnr','ssim']){
+  let summary;
+  await run(FF,['-hide_banner','-nostdin','-v','info','-nostats','-xerror','-noauto_conversion_filters','-noautorotate','-i',candidate,'-noautorotate','-i',source,
+   '-filter_complex',`[0:v]settb=AVTB,setpts=PTS-STARTPTS[d];[1:v]settb=AVTB,setpts=PTS-STARTPTS[r];[d][r]${metric}[out]`,'-map','[out]','-an','-sn','-fps_mode','passthrough','-f','null','-'],
+   {...ctx,stderrLine:line=>{const match=line.match(/\] ((?:PSNR|SSIM) .+)$/);if(match?.[1].startsWith(metric.toUpperCase()+' '))summary=match[1]}});
+  assert.ok(summary);
+  const number=text=>text==='inf'?'Infinity':Number(text);
+  const pooled=number(summary.match(metric==='psnr'?/average:(\S+)/:/All:(\S+)/)[1]);
+  const components=Object.fromEntries(['y','u','v'].map(key=>[key,number(summary.match(new RegExp(` ${metric==='psnr'?key:key.toUpperCase()}:(\\S+)`))[1])]));
+  official[metric]={raw:summary,pooled,components};
+ }
+ const measurements=[];
+ for(const [metrics,separateMetrics] of [[['psnr','ssim','vmaf'],false],[['psnr','ssim','vmaf'],true],[['psnr'],false],[['ssim'],false]]){
+  const result=await compare(source,candidate,0,0,metrics,{...ctx,separateMetrics});
+  for(const metric of metrics.filter(m=>m!=='vmaf')){
+   const m=result.metrics[metric];
+   assert.equal(m.pooled,official[metric].pooled);assert.deepEqual(m.components,official[metric].components);
+   assert.equal(m.officialSummary.raw,official[metric].raw);assert.equal(m.officialSummary.pooled,m.pooled);
+   const reconstructed=metric==='psnr'?-10*Math.log10(m.values.reduce((s,v)=>s+10**(-v/10),0)/m.values.length):m.values.reduce((s,v)=>s+v,0)/m.values.length;
+   assert.notEqual(m.pooled,reconstructed,'this real fixture must expose the old rounding bug');
+  }
+  measurements.push({metrics,separateMetrics,result});
+ }
+ const identity=await compare(source,source,0,0,['psnr','ssim'],ctx);
+ assert.equal(identity.metrics.psnr.officialSummary.pooled,'Infinity');assert.equal(identity.metrics.ssim.officialSummary.pooled,1);
+ for(const metric of ['psnr','ssim']){
+  const raw=official[metric].raw;
+  for(const damaged of ['',raw.replace(metric==='psnr'?'average:':'All:','missing:'),raw.replace(/ y:\S+| Y:\S+ \(\S+\)/,''),raw.replace(/ y:\S+| Y:\S+/,metric==='psnr'?' y:nan':' Y:nan'),raw+' extra'])assert.throws(()=>parseMetricSummary(metric,damaged),/官方汇总/);
+ }
+ await writeFile(path.join(cwd,'measured-equivalence.json'),JSON.stringify({outcome:'passed',official,measurements,identity,commands:ctx.commands}));
+});
 test('reject mismatched formats, frame counts, timestamps, and non-increasing PTS',()=>{
  const s={width:192,height:108,pix_fmt:'yuv420p'},f=[{t:0},{t:1}];
  assert.throws(()=>alignment(s,{...s,width:100},f,f),/width/);
@@ -35,11 +71,11 @@ test('reject mismatched formats, frame counts, timestamps, and non-increasing PT
  assert.equal(alignment(s,s,f,[{t:3},{t:4}]).startOffset,3);
 });
 test('cancelled operations do not execute',async()=>{const c=new AbortController();c.abort();await assert.rejects(()=>run(FF,['-version'],{signal:c.signal}),/取消/)});
-test('HEVC 10-bit HDR MOV with PCM: preserve metadata and refuse SDR VMAF',async()=>{
+test('HEVC 10-bit HDR MOV with PCM: preserve metadata and record VMAF applicability',async()=>{
  const hdr=path.join(dir,'hdr-pcm.mov');
  await run(FF,['-hide_banner','-v','error','-y','-f','lavfi','-i','testsrc2=size=192x108:rate=12:duration=0.5','-f','lavfi','-i','sine=duration=0.5','-c:v','libx265','-preset','ultrafast','-pix_fmt','yuv420p10le','-x265-params','log-level=error:pools=1:colorprim=9:transfer=16:colormatrix=9:master-display=G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1):max-cll=1000,400','-tag:v','hvc1','-c:a','pcm_s16le',hdr]);
  const p=await probe(hdr);assert.equal(p.raw.streams[0].codec_name,'hevc');assert.equal(p.raw.streams[0].pix_fmt,'yuv420p10le');assert.equal(p.raw.streams[0].color_transfer,'smpte2084');assert.equal(p.raw.streams[1].codec_name,'pcm_s16le');assert.equal((await scan(hdr,0)).length,6);
- await assert.rejects(()=>compare(hdr,hdr,0,0,['vmaf'],context()),/HDR/);
+  const v=await compare(hdr,hdr,0,0,['vmaf'],context());assert.equal(v.metrics.vmaf.values.length,6);assert.match(v.metrics.vmaf.configuration.interpretation,/未经 HDR 感知适用性验证/);
  const r=await compare(hdr,hdr,0,0,['psnr','ssim'],context());assert.equal(r.metrics.psnr.pooled,'Infinity');assert.equal(r.metrics.ssim.pooled,1);
 });
 test('AV1 MP4: probe, decode and identical-frame metrics',async()=>{
@@ -106,7 +142,7 @@ test('native YUV matrix: 420/422/444, 8/10/12-bit, BT.709/PQ/HLG, chroma-only er
   for(const [file,delta] of [[a,0],[b,4*step]])await run(FF,['-v','error','-y','-f','lavfi','-i',`nullsrc=s=96x64:r=2:d=1,format=${pix},geq=lum=${64*step}:cb=${128*step+delta}:cr=${128*step},setparams=range=limited:color_primaries=${primaries}:color_trc=${transfer}:colorspace=${matrix}`,'-c:v','ffv1','-level','3','-pix_fmt',pix,'-color_primaries',primaries,'-color_trc',transfer,'-colorspace',matrix,'-color_range','tv',file]);
   const identical=await compare(a,a,0,0,['psnr','ssim','vmaf'],context());
   assert.equal(identical.profile.pixelFormat,pix);assert.equal(identical.metrics.psnr.pooled,'Infinity');assert.equal(identical.metrics.ssim.pooled,1);
-  if(depth===8)assert.equal(identical.metrics.vmaf.values.length,2);else assert.match(identical.skippedMetrics.vmaf,/HDR/);
+  assert.equal(identical.metrics.vmaf.values.length,2);if(depth>8)assert.match(identical.metrics.vmaf.configuration.interpretation,/HDR/);
   const changed=await compare(a,b,0,0,['psnr','ssim'],context());
   assert.equal(changed.metrics.psnr.components.y,'Infinity');assert.equal(changed.metrics.psnr.components.v,'Infinity');
   const expected=20*Math.log10((2**depth-1)/(4*step));
@@ -123,15 +159,16 @@ test('SDR 10/12-bit native 422/444 VMAF and BT.601 full-range code values',async
   await run(FF,['-v','error','-y','-f','lavfi','-i',`testsrc2=s=96x64:r=2:d=1,format=${pix},setparams=range=${range}:color_primaries=${primaries}:color_trc=${transfer}:colorspace=${matrix}`,'-c:v','ffv1','-level','3','-color_primaries',primaries,'-color_trc',transfer,'-colorspace',matrix,'-color_range',range,file]);
   const result=await compare(file,file,0,0,['psnr','ssim','vmaf'],context());
   assert.equal(result.metrics.psnr.pooled,'Infinity');assert.equal(result.metrics.ssim.pooled,1);
-  if(range==='tv')assert.equal(result.metrics.vmaf.values.length,2);else assert.ok(result.skippedMetrics.vmaf);
+  assert.equal(result.metrics.vmaf.values.length,2);assert.equal(result.metrics.vmaf.configuration.input.range,range);
  }
 });
 
-test('comparison rejects unverified formats and detects decoded format changes',async()=>{
- assert.throws(()=>comparisonProfile({pix_fmt:'rgb24'}),/尚未验证/);
+test('comparison separates filter format capability from metadata and detects decoded format changes',async()=>{
+  assert.equal(comparisonProfile({pix_fmt:'rgb24'}).colorModel,'RGB');
+  assert.match(comparisonProfile({pix_fmt:'rgb24'}).vmafReason,/FFmpeg libvmaf/);
  const p=await probe(source),s=p.raw.streams[0];
  await assert.rejects(()=>scan(source,0,{...context(),comparisonStream:{...s,width:s.width+1}}),/第 1 帧 width/);
  for(const field of ['color_transfer','color_space','color_primaries','color_range'])assert.throws(()=>alignment(s,{...s,[field]:'different'},[{t:0}],[{t:0}]),new RegExp(field));
- assert.match(comparisonProfile({...s,color_range:'pc'}).vmafReason,/有限范围/);
- assert.match(comparisonProfile({...s,color_transfer:undefined}).vmafReason,/BT.709/);
+ assert.equal(comparisonProfile({...s,color_range:'pc'}).vmafReason,null);
+  assert.equal(comparisonProfile({...s,color_transfer:undefined}).vmafReason,null);
 });

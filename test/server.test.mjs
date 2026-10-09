@@ -53,7 +53,7 @@ test('API requires cross-depth opt-in and exports normalization evidence',async(
   const report=await(await request(`jobs/${job.id}/report`)).json();
   assert.deepEqual(parseReport(JSON.stringify(report)),report);assert.equal(report.metrics.psnr.pooled,'Infinity');assert.equal(report.metrics.ssim.pooled,1);
   assert.equal(report.normalization.mode,comparisonMode);assert.equal(report.normalization.verification.passed,true);
-  assert.equal(report.normalization.psnrPeak,1023);assert.match(report.skippedMetrics.vmaf,/跨位深/);
+  assert.equal(report.normalization.psnrPeak,1023);assert.equal(report.metrics.vmaf.configuration.input.pixelFormat,'yuv444p10le');assert.equal(report.metrics.vmaf.configuration.evaluation.crossDepth,true);
   assert.ok(report.commands.some(c=>c.args.some(a=>a.includes('scale=w=iw:h=ih'))));
  }
  const html=await(await fetch(base)).text();assert.match(html,/id="comparison-mode"/);assert.match(html,/value="bt709-limited-8-10"/);

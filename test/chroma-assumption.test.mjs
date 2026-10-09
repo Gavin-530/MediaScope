@@ -11,7 +11,9 @@ const stream=chroma_location=>({width:1920,height:1080,pix_fmt:'yuv420p',color_r
 
 test('user assumption can supplement an unknown location without changing source metadata',()=>{
  const reference=stream(undefined),candidate=stream('left');
- assert.throws(()=>validateComparableStreams(reference,candidate),/chroma_location/);
+ const native=validateComparableStreams(reference,candidate);
+ assert.deepEqual(native.metadataGaps,[{field:'chroma_location',reference:null,candidate:'left'}]);
+ assert.equal(reference.chroma_location,undefined);
  const resolved=resolveChromaAssumptions(reference,candidate,{reference:'left'});
  assert.equal(reference.chroma_location,undefined);
  assert.equal(resolved.reference.chroma_location,'left');

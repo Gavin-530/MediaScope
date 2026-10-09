@@ -1,6 +1,6 @@
 import {test,before} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdir,writeFile} from 'node:fs/promises';
+import {mkdir,writeFile,readFile} from 'node:fs/promises';
 import path from 'node:path';
 import {FF,run,compare,bitDepthPlan,alignment,scan} from '../engine.mjs';
 
@@ -45,17 +45,26 @@ test('exact 8/10-bit comparison: all codes, both directions, 420/422/444 and ana
    const ctx=context(),result=await compare(reference,candidate,0,0,['psnr','ssim','vmaf'],ctx,mode);
    assert.equal(result.metrics.psnr.pooled,'Infinity');assert.equal(result.metrics.ssim.pooled,1);
    assert.deepEqual(result.metrics.psnr.components,{y:'Infinity',u:'Infinity',v:'Infinity'});
-   assert.equal(result.normalization.verification.passed,true);assert.match(result.skippedMetrics.vmaf,/跨位深/);
+   assert.equal(result.normalization.verification.passed,true);assert.equal(result.metrics.vmaf.values.length,2);
+   assert.equal(result.metrics.vmaf.configuration.input.pixelFormat,`yuv${sampling}p10le`);
+   assert.equal(result.metrics.vmaf.configuration.evaluation.crossDepth,true);
+   assert.match(result.metrics.vmaf.configuration.preprocessing,/samples × 4/);
    assert.equal(result.profile.bitDepth,10);assert.ok(ctx.commands.some(x=>x.args.includes('-noauto_conversion_filters')));
   }
-  const result=await compare(changed,eight,0,0,['psnr','ssim'],context(),mode);
+  const result=await compare(changed,eight,0,0,['psnr','ssim','vmaf'],context(),mode);
   assert.equal(result.metrics.psnr.components.y,'Infinity');assert.equal(result.metrics.psnr.components.v,'Infinity');
   assert.ok(Math.abs(result.metrics.psnr.components.u-20*Math.log10(1023))<0.02);
   const weight=sampling==='420'?1/6:sampling==='422'?1/4:1/3;
   assert.ok(Math.abs(result.metrics.psnr.pooled-10*Math.log10(1023**2/weight))<0.02);
   // FFmpeg rounds All to 6 decimals: a tiny chroma-only error can print 1.000000.
   assert.ok(result.metrics.ssim.components.u<1);
-  await assert.rejects(()=>compare(ten,eight,0,0,['vmaf'],context(),mode),/跨位深/);
+  // The independently generated 10-bit fixture contains exactly byte × 4.
+  // This oracle invokes libvmaf on two native 10-bit files, with no scaler.
+  await run(FF,['-v','error','-noauto_conversion_filters','-i',ten,'-i',changed,'-lavfi','libvmaf=model=version=vmaf_v0.6.1:log_fmt=json:log_path=official-cross-depth.json','-f','null','-'],context());
+  const official=JSON.parse(await readFile(path.join(dir,'official-cross-depth.json'),'utf8'));
+  assert.deepEqual(result.metrics.vmaf.values,official.frames.map(f=>f.metrics.vmaf));
+  assert.equal(result.metrics.vmaf.pooled,official.pooled_metrics.vmaf.mean);
+  assert.equal((await compare(ten,eight,0,0,['vmaf'],context(),mode)).metrics.vmaf.values.length,2);
  }
 });
 

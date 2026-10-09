@@ -23,12 +23,14 @@ test('expanded settings and CRF ranges reject invalid or excessive matrices',()=
  assert.deepEqual(parseCrfs('18:20:0.5, 24'),[18,18.5,19,19.5,20,24]);
  for(const value of ['1:20','2:1','1:5:0','18,18','20,NaN',''])assert.throws(()=>parseCrfs(value));
  assert.equal(trialOptions({...input,crfs:[10,15,20,25,30,35],presets:['fast','slow']}).points,24);
- for(const change of [{presets:['bad']},{presets:[]},{presets:['fast','fast']},{crfs:[52]},{crfs:[]},{depthMode:'automatic'},{crfs:Array.from({length:12},(_,i)=>i),presets:['fast','slow','medium']},{metrics:['vmaf']},{encoder:'libaom-av1',crfs:[20.5]},{cpuUsed:9}])assert.throws(()=>trialOptions({...input,...change}));
+ for(const change of [{presets:['bad']},{presets:[]},{presets:['fast','fast']},{crfs:[52]},{crfs:[]},{depthMode:'automatic'},{crfs:Array.from({length:12},(_,i)=>i),presets:['fast','slow','medium']},{encoder:'libaom-av1',crfs:[20.5]},{cpuUsed:9}])assert.throws(()=>trialOptions({...input,...change}));
 });
 test('10-bit source: exact full-code truncation, common-domain scores, metadata and presets',async()=>{
  const ctx=await context('ten'),result=await trial({...input,file:sources[10],presets:['ultrafast','fast'],keepFiles:true},ctx);
  assert.equal(result.rows.length,4);assert.equal(result.experiment.frameTimes.length,result.experiment.actualFrames);assert.equal(result.experiment.frameTimes[0],0);assert.ok(result.experiment.frameTimes.every((t,i,a)=>Number.isFinite(t)&&(i===0||t>a[i-1])));assert.equal(result.experiment.preparation.reductionCheck.passed,true);
  assert.equal(result.experiment.preparation.normalization.verification.passed,true);
+ assert.equal(result.experiment.preparation.sourceVerification.passed,true);
+ assert.ok(result.experiment.preparation.sourceVerification.psnr.values.every(v=>v==='Infinity'));
  assert.deepEqual(new Set(result.rows.map(r=>r.preset)),new Set(['ultrafast','fast']));
  assert.deepEqual(new Set(result.rows.map(r=>r.bitDepth)),new Set([8,10]));
  const raw=path.join(ctx.cwd,'prepared.yuv');await run(FF,['-v','error','-y','-i',path.join(ctx.cwd,'input-8bit.mkv'),'-map','0:v','-c:v','rawvideo','-f','rawvideo',raw]);
@@ -44,10 +46,11 @@ test('10-bit source: exact full-code truncation, common-domain scores, metadata 
  const encoded=ctx.commands.filter(c=>c.args.includes('libx265'));assert.equal(encoded.length,4);
  assert.ok(encoded.every(c=>c.args.includes('-noauto_conversion_filters')));
 });
-test('8-bit source: exact promotion, VMAF omitted consistently, cleanup',async()=>{
+test('8-bit source: exact promotion, VMAF in the common 10-bit domain, cleanup',async()=>{
  const ctx=await context('eight'),result=await trial({...input,file:sources[8],metrics:['psnr','ssim','vmaf']},ctx);
  assert.equal(result.rows.length,2);assert.equal(result.experiment.preparation.baseline.psnr.pooled,'Infinity');
- assert.ok(result.skippedMetrics.vmaf);assert.ok(result.rows.every(r=>!r.metrics.vmaf));
+ assert.deepEqual(result.skippedMetrics,{});assert.ok(result.rows.every(r=>r.metrics.vmaf.values.length===2));
+ assert.ok(result.rows.every(r=>r.metrics.vmaf.configuration.input.pixelFormat==='yuv420p10le'));
  assert.deepEqual(result.experiment.retainedFiles,[]);assert.ok(!(await readdir(ctx.cwd)).some(f=>f.endsWith('.mkv')));
 });
 test('native experiment accepts more than four CRFs and decimal x265 CRF',async()=>{

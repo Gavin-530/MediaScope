@@ -51,7 +51,8 @@ test('[runtime-data] explicit saved trial media survive manual clearing and clea
     const result=await waitForJob(app.request,job.id);assert.equal(result.status,'done',result.message);
     const report=await app.request('jobs/'+job.id+'/report');assert.deepEqual(parseReport(JSON.stringify(report)),report);
     await writeFile(path.join(work,'measured-trial.json'),JSON.stringify(report));
-    const files=report.experiment.retainedFiles;assert.ok(files.length>=2);assert.ok(files.every(file=>path.dirname(file)===path.join(saved,job.id)));
+    const files=report.experiment.retainedFiles;assert.equal(files.length,report.rows.length);assert.ok(files.every(file=>path.dirname(file)===path.join(saved,job.id)));
+    assert.deepEqual(files.map(file=>path.basename(file)),report.rows.map(row=>row.id+'.mkv'));assert.equal(report.experiment.preparation.reference,'source-segment');
     assert.deepEqual((await readdir(path.join(dir,job.id))).sort(),['job-input.json','job.json','report.json']);
     await app.request('local-data/clean','POST',{category:'records'});for(const file of files)assert.equal(await exists(file),true);
     const bad=await app.request('jobs','POST',{type:'trial',file:source,stream:0,start:0,duration:1,encoder:'libx264',presets:['ultrafast'],crfs:[28],metrics:['psnr'],keepFiles:true,exportDirectory:dir});

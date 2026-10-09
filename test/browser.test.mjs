@@ -317,6 +317,12 @@ scenario('[comparison] user confirmation gates actual lossless identity and loss
   const changed=await runTask(page,app,'#compare');
   assert.ok(Number.isFinite(changed.report.metrics.psnr.pooled));assert.ok(changed.report.metrics.ssim.pooled<1);
   assert.equal(changed.report.metrics.psnr.values.length,12);
+  for(const metric of ['psnr','ssim']){
+    const m=changed.report.metrics[metric],section=page.locator('#compare-details > .section').filter({has:page.getByRole('heading',{name:metric.toUpperCase(),exact:true})});
+    assert.equal(await section.locator('tbody tr').first().locator('td').first().innerText(),m.officialSummary.pooled.toLocaleString('zh-CN',{maximumFractionDigits:6}));
+    const components=page.locator('#compare-details > .section').filter({has:page.getByRole('heading',{name:metric.toUpperCase()+' 分量',exact:true})});
+    assert.deepEqual(await components.locator('tbody td').allTextContents(),Object.values(m.officialSummary.components).map(v=>v.toLocaleString('zh-CN',{maximumFractionDigits:6})));
+  }
 });
 
 scenario('[alignment] ordinal pairing requires its own explicit confirmation before a real comparison',async({page,app})=>{
@@ -330,6 +336,65 @@ scenario('[alignment] ordinal pairing requires its own explicit confirmation bef
   assert.equal(report.alignment.pairing,'ordinal-confirmed');assert.equal(report.metrics.psnr.pooled,'Infinity');
 });
 
+scenario('[comparison] VMAF official model selection survives real computation, report and queued plan round trips',async({page,app,dir})=>{
+  await page.locator('[data-mode="compare"]').click();
+  await page.locator('#reference').fill(media.source);await page.locator('#candidate').fill(media.candidate);
+  await page.locator('#confirm').check();await page.locator('[name="metric"][value="vmaf"]').check();
+  await page.locator('#vmaf-model').selectOption('vmaf_v0.6.1neg');
+  const {report}=await runTask(page,app,'#compare');
+  assert.equal(report.metrics.vmaf.model,'vmaf_v0.6.1neg');
+  assert.equal(report.metrics.vmaf.pooled,JSON.parse(report.metrics.vmaf.raw).pooled_metrics.vmaf.mean);
+  assert.match(await page.locator('#compare-details').innerText(),/1080p \/ 3H/);
+  assert.match(await page.locator('#compare-details').innerText(),/相对比较/);
+  const file=path.join(dir,'vmaf-report.json'),exported=await download(page,'#compare-export',file);
+  assert.deepEqual(exported.results[0].report,report);await importReport(page,file);
+  assert.match(await page.locator('#compare-details').innerText(),/vmaf_v0.6.1neg/);
+  await page.locator('#vmaf-model').selectOption('vmaf_4k_v0.6.1');
+  const queued=page.waitForResponse(r=>r.url().endsWith('/api/jobs')&&r.request().method()==='POST');
+  await page.locator('#enqueue-compare').click();await queued;
+  const plans=await app.request('plans');assert.equal(plans.plans[0].input.vmafModel,'vmaf_4k_v0.6.1');
+  await app.request('plans/import','POST',{mode:'replace',start:false,plans:plans.plans});
+  assert.deepEqual((await app.request('plans')).plans.map(p=>p.input),plans.plans.map(p=>p.input));
+  const broken=structuredClone(plans.plans);broken[0].input.vmafModel='vmaf_v0.6.1:enable_transform=true';
+  await assert.rejects(()=>app.request('plans/import','POST',{mode:'replace',start:false,plans:broken}),/模型无效/);
+  await writeFile(path.join(dir,'report.json'),JSON.stringify(report));
+});
+
+scenario('[comparison] VMAF undeclared signal computes, displays unknown range, and survives report import and native trial controls',async({page,app,dir})=>{
+  const source=path.join(dir,'undeclared.nut');
+  await run(FF,['-v','error','-f','lavfi','-i','testsrc2=s=96x64:r=4:d=1,format=yuv422p10le,setparams=range=unknown:color_primaries=unknown:color_trc=unknown:colorspace=unknown','-c:v','rawvideo','-pix_fmt','yuv422p10le','-color_range','unknown','-f','nut',source]);
+  await page.locator('[data-mode="compare"]').click();
+  await page.locator('#reference').fill(source);await page.locator('#candidate').fill(source);
+  await page.locator('#confirm').check();await page.locator('[name="metric"][value="vmaf"]').check();
+  const {report}=await runTask(page,app,'#compare');
+  assert.equal(report.metrics.vmaf.values.length,4);
+  assert.match(await page.locator('#compare-details').innerText(),/范围未声明/);
+  assert.match(await page.locator('#compare-details').innerText(),/感知适用性未确认/);
+  const file=path.join(dir,'unknown-vmaf-report.json');await download(page,'#compare-export',file);await importReport(page,file);
+  assert.match(await page.locator('#compare-details').innerText(),/范围未声明/);
+  const rgbRaw=Buffer.alloc(96*64*3*2*4),changedRaw=Buffer.alloc(rgbRaw.length);
+  for(let frame=0;frame<4;frame++)for(let plane=0;plane<3;plane++)for(let i=0;i<96*64;i++){
+    const offset=((frame*3+plane)*96*64+i)*2,value=(i*17+frame*31+plane*73)%1024;
+    rgbRaw.writeUInt16LE(value,offset);changedRaw.writeUInt16LE(plane===2?Math.floor(value/2):value,offset);
+  }
+  const encodeRgb=async(name,data)=>{const raw=path.join(dir,name+'.raw'),file=path.join(dir,name+'.nut');await writeFile(raw,data);await run(FF,['-v','error','-f','rawvideo','-pixel_format','gbrp10le','-video_size','96x64','-framerate','4','-i',raw,'-c:v','rawvideo','-f','nut',file]);return file;};
+  const rgb=await encodeRgb('rgb',rgbRaw),rgbCandidate=await encodeRgb('rgb-changed',changedRaw);
+  await page.locator('#reference').fill(rgb);await page.locator('#candidate').fill(rgbCandidate);
+  const rgbResult=await runTask(page,app,'#compare');
+  assert.ok(Number.isFinite(rgbResult.report.metrics.psnr.components.r));assert.equal(rgbResult.report.metrics.psnr.components.g,'Infinity');
+  assert.match(await page.locator('#compare-details').innerText(),/R 红\s+G 绿\s+B 蓝/);
+  await page.locator('[data-mode="trial"]').click();await page.locator('#trial-file').fill(source);
+  await page.locator('#trial-duration').fill('1');await page.locator('#trial-vmaf').check();
+  await page.locator('#trial-depth').selectOption('both');
+  assert.equal(await page.locator('#trial-vmaf').isEnabled(),true);assert.equal(await page.locator('#trial-vmaf').isChecked(),true);
+  await page.locator('#trial-depth').selectOption('native');await page.locator('#trial-encoder').selectOption('libx265');
+  await page.locator('[name="trial-preset"][value="medium"]').uncheck();await page.locator('[name="trial-preset"][value="ultrafast"]').check();
+  await page.locator('#trial-crfs').fill('18,23,28');await page.locator('#trial-vmaf-model').selectOption('vmaf_4k_v0.6.1');
+  const trial=await runTask(page,app,'#trial');assert.equal(trial.report.rows.length,3);
+  assert.ok(trial.report.rows.every(row=>row.metrics.vmaf.model==='vmaf_4k_v0.6.1'));
+  await writeFile(path.join(dir,'report.json'),JSON.stringify(trial.report));
+});
+
 scenario('[trial] [units] real x264 trial encodes both CRFs, preserves frame metrics and cleans generated video',async({page,app,dir})=>{
   await page.locator('[data-mode="trial"]').click();await page.locator('#trial-file').fill(media.source);
   await page.locator('#trial-duration').fill('1');await page.locator('#trial-encoder').selectOption('libx264');
@@ -339,6 +404,7 @@ scenario('[trial] [units] real x264 trial encodes both CRFs, preserves frame met
   assert.deepEqual(report.rows.map(r=>r.crf),[20,38]);assert.deepEqual(report.experiment.retainedFiles,[]);
   assert.ok(report.rows.every(r=>r.metrics.psnr.values.length===report.experiment.actualFrames));
   assert.ok(report.rows[0].videoBytes>report.rows[1].videoBytes);
+  assert.equal(await page.locator('#trial-sample-table tbody tr').first().locator('td').nth(4).innerText(),report.rows[0].metrics.psnr.officialSummary.pooled.toLocaleString('zh-CN',{maximumFractionDigits:6}));
   assert.ok(await page.locator('#trial-frames canvas').isVisible());
   await page.locator('#trial-psnr canvas').hover({position:{x:60,y:50}});
   assert.ok((await page.locator('#trial-psnr .chart-label').innerText()).includes(report.rows[0].metrics.psnr.pooled.toLocaleString('zh-CN',{maximumFractionDigits:6})), 'quality tooltips retain their original precision');

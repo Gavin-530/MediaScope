@@ -4,6 +4,7 @@ import {formatBytes, formatBitrate, byteEvidence, byteLimit, quantityScale, quan
 import { parsePortable, makePortable, maxPortableBytes, utcFilename } from "./portable.js";
 import { plot, gopOverview } from "./charts.js";
 import { basicInfoHTML, initBasicInfo } from "./basic-info.js";
+import {vmafModels} from "./vmaf.js";
 import {
   parseCrfs,
   rowLabel,
@@ -54,6 +55,8 @@ const size = v => quantityCell(formatBytes(v), byteEvidence(v));
 const rate = mbps => quantityCell(formatBitrate(mbps == null ? null : mbps * 1e6), mbps == null ? '未报告' : `${mbps * 1e6} bit/s`);
 const cellHTML = v => v?.[unitCell] ? `<span title="${esc(v.title)}">${esc(v.text)}</span>` : esc(v);
 const clean = (v) => v.trim().replace(/^"|"$/g, "");
+for(const id of ['#vmaf-model','#trial-vmaf-model'])
+  $(id).innerHTML=Object.entries(vmafModels).map(([version,m])=>`<option value="${version}">${esc(version)} · ${esc(m.label)}</option>`).join('');
 async function api(url, options = {}) {
   const r = await fetch("/api/" + url, {
       ...options,
@@ -579,6 +582,7 @@ $("#compare").onclick = (event) => {
     ),
     confirm: $("#confirm").checked,
   };
+  if(input.metrics.includes('vmaf'))input.vmafModel=$('#vmaf-model').value;
   if (input.timingMode === "ordinal-confirmed") {
     if (!$("#timing-confirm").checked) {
       message(
@@ -665,6 +669,7 @@ function trialInput() {
     metrics: $("#trial-vmaf").checked
       ? ["psnr", "ssim", "vmaf"]
       : ["psnr", "ssim"],
+    ...($("#trial-vmaf").checked ? {vmafModel:$('#trial-vmaf-model').value} : {}),
     keepFiles: $("#trial-keep").checked,
     ...($("#trial-keep").checked ? {exportDirectory: clean($("#trial-save-directory").value)} : {}),
   };
@@ -674,8 +679,6 @@ function trialControls() {
     both = $("#trial-depth").value === "both";
   $("#trial-presets").classList.toggle("hidden", av1);
   $("#trial-cpu-label").classList.toggle("hidden", !av1);
-  $("#trial-vmaf").disabled = both;
-  if (both) $("#trial-vmaf").checked = false;
   try {
     const input = trialInput(),
       p = av1 ? 1 : input.presets.length,
@@ -1438,14 +1441,8 @@ function renderComparison(r) {
       html += section(
         `${key.toUpperCase()} 分量`,
         table(
-          ["Y 亮度", "U 色度", "V 色度"],
-          [
-            [
-              fmt(m.components.y, 5),
-              fmt(m.components.u, 5),
-              fmt(m.components.v, 5),
-            ],
-          ],
+          Object.keys(m.components).map(k=>({y:r.profile?.colorModel==='GRAY'?'Y 灰度':'Y 亮度',u:'U 色度',v:'V 色度',r:'R 红',g:'G 绿',b:'B 蓝',a:'A 透明度'})[k]??k.toUpperCase()),
+          [Object.values(m.components).map(v=>fmt(v,m.officialSummary?6:5))],
         ),
       );
   if (r.videoSize)
@@ -1470,7 +1467,7 @@ function renderComparison(r) {
         ["整体值", "P05", "最低帧", "统计方式"],
         [
           [
-            fmt(m.pooled, 5),
+            fmt(m.pooled, key!=='vmaf'&&m.officialSummary?6:5),
             fmt(m.p05, 5),
             fmt(m.min, 5),
             key === "psnr"
@@ -1481,6 +1478,7 @@ function renderComparison(r) {
           ],
         ],
       ) +
+        (key==='vmaf'?vmafDetails(m):'') +
         `<div id="metric-${key}"></div>` +
         (m.worst
           ? "<h4>最低质量的 1 秒区间（相对参考起点）</h4>" +
@@ -1517,6 +1515,12 @@ function renderComparison(r) {
       { unit: metricLabels[k], axis: "显示帧序号（从 0 开始）" },
     );
 }
+function vmafDetails(m) {
+  const c=m.configuration;
+  return c?table(['官方模型','输入','汇总 / 采样','libvmaf 版本'],[[c.model.version,`${c.input.width}×${c.input.height} · ${c.input.pixelFormat} · ${c.input.range==='pc'?'Full':c.input.range==='tv'?'Limited':'范围未声明'}`,`${c.pool} / 每 ${c.nSubsample} 帧`,c.libraryVersion]])+
+    notices([c.interpretation,'VMAF 评价亮度；不衡量色度损失。整体值采用 libvmaf 官方汇总；P05 和最低 1 秒区间是本软件的定位统计。'])+
+    '<details><summary>VMAF 参数与输入记录</summary>'+raw(c)+'</details>':'';
+}
 function renderTrial(r) {
   cards([
     ["片段起点", `${r.experiment.start} s`],
@@ -1541,6 +1545,7 @@ function renderTrial(r) {
       r.experiment.comparisonDomain ?? "原生位深参考",
       ...Object.values(r.skippedMetrics ?? {}),
     ]);
+  if(rows[0]?.metrics.vmaf)html+=section('VMAF 模型与适用条件',vmafDetails(rows[0].metrics.vmaf));
   if (r.experiment.preparation?.baseline)
     html += section(
       "编码前的位深转换基准",
@@ -1549,7 +1554,7 @@ function renderTrial(r) {
           ["PSNR / dB", "SSIM", "含义"],
           [
             [
-              fmt(r.experiment.preparation.baseline.psnr.pooled, 5),
+              fmt(r.experiment.preparation.baseline.psnr.pooled, r.experiment.preparation.baseline.psnr.officialSummary?6:5),
               fmt(r.experiment.preparation.baseline.ssim.pooled, 6),
               "两种无损输入在统一 10-bit 域的差异；尚未试编码，不与成片分数相减。",
             ],
@@ -1615,7 +1620,7 @@ function renderTrial(r) {
         x.crf,
         size(x.videoBytes),
         rate(x.videoMbps),
-        fmt(x.metrics.psnr?.pooled),
+        fmt(x.metrics.psnr?.pooled,x.metrics.psnr?.officialSummary?6:3),
         fmt(x.metrics.ssim?.pooled, 6),
         fmt(x.metrics.vmaf?.pooled),
         `${fmt(x.encodeSeconds)} / ${fmt(x.encodeFps)}`,

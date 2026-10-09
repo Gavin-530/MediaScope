@@ -10,6 +10,7 @@ import { FF,FP,run,probe,video,scan,summarize,compare,normalizeMediaPath,decodeT
 import {allPackets,structure,traceStructure,mapStructure,metadataSummary,complexity,trial,trialOptions} from './analysis.mjs';
 import {makePortable,maxPortableBytes,utcNow} from './public/portable.js';
 import {byteLimit} from './public/units.js';
+import {vmafModel} from './public/vmaf.js';
 import {RuntimeData,acquireDataLease,verifyDataLease,removeOwned,ended,trialDestination,saveTrialVideos,recentBytes} from './scripts/runtime-data.mjs';
 const root=path.dirname(fileURLToPath(import.meta.url)),token=randomBytes(24).toString('hex'),jobs=new Map();
 const dataRoot=path.resolve(process.env.MEDIASCOPE_DATA_DIR||path.join(root,'.mediascope'));
@@ -78,7 +79,7 @@ function normalizeInputPaths(input){
 function portableInput(input){const copy=structuredClone(input);delete copy.enqueue;return copy}
 function validatePlanInput(value){
  if(!value||typeof value!=='object'||Array.isArray(value)||!['inspect','analyze','compare','trial'].includes(value.type))throw Error('计划任务类型无效');
- const keys={inspect:['type','file'],analyze:['type','file','stream','complexity','sitiWorkers','bitrateWindowMs'],compare:['type','reference','candidate','refStream','candidateStream','comparisonMode','timingMode','metrics','confirm','timingConfirmed','playbackConfirmed','chromaConfirmed','chromaAssumptions'],trial:['type','file','stream','start','duration','encoder','depthMode','presets','cpuUsed','crfs','metrics','keepFiles','exportDirectory']}[value.type];
+ const keys={inspect:['type','file'],analyze:['type','file','stream','complexity','sitiWorkers','bitrateWindowMs'],compare:['type','reference','candidate','refStream','candidateStream','comparisonMode','timingMode','metrics','vmafModel','confirm','timingConfirmed','playbackConfirmed','chromaConfirmed','chromaAssumptions'],trial:['type','file','stream','start','duration','encoder','depthMode','presets','cpuUsed','crfs','metrics','vmafModel','keepFiles','exportDirectory']}[value.type];
  if(Object.keys(value).some(key=>!keys.includes(key)))throw Error('计划任务包含未知参数');
  const input=structuredClone(value);normalizeInputPaths(input);
  const index=v=>Number.isSafeInteger(v)&&v>=0;
@@ -89,6 +90,7 @@ function validatePlanInput(value){
  }else if(input.type==='compare'){
   if(!index(input.refStream)||!index(input.candidateStream))throw Error('比较轨道索引无效');
   if(!Array.isArray(input.metrics)||!input.metrics.length||new Set(input.metrics).size!==input.metrics.length||input.metrics.some(v=>!['psnr','ssim','vmaf'].includes(v)))throw Error('比较指标无效');
+  if(input.vmafModel!==undefined)vmafModel(input.vmafModel);
   if(!['native','bt709-limited-8-10',undefined].includes(input.comparisonMode)||!['strict','ordinal-confirmed','playback-sample',undefined].includes(input.timingMode))throw Error('比较模式无效');
   if(input.confirm!==true||input.timingMode==='ordinal-confirmed'&&input.timingConfirmed!==true||input.timingMode==='playback-sample'&&input.playbackConfirmed!==true)throw Error('比较任务缺少原有确认');
   if(input.chromaAssumptions!==undefined){
@@ -195,7 +197,7 @@ async function execute(job,input){
       if(input.chromaAssumptions!==undefined&&input.chromaConfirmed!==true)throw Error('请明确确认未声明视频的色度位置；结果将依赖此假设');
       if(input.timingMode==='ordinal-confirmed'&&input.timingConfirmed!==true)throw Error('请确认两路解码显示帧逐一对应，且没有丢帧、重复帧或重排');
       if(input.timingMode==='playback-sample'&&input.playbackConfirmed!==true)throw Error('请确认两路首帧对应同一播放时刻，并接受 CFR 一侧作为采样网格的实验性解释');
-      result=await compare(input.reference,input.candidate,input.refStream,input.candidateStream,input.metrics,{...ctx,progressPlan:'compare',chromaAssumptions:input.chromaAssumptions,timingMode:input.timingMode??'strict'},input.comparisonMode??'native');
+      result=await compare(input.reference,input.candidate,input.refStream,input.candidateStream,input.metrics,{...ctx,progressPlan:'compare',vmafModel:input.vmafModel,chromaAssumptions:input.chromaAssumptions,timingMode:input.timingMode??'strict'},input.comparisonMode??'native');
       publish({stage:'统计两路视频包体积',detail:'统计参考文件压缩包',phaseIndex:6,phaseCount:6,completed:0,total:2,unit:'个文件'});
       const rTracks=await allPackets(input.reference,result.reference.raw.streams,{...ctx,update:v=>publish({stage:'统计两路视频包体积',detail:typeof v==='string'?v:v?.detail,phaseIndex:6,phaseCount:6,completed:0,total:2,unit:'个文件'})});
       publish({stage:'统计两路视频包体积',detail:'统计候选文件压缩包',phaseIndex:6,phaseCount:6,completed:1,total:2,unit:'个文件'});
@@ -321,7 +323,7 @@ const server=http.createServer(async(req,res)=>{
       }
       send(res,404,{error:'接口不存在'});return;
     }
-    const files={'/':'index.html','/app.js':'app.js','/report.js':'report.js','/properties.js':'properties.js','/basic-info.js':'basic-info.js','/portable.js':'portable.js','/bitrate-model.js':'bitrate-model.js','/distribution-model.js':'distribution-model.js','/charts.js':'charts.js','/trial-model.js':'trial-model.js','/units.js':'units.js','/style.css':'style.css'};
+    const files={'/':'index.html','/app.js':'app.js','/report.js':'report.js','/vmaf.js':'vmaf.js','/metric-summary.js':'metric-summary.js','/properties.js':'properties.js','/basic-info.js':'basic-info.js','/portable.js':'portable.js','/bitrate-model.js':'bitrate-model.js','/distribution-model.js':'distribution-model.js','/charts.js':'charts.js','/trial-model.js':'trial-model.js','/units.js':'units.js','/style.css':'style.css'};
     if(req.method!=='GET'||!files[url.pathname]){res.writeHead(404);res.end();return}
     const name=files[url.pathname];let data=await readFile(path.join(root,'public',name));if(name==='index.html')data=Buffer.from(data.toString().replace('__TOKEN__',token).replace('__APP_VERSION__',appVersion).replace('__LOCAL_THEME__',localData.settings.theme).replace('__PORTABLE_LIMIT__',byteLimit(maxPortableBytes)).replace('__RECENT_LIMIT__',byteLimit(recentBytes)));
     res.writeHead(200,{'Content-Type':name.endsWith('.html')?'text/html; charset=utf-8':name.endsWith('.js')?'text/javascript; charset=utf-8':'text/css; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' blob:; object-src 'none'; frame-ancestors 'none'"});res.end(data);

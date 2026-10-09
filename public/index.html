@@ -174,7 +174,7 @@
         <p class="hint">
           跨位深模式仅允许同采样、逐行、色彩标签明确且一致的视频；420 / 422
           须明确且相同的色度位置。8-bit 码值精确乘 4，在 10-bit
-          域测量总差异，仅提供 PSNR / SSIM。全范围、HDR
+          域测量总差异，可选 PSNR / SSIM / VMAF，并记录位深映射。该特定转换流程的全范围、HDR
           跨位深、跨采样暂不支持。相同位深时仍按原生格式比较。
         </p>
         <label for="timing-mode">帧配对方式</label
@@ -250,21 +250,22 @@
             ><input type="checkbox" name="metric" value="ssim" checked />
             SSIM</label
           ><label
-            ><input type="checkbox" name="metric" value="vmaf" /> VMAF v0.6.1 /
-            SDR BT.709 有限范围</label
+            ><input type="checkbox" name="metric" value="vmaf" /> VMAF</label
           >
         </div>
+        <label>VMAF 官方模型<select id="vmaf-model"></select></label>
+        <p class="hint">H 为屏幕高度。按原生样本计算，不自动缩放或做显示变换。报告说明模型观看条件；Log、HDR、未知标签等输入的感知适用性未确认。NEG 用于不奖励增强处理的编码器比较。</p>
         <label class="confirm"
           ><input type="checkbox" id="confirm" />
           我已确认两个文件是相同剪辑、画面顺序与裁切，参考文件选择正确。</label
         >
         <p class="hint">
-          已验证原生平面 YUV 420 / 422 / 444、8 / 10 / 12-bit。支持 PQ / HLG HDR
-          及相同色彩声明的视频计算编码值域 PSNR / SSIM，并分别报告 Y / U /
-          V。原生模式要求相同像素格式；两种格式模式均要求相同分辨率、采样格式和色彩标签；严格与帧序模式要求相同帧数，实验性
-          VFR ↔ CFR 播放采样允许帧数不同。默认严格核验相对时间戳。不适用的 VMAF
-          将说明原因并跳过；仅选 VMAF 时会提示错误。暂不进行跨色彩空间转换或 HDR
-          感知评分。
+          原生模式要求相同分辨率、像素格式和逐帧对应；默认严格核验相对时间戳。
+          已知且冲突的色彩声明会被拒绝；未知声明保留并提示，不猜测或补写标签。
+          PSNR / SSIM 按实际滤镜支持的原生格式计算并报告分量；VMAF 接受平面 YUV
+          420 / 422 / 444 的 8 / 10 / 12 / 16-bit。显式跨位深及播放采样会记录实际预处理。
+          格式不受 libvmaf 支持时跳过 VMAF；仅选 VMAF 时提示错误。分数不构成 Log、HDR
+          或任意观看条件的质量保证。
         </p>
         <button id="compare">计算质量差异</button
         ><button id="enqueue-compare" class="secondary">加入队列</button>
@@ -314,10 +315,12 @@
         </div>
         <label for="trial-depth">位深实验</label
         ><select id="trial-depth">
-          <option value="native">保持源位深</option>
+          <option value="native">保持源格式及位深</option>
           <option value="both">8-bit 与 10-bit 对照</option>
         </select>
         <p class="hint">
+          保持源格式模式要求所选编码器原生支持源格式，并核验逐行片段；
+          候选直接与源片段比较，不自动改变采样或位深。
           对照模式仅支持逐行 420、BT.709 SDR
           有限范围和明确色度位置；其他色彩参数、采样、帧序保持一致。10→8-bit
           固定截断且无抖动，8→10-bit 精确乘 4；所有成片统一对照 10-bit 参考。HDR
@@ -407,13 +410,14 @@
         <p id="trial-count" class="notice" aria-live="polite"></p>
         <div class="checks">
           <label
-            ><input type="checkbox" id="trial-vmaf" /> 同时计算 SDR BT.709
-            VMAF（仅原生位深）</label
+            ><input type="checkbox" id="trial-vmaf" /> 同时计算 VMAF</label
           ><label
             ><input type="checkbox" id="trial-keep" />
             保存实验视频到指定目录</label
           >
         </div>
+        <label>VMAF 官方模型<select id="trial-vmaf-model"></select></label>
+        <p class="hint">记录官方模型及观看条件，不自动缩放或做显示变换；H 为屏幕高度。双位深模式以共同的 10-bit 参考计算，报告保留转换过程和分数解释边界。</p>
         <div id="trial-save-row" class="row hidden">
           <label for="trial-save-directory">视频保存目录</label>
           <input id="trial-save-directory" placeholder="D:\Videos\MediaScope 实验" spellcheck="false" />

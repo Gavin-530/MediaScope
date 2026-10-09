@@ -1,5 +1,7 @@
 import {validateBitrateCurve} from './bitrate-model.js';
 import {validateAudioPacketDistribution} from './distribution-model.js';
+import {vmafModel,parseVmafLog,vmafConfiguration,vmafInputReason} from './vmaf.js';
+import {parseMetricSummary} from './metric-summary.js';
 // Validate the saved data without normalizing, rounding or discarding evidence.
 export function parseReport(text) {
   let r;
@@ -32,7 +34,7 @@ export function validateReport(r) {
     obj(v, p);
     if (typeof v.file !== "string") fail(p + ".file");
   };
-  const metrics = (v, p, required) => {
+  const metrics = (v, p, required, normalization) => {
     obj(v, p);
     for (const [k, m] of Object.entries(v)) {
       if (!["psnr", "ssim", "vmaf"].includes(k)) fail(p + "." + k);
@@ -50,6 +52,38 @@ export function validateReport(r) {
           fail(p + "." + k + ".values");
       }
       if (m.worst !== undefined) objects(m.worst, p + "." + k + ".worst");
+      if(k!=='vmaf'&&m.officialSummary!==undefined){
+        try {
+          const summary=parseMetricSummary(k,m.officialSummary.raw);
+          if(m.pooled!==summary.pooled||Object.keys(summary).some(key=>key!=='components'&&m.officialSummary[key]!==summary[key])||
+            Object.keys(m.components).length!==Object.keys(summary.components).length||
+            Object.keys(m.officialSummary.components).length!==Object.keys(summary.components).length||
+            Object.entries(summary.components).some(([key,value])=>m.components[key]!==value||m.officialSummary.components[key]!==value))throw Error();
+        }catch {fail(p+'.'+k+'.officialSummary / pooled / components')}
+      }
+      if(k==='vmaf'&&(m.configuration!==undefined||m.officialSummary!==undefined)) {
+        try {
+          const c=m.configuration,model=vmafModel(m.model),log=parseVmafLog(m.raw,m.values.length);
+          const input={width:c.input.width,height:c.input.height,pix_fmt:c.input.pixelFormat,
+            color_range:c.input.range,color_primaries:c.input.primaries,color_transfer:c.input.transfer,color_space:c.input.matrix,
+            chroma_location:c.input.chromaLocation,field_order:c.input.fieldOrder};
+          const expected=vmafConfiguration(input,model.version,log.libraryVersion,c.pairing,c.evaluation);
+          const same=(actual,wanted)=>wanted&&typeof wanted==='object'?actual&&Object.entries(wanted).every(([k,v])=>same(actual[k],v)):actual===wanted;
+          if(c.configurationVersion===2){
+            if(!same(c,expected)||typeof c.evaluation?.interlaced!=='boolean'||
+              c.evaluation.crossDepth!==(normalization?.crossDepth===true)||
+              c.evaluation.metadataUncertain!==((normalization?.metadataGaps?.length??0)>0)||
+              ['range','primaries','transfer','matrix','chromaLocation','fieldOrder'].some(k=>c.input[k]!==null&&typeof c.input[k]!=='string'))throw Error();
+          }else if(c.configurationVersion!==undefined||!['strict','ordinal-confirmed'].includes(c.pairing)||
+            !same(c,{implementation:expected.implementation,libraryVersion:expected.libraryVersion,model:expected.model,pool:expected.pool,nSubsample:expected.nSubsample,nThreads:expected.nThreads,clipping:expected.clipping,transform:expected.transform,preprocessing:'none',matchesDisplay:expected.matchesDisplay}))throw Error();
+          if(!['strict','ordinal-confirmed','playback-sample'].includes(c.pairing)||
+            !Number.isSafeInteger(c.input.width)||c.input.width<1||!Number.isSafeInteger(c.input.height)||c.input.height<1||
+            vmafInputReason(input)||
+            m.pooled!==log.summary.mean||m.min!==log.summary.min||
+            m.values.some((v,i)=>v!==log.values[i])||
+            Object.keys(log.summary).some(key=>m.officialSummary?.[key]!==log.summary[key]))throw Error();
+        } catch {fail(p+'.vmaf.configuration / officialSummary / raw')}
+      }
     }
   };
   obj(r, "报告");
@@ -158,7 +192,7 @@ export function validateReport(r) {
     file(r.reference, "reference");
     file(r.candidate, "candidate");
     obj(r.alignment, "alignment");
-    metrics(r.metrics, "metrics", true);
+    metrics(r.metrics, "metrics", true, r.normalization);
     index(r.alignment.frames, "alignment.frames");
     for (const m of Object.values(r.metrics))
       if (m.values.length !== r.alignment.frames) fail("metrics.values.length");
@@ -283,7 +317,7 @@ export function validateReport(r) {
     arr(r.experiment.retainedFiles, "experiment.retainedFiles");
     objects(r.rows, "rows");
     if (!r.rows.length) fail("rows");
-    r.rows.forEach((x) => metrics(x.metrics, "rows.metrics", false));
+    r.rows.forEach((x) => metrics(x.metrics, "rows.metrics", false, x.normalization));
     if (r.experiment.actualFrames !== undefined) {
       index(r.experiment.actualFrames, "experiment.actualFrames");
       for (const row of r.rows)
