@@ -1,0 +1,84 @@
+name: MediaScope 0.2.9 package validation
+
+on:
+  push:
+    branches: [codex/verify-release-0.2.9]
+
+permissions:
+  contents: read
+
+jobs:
+  exact-package:
+    name: Verify uploaded ZIP and real first online install
+    runs-on: windows-2022
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - name: Check out the exact release source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: c7ffed51f2a4fe357804d18f0a9c16dde541ff84
+          persist-credentials: false
+      - name: Prepare locked runtime
+        run: |
+          $ErrorActionPreference='Stop'
+          . ./scripts/deployment.ps1
+          New-Item -ItemType Directory -Force .build/downloads | Out-Null
+          foreach($component in (Read-Json 'runtime-lock.json').components){
+            $archive=Join-Path (Get-Location).Path ".build/downloads/$($component.name).zip"
+            Invoke-WebRequest -UseBasicParsing -Uri $component.url -OutFile $archive -TimeoutSec 300
+            Assert-Hash $archive $component.sha256
+          }
+          $runtime=Get-PrivateRuntime (Get-Location).Path (Join-Path (Get-Location).Path '.build/ci-runtime')
+          Add-Content -LiteralPath $env:GITHUB_PATH -Value (Split-Path -Parent $runtime.node) -Encoding UTF8
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "MEDIASCOPE_NODE_PATH=$($runtime.node)" -Encoding UTF8
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "FFMPEG_PATH=$($runtime.ffmpeg)" -Encoding UTF8
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "FFPROBE_PATH=$($runtime.ffprobe)" -Encoding UTF8
+      - name: Read and verify the exact candidate ZIP through read-only Git access
+        env:
+          RELEASE_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference='Stop'
+          New-Item -ItemType Directory -Force releases,.build/release-validation | Out-Null
+          @'
+          import fs from 'node:fs/promises';
+          import {createHash} from 'node:crypto';
+          const url='https://api.github.com/repos/Gavin-530/MediaScope/git/blobs/66397e005ef3be9cd56181534dbce7311e9855d1';
+          const response=await fetch(url,{headers:{Authorization:'Bearer '+process.env.RELEASE_TOKEN,Accept:'application/vnd.github+json','User-Agent':'MediaScope-release-validation'},redirect:'error',signal:AbortSignal.timeout(60000)});
+          if(!response.ok)throw Error('Candidate blob read HTTP '+response.status);
+          const blob=await response.json();if(blob.encoding!=='base64')throw Error('Unexpected Git blob encoding');
+          const bytes=Buffer.from(blob.content.replace(/\s/g,''),'base64'),hash=createHash('sha256').update(bytes).digest('hex');
+          if(bytes.length!==185540||hash!=='a9b2c519ee6344ea7cce9c014496cd9993d2106ef0e0e85b87e552232f0598c1')throw Error('ZIP size or SHA-256 mismatch');
+          await fs.writeFile('releases/MediaScope-0.2.9-win-x64.zip',bytes);
+          await fs.writeFile('.build/release-validation/asset.json',JSON.stringify({source:'c7ffed51f2a4fe357804d18f0a9c16dde541ff84',assetId:null,bytes:bytes.length,sha256:hash},null,2));
+          console.log('Verified exact uploaded ZIP: '+hash);
+          '@ | node --input-type=module
+          if($LASTEXITCODE -ne 0){throw 'Exact asset verification failed'}
+          if(git status --porcelain=v1 --untracked-files=normal){throw 'Release source is not clean'}
+      - name: Validate offline package, upgrade, rollback and report retention
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/record-test.ps1 -Kind Package -Archive releases/MediaScope-0.2.9-win-x64.zip -RequireClean -ResultPath .build/release-validation/package.json
+          if($LASTEXITCODE -ne 0){throw 'Package validation failed'}
+      - name: Validate a real first online deployment
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/record-test.ps1 -Kind OnlineDeployment -Archive releases/MediaScope-0.2.9-win-x64.zip -RequireClean -ResultPath .build/release-validation/online.json
+          if($LASTEXITCODE -ne 0){throw 'Real first online deployment failed'}
+      - name: Collect exact-asset validation evidence
+        if: always()
+        run: |
+          $proof=Join-Path (Get-Location).Path '.build/release-validation/proof'
+          New-Item -ItemType Directory -Force $proof | Out-Null
+          Get-ChildItem -LiteralPath .build/release-validation -Filter '*.json' | Copy-Item -Destination $proof
+          if(Test-Path -LiteralPath evidence-archive/records){Copy-Item -LiteralPath evidence-archive/records -Destination $proof -Recurse}
+      - name: Upload independent deployment records
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: mediascope-0.2.9-exact-package-evidence
+          path: .build/release-validation/proof
+          retention-days: 90
+          if-no-files-found: error
+          overwrite: false
+          include-hidden-files: true
