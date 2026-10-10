@@ -1,5 +1,6 @@
 import {availableParallelism,freemem} from 'node:os';
 import {FF,run} from './engine.mjs';
+import {measureSitiGpu} from './siti-gpu.mjs';
 
 export function sitiWorkerCount(stream,count,requested=4){
   if(!Number.isSafeInteger(count)||count<60)return 1;
@@ -28,6 +29,13 @@ async function measure(file,stream,ctx,from=0,end=null){
 }
 
 export async function measureSiti(file,stream,ctx={},frames=null){
+  const requestedDevice=ctx.sitiDevice??'cpu';
+  if(!['cpu','gpu'].includes(requestedDevice))throw Error('SI/TI 计算设备无效');
+  let gpuFailure;
+  if(requestedDevice==='gpu'){
+    try{return await measureSitiGpu(file,stream,ctx,frames)}
+    catch(e){if(ctx.signal?.aborted)throw e;gpuFailure=e.message;ctx.update?.({detail:'GPU SI/TI 不可用，回退 CPU：'+e.message,completed:0,total:frames?.length??null,unit:'帧'})}
+  }
   const configured=ctx.sitiWorkers??Number(process.env.MEDIASCOPE_SITI_WORKERS??4);
   const requestedWorkers=Number.isInteger(configured)&&configured>0?Math.min(8,configured):4;
   const setting=ctx.sitiWorkers==null?'auto':'manual';
@@ -68,5 +76,6 @@ export async function measureSiti(file,stream,ctx={},frames=null){
     }
   }else points=await measure(file,stream,{...ctx,onSitiPoint:count=>{const total=frames?.length??null;if(count===1||count%30===0||count===total)ctx.update?.({detail:total?`已测量 ${count.toLocaleString()} / ${total.toLocaleString()} 帧 SI/TI`:`已测量 ${count.toLocaleString()} 帧 SI/TI`,completed:count,total,unit:'帧'})}});
   ctx.update?.({detail:`SI/TI 已完成 ${points.length.toLocaleString()} 帧`,completed:points.length,total:points.length,unit:'帧'});
+  execution={...execution,device:'cpu',requestedDevice,...(gpuFailure?{gpuFallbackReason:gpuFailure}:{})};
   return {points,execution};
 }

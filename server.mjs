@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import {createReadStream} from 'node:fs';
 import { FF,FP,run,probe,video,scan,summarize,compare,normalizeMediaPath,decodeThreadCount } from './engine.mjs';
 import {allPackets,structure,traceStructure,mapStructure,metadataSummary,complexity,trial,trialOptions} from './analysis.mjs';
+import {sitiGpuCapability} from './siti-gpu.mjs';
 import {makePortable,maxPortableBytes,utcNow} from './public/portable.js';
 import {byteLimit} from './public/units.js';
 import {vmafModel} from './public/vmaf.js';
@@ -70,6 +71,8 @@ async function body(req,limit=16384){const chunks=[];let size=0;for await(const 
 function normalizeInputPaths(input){
   if(input.type==='inspect'||input.type==='analyze'||input.type==='trial')input.file=normalizeMediaPath(input.file);
   if(input.type==='analyze'){
+    input.sitiDevice??='cpu';
+    if(!['cpu','gpu'].includes(input.sitiDevice))throw Error('SI/TI 计算设备无效');
     if(input.sitiWorkers==null||input.sitiWorkers==='auto')input.sitiWorkers='auto';
     else{const value=Number(input.sitiWorkers);if(![1,2,4,6,8].includes(value))throw Error('SI/TI 并行上限无效');input.sitiWorkers=value}
   }
@@ -79,7 +82,7 @@ function normalizeInputPaths(input){
 function portableInput(input){const copy=structuredClone(input);delete copy.enqueue;return copy}
 function validatePlanInput(value){
  if(!value||typeof value!=='object'||Array.isArray(value)||!['inspect','analyze','compare','trial'].includes(value.type))throw Error('计划任务类型无效');
- const keys={inspect:['type','file'],analyze:['type','file','stream','complexity','sitiWorkers','bitrateWindowMs'],compare:['type','reference','candidate','refStream','candidateStream','comparisonMode','timingMode','metrics','vmafModel','confirm','timingConfirmed','playbackConfirmed','chromaConfirmed','chromaAssumptions'],trial:['type','file','stream','start','duration','encoder','depthMode','presets','cpuUsed','crfs','metrics','vmafModel','keepFiles','exportDirectory']}[value.type];
+ const keys={inspect:['type','file'],analyze:['type','file','stream','complexity','sitiWorkers','sitiDevice','bitrateWindowMs'],compare:['type','reference','candidate','refStream','candidateStream','comparisonMode','timingMode','metrics','vmafModel','confirm','timingConfirmed','playbackConfirmed','chromaConfirmed','chromaAssumptions'],trial:['type','file','stream','start','duration','encoder','depthMode','presets','cpuUsed','crfs','metrics','vmafModel','keepFiles','exportDirectory']}[value.type];
  if(Object.keys(value).some(key=>!keys.includes(key)))throw Error('计划任务包含未知参数');
  const input=structuredClone(value);normalizeInputPaths(input);
  const index=v=>Number.isSafeInteger(v)&&v>=0;
@@ -153,7 +156,7 @@ async function execute(job,input){
       job.progress.subtasks={...previous,[next.subtask.id]:{...(previous[next.subtask.id]||{}),...item}};
     }
   };
-  const ctx={cwd,signal:job.controller.signal,commands:[],separateMetrics:process.env.MEDIASCOPE_SEPARATE_METRICS==='1',decodeThreads:decodeThreadCount(Number(process.env.MEDIASCOPE_DECODE_THREADS)),sitiWorkers:input.type==='analyze'&&input.sitiWorkers!=='auto'?input.sitiWorkers:undefined,update:publish};
+  const ctx={cwd,signal:job.controller.signal,commands:[],separateMetrics:process.env.MEDIASCOPE_SEPARATE_METRICS==='1',decodeThreads:decodeThreadCount(Number(process.env.MEDIASCOPE_DECODE_THREADS)),sitiWorkers:input.type==='analyze'&&input.sitiWorkers!=='auto'?input.sitiWorkers:undefined,sitiDevice:input.sitiDevice??'cpu',update:publish};
   const stage=async(name,work,{phaseIndex,phaseCount,concurrentGroup=null,subtask=null}={})=>{
     const base={stage:concurrentGroup||name,phaseIndex,phaseCount};
     const scoped={...ctx,update:value=>{
@@ -228,6 +231,11 @@ const server=http.createServer(async(req,res)=>{
       if(req.headers['x-mediascope-token']!==token||(req.headers.origin&&req.headers.origin!==origin)){send(res,403,{error:'访问校验失败，请刷新本机页面'});return}
       await localData.pending;
       if(closing&&url.pathname!=='/api/status'&&url.pathname!=='/api/desktop/shutdown'){send(res,503,{error:'软件正在退出'});return}
+      if(req.method==='GET'&&url.pathname==='/api/siti-gpu'){
+        const controller=new AbortController();probes.add(controller);
+        try{send(res,200,await sitiGpuCapability({signal:controller.signal}))}finally{probes.delete(controller)}
+        return;
+      }
       if(req.method==='GET'&&url.pathname==='/api/status'){send(res,200,{...capabilities,startup,settings:localData.settings,desktop:process.env.MEDIASCOPE_DESKTOP==='1',queueRunning,jobs:[...jobs.values()].filter(j=>!j.removed&&j.status!=='cancelled').map(({controller,result,...j})=>j)});return}
       if(req.method==='GET'&&url.pathname==='/api/local-data'){send(res,200,await localData.enqueue(()=>localData.usage(jobs)));return}
       if(req.method==='POST'&&url.pathname==='/api/local-data/settings'){const value=await body(req);await localData.enqueue(()=>localData.updateSettings(value));send(res,200,{settings:localData.settings});return}

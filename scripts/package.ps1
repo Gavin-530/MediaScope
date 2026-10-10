@@ -10,7 +10,7 @@ $archive=Join-Path $project "releases/$name.zip"
 if(Test-Path -LiteralPath $archive){throw "Refusing to overwrite preserved release: $archive"}
 if(Test-Path -LiteralPath $stage){throw "Staging directory already exists: $stage"}
 New-Item -ItemType Directory -Force $stage,(Join-Path $stage 'scripts'),(Join-Path $project 'releases') | Out-Null
-foreach($item in @('analysis.mjs','siti.mjs','engine.mjs','server.mjs','package.json','README.md','start.cmd','Uninstall.cmd','runtime-lock.json','public','licenses')){
+foreach($item in @('analysis.mjs','siti.mjs','siti-gpu.mjs','gpu','engine.mjs','server.mjs','package.json','README.md','start.cmd','Uninstall.cmd','runtime-lock.json','public','licenses')){
   Copy-Item -LiteralPath (Join-Path $project $item) -Destination $stage -Recurse
 }
 foreach($item in @('deployment.ps1','manage.ps1','install-location.ps1','uninstall.ps1','check-environment.mjs','desktop.mjs','runtime-data.mjs','time.mjs','validate-launch.ps1')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $item) -Destination (Join-Path $stage 'scripts')}

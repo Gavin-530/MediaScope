@@ -260,16 +260,31 @@ scenario('[basic-properties] real subtitles attachments chapters and narrow layo
   assert.deepEqual(exported.results[0].report,report);
 });
 
+scenario('[analysis] GPU SI/TI selection runs the real backend and displays the actual device',async({page,app})=>{
+  await preview(page);await page.locator('#complexity').check();
+  const checked=page.waitForResponse(r=>r.url().endsWith('/api/siti-gpu'));
+  await page.locator('#siti-device').selectOption('gpu');const capability=await(await checked).json();
+  await page.waitForFunction(()=>!document.querySelector('#siti-device-status').textContent.includes('正在检查'));
+  assert.equal(await page.locator('#siti-device').inputValue(),capability.available?'gpu':'cpu');
+  assert.equal(await page.locator('#siti-workers').isDisabled(),capability.available);
+  const {report}=await runTask(page,app,'#analyze');
+  assert.equal(report.content.execution.device,capability.available?'gpu':'cpu');
+  assert.equal(report.content.points.length,report.frames.length);
+  assert.match(await page.locator('#inspect-details').innerText(),capability.available?/GPU · .*OpenCL/:/CPU ·/);
+});
+
 scenario('[analysis] [units] actual multi-audio file, frame scan, GOP, SI/TI and export match the server report',async({page,app,dir})=>{
   const info=await preview(page);assert.deepEqual(info.raw,media.info.raw);
   assert.equal(info.raw.streams.length,3);
   await page.locator('#complexity').check();await page.locator('#siti-workers').selectOption('8');
+  assert.equal(await page.locator('#siti-device').inputValue(),'cpu');
   const {report}=await runTask(page,app,'#analyze');
   assert.deepEqual(await page.locator('#inspect-details > .section > h3').allTextContents(),['文件基本信息','帧结构与 GOP','音轨包大小时间分布','音视频码率统计（可选曲线）','体积构成','SI/TI 内容复杂度']);
   assert.equal(await page.locator('#inspect-details > .cards .card').count(),4);
   assert.equal(report.frames.length,12);assert.equal(report.tracks.filter(s=>s.type==='audio').length,2);
   assert.equal(report.content.points.length,report.frames.length);
   assert.equal(report.content.execution.requestedWorkers,8);
+  assert.equal(report.content.execution.device,'cpu');
   assert.ok(report.commands.length>0&&report.commands.every(c=>c.exitCode===0));
   assert.ok(await page.locator('#frame-plot canvas').isVisible());
   const fileSize=page.locator('[data-property="size"] dd');

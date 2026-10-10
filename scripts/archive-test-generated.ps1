@@ -12,7 +12,7 @@ if((Get-Item -LiteralPath $testRoot -Force).Attributes -band [IO.FileAttributes]
 
 function Is-GeneratedDirectory([string]$Name) {
   return ($Name -match '^(bitdepth|server-reports|trial|trial-libaom-av1|trial-libx265|trials-expanded|startup-desktop)$' -or
-    $Name -match '^(metrics-equivalence|reference-cache|siti-parallel|structure-equivalence|vfr-equivalence)-[A-Za-z0-9]{6}$')
+    $Name -match '^(metrics-equivalence|reference-cache|siti-parallel|siti-gpu|structure-equivalence|vfr-equivalence)-[A-Za-z0-9]{6}$')
 }
 
 function Is-GeneratedFile([string]$Name) {

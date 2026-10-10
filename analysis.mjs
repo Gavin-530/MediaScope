@@ -137,10 +137,10 @@ export function metadataSummary(info){
 }
 
 export async function complexity(file,stream,ctx={},frames=null){
-  if(!/^yuv(420|422|444)p(10le)?$/.test(stream.pix_fmt))return {available:false,reason:'SI/TI 本版仅分析原生平面 YUV 8/10-bit；不自动转换其他像素格式。'};
+  if(!/^yuv(420|422)p(10le)?$/.test(stream.pix_fmt))return {available:false,reason:'SI/TI 本版仅分析原生平面 YUV 420/422 8/10-bit；不自动转换其他像素格式。'};
   const {points,execution}=await measureSiti(file,stream,ctx,frames);
   if(!points.length)throw Error('SI/TI 未产生可用结果');
-  return {available:true,points,execution,si:distribution(points.map(p=>p.si)),ti:distribution(points.slice(1).map(p=>p.ti)),notes:['SI 表示亮度空间细节；TI 表示相邻帧亮度变化（排除首帧 TI=0 的汇总）。','TI 峰值可能来自运动、剪辑、闪光或噪声，不能直接认定为场景切换。','这些是复杂度描述，不是剩余压缩空间或质量评分。只在相同分辨率、帧率、位深、范围和传递函数下对比。','HDR 结果在编码值域计算，不代表感知亮度复杂度。']};
+  return {available:true,points,execution,si:distribution(points.map(p=>p.si)),ti:distribution(points.slice(1).map(p=>p.ti)),notes:['SI 表示亮度空间细节；TI 表示相邻帧亮度变化（排除首帧 TI=0 的汇总）。','TI 峰值可能来自运动、剪辑、闪光或噪声，不能直接认定为场景切换。','这些是复杂度描述，不是剩余压缩空间或质量评分。只在相同分辨率、帧率、位深、范围和传递函数下对比。','有限范围亮度按 FFmpeg siti 整数规则扩展到全范围并裁剪越界值；未声明范围按有限范围。','逐帧 SI/TI 保留两位小数，汇总从这些值计算；均值按帧统计，不按播放时长加权。','GPU 保持相同算法口径，但浮点归约顺序不同，不承诺逐位一致；这不是 P.910 合规认证。','HDR 结果在编码值域计算，不代表感知亮度复杂度。']};
 }
 
 export function trialOptions(input){

@@ -108,6 +108,10 @@
           <label class="complexity-option"
             ><input id="complexity" type="checkbox" /> 同时测量 SI/TI
             内容复杂度</label
+          ><label class="worker-option" for="siti-device">计算设备<select id="siti-device" disabled>
+              <option value="cpu">CPU（默认）</option>
+              <option value="gpu">GPU（OpenCL）</option>
+            </select></label
           ><label class="worker-option" for="siti-workers"
             >并行上限<select id="siti-workers" disabled>
               <option value="auto">自动（默认最多 4 路）</option>
@@ -120,7 +124,7 @@
           >
         </div>
         <p class="hint">
-          并行数量只影响 SI/TI；自动或手动上限均会按
+          <span id="siti-device-status" aria-live="polite">GPU 按完整分辨率逐帧计算 SI/TI，视频仍由软件解码；GPU 不可用时回退 CPU 并记录原因。</span>并行上限只影响 CPU SI/TI；自动或手动上限均会按
           CPU、可用内存和帧数降低，异常时回退串行。直接加入队列时，未读取信息的文件自动选择第一个视频轨道；需选择其他轨道时请先读取信息。完整分析还包含全流
           H.264 / HEVC / AV1
           编码帧头解析，以及所有音轨的码率。长片可能需要较长时间。

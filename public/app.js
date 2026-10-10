@@ -541,9 +541,30 @@ $("#file").oninput = () => {
   $("#analyze").disabled = true;
 };
 const syncSitiWorkers = () => {
-  $("#siti-workers").disabled = !$("#complexity").checked;
+  $("#siti-device").disabled = !$("#complexity").checked;
+  $("#siti-workers").disabled = !$("#complexity").checked || $("#siti-device").value === "gpu";
 };
 $("#complexity").onchange = syncSitiWorkers;
+let sitiGpuCheck;
+$("#siti-device").onchange = async () => {
+  syncSitiWorkers();
+  if ($("#siti-device").value !== "gpu") return;
+  $("#siti-device-status").textContent = "正在检查 GPU 并执行 SI/TI 数值自检…";
+  try {
+    const result = await (sitiGpuCheck ??= api("siti-gpu"));
+    $("#siti-device-status").textContent = result.available
+      ? `GPU：${result.device}；数值自检通过。完整逐帧计算，软件解码；运行失败回退 CPU，报告记录原因。`
+      : `GPU 不可用：${result.reason}。已选择 CPU。`;
+    if (!result.available) {
+      $("#siti-device").value = "cpu";
+      $("#siti-device option[value=gpu]").disabled = true;
+      syncSitiWorkers();
+    }
+  } catch (e) {
+    sitiGpuCheck = null;
+    $("#siti-device-status").textContent = `GPU 检查失败：${e.message}。运行时重新检查，失败回退 CPU。`;
+  }
+};
 syncSitiWorkers();
 $("#inspect").onclick = async () => {
   const requested = clean($("#file").value);
@@ -567,6 +588,7 @@ $("#analyze").onclick = () =>
     complexity: $("#complexity").checked,
     bitrateWindowMs: Number($("#bitrate-window").value),
     sitiWorkers: $("#siti-workers").value,
+    sitiDevice: $("#siti-device").value,
   });
 $("#compare").onclick = (event) => {
   const input = {
@@ -629,6 +651,7 @@ $("#enqueue-analyze").onclick = () =>
     complexity: $("#complexity").checked,
     bitrateWindowMs: Number($("#bitrate-window").value),
     sitiWorkers: $("#siti-workers").value,
+    sitiDevice: $("#siti-device").value,
   });
 $("#enqueue-trial").onclick = () => {
   try {
@@ -1027,7 +1050,7 @@ function renderMedia(r) {
     if (r.content?.available) {
       const e = r.content.execution,
         execution = e
-          ? `<p class="hint">SI/TI 执行：${e.mode === "frame-parallel" ? `${e.workers} 路帧级并行` : "串行"}；设置 ${e.setting === "auto" ? `自动（请求上限 ${e.requestedWorkers} 路）` : `上限 ${e.requestedWorkers} 路`}${e.fallbackReason ? `；已回退：${esc(e.fallbackReason)}` : ""}。</p>`
+          ? `<p class="hint">SI/TI 计算设备：${e.device === "gpu" ? `GPU · ${esc(e.gpuName)} · ${esc(e.backend)}；软件解码；数值自检通过` : `CPU · ${e.mode === "frame-parallel" ? `${e.workers} 路帧级并行` : "串行"}；设置 ${e.setting === "auto" ? `自动（请求上限 ${e.requestedWorkers} 路）` : `上限 ${e.requestedWorkers} 路`}`}${e.gpuFallbackReason ? `；GPU 已回退 CPU：${esc(e.gpuFallbackReason)}` : ""}${e.fallbackReason ? `；已回退：${esc(e.fallbackReason)}` : ""}。</p>`
           : "";
       html += section(
         "SI/TI 内容复杂度",

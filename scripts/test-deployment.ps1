@@ -33,7 +33,7 @@ if($Archive){
   $app=(Get-ChildItem (Join-Path $work 'package') -Directory)[0].FullName
 } else {
   $app=Join-Path $work 'app';New-Item -ItemType Directory -Force $app,(Join-Path $app 'scripts') | Out-Null
-  foreach($item in @('analysis.mjs','siti.mjs','engine.mjs','server.mjs','package.json','README.md','start.cmd','Uninstall.cmd','runtime-lock.json','public','licenses')){Copy-Item (Join-Path $project $item) $app -Recurse}
+  foreach($item in @('analysis.mjs','siti.mjs','siti-gpu.mjs','gpu','engine.mjs','server.mjs','package.json','README.md','start.cmd','Uninstall.cmd','runtime-lock.json','public','licenses')){Copy-Item (Join-Path $project $item) $app -Recurse}
   foreach($item in @('deployment.ps1','manage.ps1','install-location.ps1','uninstall.ps1','check-environment.mjs','desktop.mjs','runtime-data.mjs','time.mjs','validate-launch.ps1')){Copy-Item (Join-Path $PSScriptRoot $item) (Join-Path $app 'scripts')}
   Manifest $app (Read-Json (Join-Path $project 'package.json')).version
 }
