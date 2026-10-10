@@ -1,4 +1,4 @@
-# GitHub-hosted Windows runner only; uses the same test entry as local releases.
+# GitHub-hosted Windows runner: general regression; real GPU acceptance runs separately.
 $ErrorActionPreference='Stop'
 $project=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 if($env:GITHUB_ACTIONS -ne 'true'){throw 'This bootstrap is for GitHub Actions; use npm test locally'}

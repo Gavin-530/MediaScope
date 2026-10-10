@@ -174,7 +174,7 @@ function Test-EvidenceRecord($Root,$Relative) {
   $outcomes=if($manifest.schema -eq 3){@('passed','failed','blocked')}else{@('passed','failed')}
   if($manifest.outcome -notin $outcomes -or ($manifest.outcome -eq 'passed') -ne ($manifest.exitCode -eq 0)){throw "Run outcome mismatch: $Relative"}
   if($manifest.schema -eq 3){
-    if($manifest.scope -notin @('full','core','browser')){throw "Invalid test scope: $Relative"}
+    if($manifest.scope -notin @('full','core','browser','gpu')){throw "Invalid test scope: $Relative"}
     if($manifest.outcome -eq 'blocked' -and $manifest.exitCode -ne 2){throw "Invalid blocked outcome: $Relative"}
     if($manifest.outcome -ne 'blocked' -and (!$manifest.testSummary -or $manifest.testSummary.tests -le 0)){throw "Missing structured test results: $Relative"}
     if($manifest.outcome -eq 'passed' -and ($manifest.testSummary.failed -ne 0 -or $manifest.testSummary.cancelled -ne 0 -or $manifest.testSummary.passed -le 0)){throw "Passed run contains failures or no executed passes: $Relative"}
@@ -197,13 +197,14 @@ function Test-EvidenceRecord($Root,$Relative) {
       # distinguish a complete regression from successful checks of a narrower scope.
       if($manifest.validation){
         $validation=$manifest.validation
-        $mode=if($manifest.source.kind -eq 'git'){'historical-comparison'}elseif($manifest.scope -eq 'full'){'full-regression'}else{'partial-regression'}
+        $mode=if($manifest.source.kind -eq 'git'){'historical-comparison'}elseif($manifest.scope -eq 'full'){'full-regression'}elseif($manifest.scope -eq 'gpu'){'gpu-regression'}else{'partial-regression'}
+        $mapped=$mode -in @('full-regression','gpu-regression')
         $features=Get-Content -LiteralPath (Join-Path $Root 'features.json') -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson
         $failed=($manifest.testSummary.passed -le 0 -or $manifest.testSummary.failed -gt 0 -or $manifest.testSummary.cancelled -gt 0 -or ($null -ne $validation.processExitCode -and $validation.processExitCode -ne 0))
         $incomplete=($manifest.testSummary.skipped -gt 0 -or $manifest.testSummary.todo -gt 0)
         $complete=(!$failed -and !$incomplete -and @($features.features).Count -gt 0 -and @($features.features | Where-Object {$_.status -ne 'passed'}).Count -eq 0)
-        $expectedStatus=if($failed){'failed'}elseif($mode -eq 'full-regression'){if($complete){'complete'}else{'incomplete'}}elseif($incomplete){'incomplete'}else{'partial'}
-        $accepted=(!$failed -and ($mode -ne 'full-regression' -or $complete))
+        $expectedStatus=if($failed){'failed'}elseif($mapped){if($complete){'complete'}else{'incomplete'}}elseif($incomplete){'incomplete'}else{'partial'}
+        $accepted=(!$failed -and (!$mapped -or $complete))
         if($validation.schema -ne 1 -or $validation.mode -ne $mode -or $validation.status -ne $expectedStatus -or $validation.accepted -isnot [bool] -or $validation.accepted -ne $accepted -or ($manifest.outcome -eq 'passed' -and !$accepted)){throw "Invalid regression assessment: $Relative"}
         if($mode -ne 'full-regression' -and $manifest.releaseCheck.ready){throw "Narrow scope cannot claim release readiness: $Relative"}
       }

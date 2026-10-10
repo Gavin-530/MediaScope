@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdir,mkdtemp} from 'node:fs/promises';
 import {execFileSync} from 'node:child_process';
 import path from 'node:path';
-import {featureResults,releaseReadiness,regressionAssessment} from './helpers/test-results.mjs';
+import {featureResults,releaseReadiness,regressionAssessment,testSuiteFiles,sourceTestReadiness} from './helpers/test-results.mjs';
 import {requireFeature,supportedThemeModes} from './helpers/feature-policy.mjs';
 
 // Evidence protocol inputs only; these do not stand in for product/media results.
@@ -50,6 +50,39 @@ test('[test-system] quick checks and historical comparisons cannot claim complet
     assert.equal(regressionAssessment({tests:1,passed:0,skipped:1},features,options).accepted,false);
     assert.equal(regressionAssessment({tests:1,passed:1},features,options).status,'partial');
   }
+});
+
+test('[test-system] general and GPU scopes require their own coverage and exact clean source acceptance',()=>{
+  // Protocol inputs only; these are not GPU measurements or product acceptance.
+  const names=['browser.test.mjs','siti-gpu.test.mjs','siti-gpu-hardware.test.mjs'];
+  assert.deepEqual(testSuiteFiles(names,'full'),names.slice(0,2));
+  assert.deepEqual(testSuiteFiles(names,'core'),['siti-gpu.test.mjs']);
+  assert.deepEqual(testSuiteFiles(names,'gpu'),['siti-gpu-hardware.test.mjs']);
+  const mapping={features:[...coverage.features,{id:'gpu',scope:'gpu',files:['test/siti-gpu-hardware.test.mjs'],names:'check'}]};
+  const gpuFeatures=featureResults(mapping,[passed('test/siti-gpu-hardware.test.mjs')],'gpu');
+  assert.deepEqual(gpuFeatures.map(f=>f.id),['gpu']);
+  assert.equal(featureResults(mapping,coverage.features[0].files.map(passed),'full').length,1);
+  const counts={tests:1,passed:1,failed:0,cancelled:0,skipped:0,todo:0};
+  const validation=regressionAssessment(counts,gpuFeatures,{suite:'gpu'});
+  assert.equal(validation.mode,'gpu-regression');assert.equal(validation.status,'complete');assert.equal(validation.accepted,true);
+  assert.equal(regressionAssessment(counts,[],{suite:'gpu'}).accepted,false);
+  for(const field of ['failed','cancelled','skipped','todo'])assert.equal(regressionAssessment({...counts,[field]:1},gpuFeatures,{suite:'gpu'}).accepted,false);
+  const commit='a'.repeat(40),version='0.2.10',identity={commit,sha256:'b'.repeat(64),workingTree:[]};
+  const environment={executables:['node','ffmpeg','ffprobe'].map(name=>({name,sha256:'e'.repeat(64)}))};
+  const general={scope:'full',version,outcome:'passed',exitCode:0,testSummary:counts,validation:{...validation,mode:'full-regression'},source:{...identity,kind:'working-tree'},harness:identity,environment,releaseCheck:{requested:true,ready:true}};
+  const gpu={...general,scope:'gpu',validation,releaseCheck:{requested:false,ready:false}};
+  const measurement={outcome:'passed',capability:{available:true,device:'protocol-only',selfTestMaxError:0},cases:[{maxError:0,cpu:{execution:{device:'cpu'}},gpu:{execution:{device:'gpu'}}}]};
+  const check=(g=general,h=gpu,m=measurement)=>sourceTestReadiness(g,h,m,{commit,version}).ready;
+  assert.equal(check(),true);
+  assert.equal(check(general,null),false);
+  assert.equal(check(general,{...gpu,source:{...gpu.source,commit:'c'.repeat(40)}}),false);
+  assert.equal(check({...general,source:{...general.source,workingTree:[' M app.mjs']}}),false);
+  assert.equal(check(general,{...gpu,harness:{...gpu.harness,sha256:'d'.repeat(64)}}),false);
+  assert.equal(check(general,{...gpu,environment:{executables:[]}}),false);
+  assert.equal(check(general,{...gpu,testSummary:{...counts,cancelled:1}}),false);
+  assert.equal(check(general,gpu,{...measurement,capability:{available:false}}),false);
+  assert.equal(check(general,gpu,{...measurement,cases:[{...measurement.cases[0],gpu:{execution:{device:'cpu'}}}]}),false);
+  assert.equal(check(general,gpu,{...measurement,cases:[{...measurement.cases[0],maxError:0.02}]}),false);
 });
 test('[test-system] missing current UI features fail; only explicit historical sources may skip',()=>{
   const reasons=[],context={skip:reason=>reasons.push(reason)};

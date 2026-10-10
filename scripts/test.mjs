@@ -5,14 +5,14 @@ import {spawn,execFileSync} from 'node:child_process';
 import {createHash,randomUUID} from 'node:crypto';
 import {gzipSync} from 'node:zlib';
 import os from 'node:os';
-import {featureResults,releaseReadiness,regressionAssessment} from '../test/helpers/test-results.mjs';
+import {featureResults,releaseReadiness,regressionAssessment,testSuiteFiles} from '../test/helpers/test-results.mjs';
 import {saveMeasurements,compactResults,criticalMeasurements} from './test-evidence.mjs';
 
 // Application bytes and harness bytes are captured independently. No source rewriting.
 const project=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const args=process.argv.slice(2);let suite='full',ref,requireClean=false,release=false,maxLogMiB=16,warnTotalMiB=1024;
 while(args.length){const a=args.shift();if(a==='--suite')suite=args.shift();else if(a==='--source-ref'){ref=args.shift();if(!ref)throw Error('Missing source ref')}else if(a==='--require-clean')requireClean=true;else if(a==='--release'){release=true;requireClean=true}else if(a==='--max-log-mib')maxLogMiB=Number(args.shift());else if(a==='--warn-total-mib')warnTotalMiB=Number(args.shift());else throw Error('Unknown test argument: '+a)}
-if(!['full','core','browser'].includes(suite))throw Error('Suite must be full, core or browser');
+if(!['full','core','browser','gpu'].includes(suite))throw Error('Suite must be full, core, browser or gpu');
 if(release&&(suite!=='full'||ref))throw Error('--release requires the full suite against the clean current checkout');
 if(!Number.isSafeInteger(maxLogMiB)||maxLogMiB<1||maxLogMiB>256||!Number.isSafeInteger(warnTotalMiB)||warnTotalMiB<1)throw Error('Invalid evidence size limit');
 const now=()=>new Date().toISOString().replace(/\.\d{3}Z$/,'Z');
@@ -76,7 +76,7 @@ try {
   await copy(path.join(project,'test'),path.join(source,'test'));
   await copy(path.join(project,'scripts','check-environment.mjs'),path.join(source,'scripts','check-environment.mjs'));
   for(const name of ['desktop.mjs','runtime-data.mjs','time.mjs','deployment.ps1','validate-launch.ps1','manage.ps1','install-location.ps1','start-source.ps1'])await copy(path.join(project,'scripts',name),path.join(source,'scripts',name));
-  const harnessScripts=['test.mjs','test-evidence.mjs','test-storage.ps1','evidence-lib.ps1','local-data.ps1','github-evidence-lib.ps1','import-github-test-evidence.ps1','run-ci-tests.ps1','export-github-test-evidence.ps1','sync-github-test-evidence.mjs','migrate-test-evidence.ps1','organize-test-evidence.ps1','rename-evidence-records.ps1','list-test-evidence.ps1','verify-test-evidence.ps1'];
+  const harnessScripts=['test.mjs','test-evidence.mjs','test-storage.ps1','evidence-lib.ps1','local-data.ps1','github-evidence-lib.ps1','import-github-test-evidence.ps1','run-ci-tests.ps1','export-github-test-evidence.ps1','sync-github-test-evidence.mjs','migrate-test-evidence.ps1','organize-test-evidence.ps1','rename-evidence-records.ps1','list-test-evidence.ps1','verify-test-evidence.ps1','verify-source-tests.mjs'];
   for(const name of harnessScripts)await copy(path.join(project,'scripts',name),path.join(source,'scripts',name));
   for(const name of (await fs.readdir(path.join(project,'scripts'))).filter(name=>name.startsWith('github-archive')&&/\.(mjs|ps1)$/.test(name)))await copy(path.join(project,'scripts',name),path.join(source,'scripts',name));
   const importerPath='evidence-archive/tools/import-local-test-evidence.ps1';
@@ -101,13 +101,12 @@ try {
   output+=check.stdout+check.stderr;
   if(check.code)throw Error('TEST_INFRA: runtime compatibility preflight failed; tests were not executed');
   preflight.compatibility=JSON.parse(await fs.readFile(path.join(evidence,'compatibility.json'),'utf8'));
-  if(suite!=='core'){
+  if(suite==='full'||suite==='browser'){
     const {chromium}=await import('playwright-core');const browser=await chromium.launch({headless:true,...(process.env.MEDIASCOPE_BROWSER_PATH?{executablePath:process.env.MEDIASCOPE_BROWSER_PATH}:{channel:'msedge'})});
     try{preflight.browser={version:browser.version(),driver:JSON.parse(await fs.readFile(path.join(project,'node_modules','playwright-core','package.json'),'utf8')).version}}finally{await browser.close()}
   }
   await json(path.join(evidence,'manifest.json'),{...manifest,version,environment:preflight,blockedReason:'Execution has not completed'});
-  const browserFiles=['browser.test.mjs','desktop-browser.test.mjs','runtime-data-browser.test.mjs'];
-  const testFiles=(await fs.readdir(path.join(source,'test'))).filter(x=>x.endsWith('.test.mjs')&&(suite==='full'||(suite==='browser')===browserFiles.includes(x))).sort().map(x=>path.join(source,'test',x));
+  const testFiles=testSuiteFiles(await fs.readdir(path.join(source,'test')),suite).map(x=>path.join(source,'test',x));
   if(!testFiles.length)throw Error('TEST_INFRA: empty suite');
   command={executable:process.execPath,args:['--test','--test-concurrency=1','--test-reporter=spec','--test-reporter-destination='+path.join(evidence,'output.log'),'--test-reporter='+pathToFileURL(path.join(source,'test','helpers','reporter.mjs')).href,'--test-reporter-destination='+path.join(evidence,'events.jsonl'),...testFiles],cwd:source};
   console.log(`Running ${suite} suite against ${ref||'the captured working tree'}…`);
@@ -128,13 +127,13 @@ try {
   manifest.releaseCheck={requested:release,...releaseReadiness(counts,features)};
   if(ref||suite!=='full'){
     manifest.releaseCheck.ready=false;
-    manifest.releaseCheck.reasons.push(ref?'Historical comparisons are not current-version acceptance':'Partial suites are not complete regression');
+    manifest.releaseCheck.reasons.push(ref?'Historical comparisons are not current-version acceptance':suite==='gpu'?'GPU verification must be paired with strict general regression':'Partial suites are not complete regression');
   }
   manifest.validation=regressionAssessment(counts,features,{suite,historical:!!ref,processExitCode:result.code});
   manifest.testSummary=counts;manifest.failureClasses=failures.map(x=>({name:x.name,classification:x.classification}));
   if(failures.some(x=>x.classification==='infrastructure')){exitCode=2;manifest.outcome='blocked'}else{exitCode=result.code===0&&counts.failed===0&&counts.cancelled===0&&counts.passed>0?0:1;manifest.outcome=exitCode===0?'passed':'failed'}
   if(exitCode===0&&!manifest.validation.accepted){exitCode=1;manifest.outcome='failed'}
-  if(exitCode===0&&manifest.validation.status==='complete')console.log('Complete current-version regression passed.');
+  if(exitCode===0&&manifest.validation.status==='complete')console.log(`Complete ${suite==='gpu'?'GPU hardware':'general'} regression passed; release acceptance also requires the complementary scope and package checks.`);
   else console.log('Verification '+manifest.validation.status+' ('+manifest.validation.mode+'): '+manifest.validation.reasons.join('; '));
   console.log(JSON.stringify({outcome:manifest.outcome,validation:manifest.validation,counts}));
 }catch(e){output+='\n'+e.stack+'\n';manifest.blockedReason=e.message;console.error(e.message)}

@@ -10,21 +10,26 @@ npm test
 npm run test:core
 npm run test:browser
 npm run test:release
+npm run test:gpu
+npm run test:gpu:release
 ```
 
 | 入口 | 范围和条件 |
 | --- | --- |
-| `npm test` | 当前源码完整回归；允许未提交改动并记录实际源码身份 |
+| `npm test` | 当前源码完整通用回归；允许未提交改动并记录实际源码身份，不包含独立 GPU 硬件精度矩阵 |
 | `test:core` / `test:browser` | 部分范围，不能替代完整回归或发布验证 |
-| `test:release` | 等同 `node scripts/test.mjs --release`；完整回归且当前工作区干净，与 Actions 入口一致 |
+| `test:release` | 等同 `node scripts/test.mjs --release`；干净提交的完整通用回归，由 Actions 承担；本地可用于诊断，不强制重复 |
+| `test:gpu` | 独立真实 GPU 硬件验证；无合格 GPU 或回退 CPU 即失败，不要求浏览器 |
+| `test:gpu:release` | `--suite gpu --require-clean`；本地对确切发布提交完成 GPU 验收并保存独立记录 |
+| `test:acceptance -- <通用记录目录> <GPU记录目录> <发布SHA>` | 校验两类记录完整性、干净提交、版本、源码/验证器和 Node/FFmpeg/FFprobe 摘要及真实 GPU 测量；单独任一记录不能满足源码发布验收 |
 
-完整回归要求非零实际检查、零失败/取消/跳过/TODO、全部功能映射通过。缺依赖、初始化失败、零用例或归档阻塞不得称为产品通过。发布入口不能与部分范围或 `--source-ref` 合用；兼容入口为 `scripts/record-test.ps1 -Kind App -Release`。
+各验收范围均要求非零实际检查、零失败/取消/跳过/TODO、该范围全部功能映射通过。缺依赖、初始化失败、零用例或归档阻塞不得称为产品通过。`--release` 仅用于干净提交的通用完整回归，不能与部分范围或 `--source-ref` 合用；兼容入口为 `scripts/record-test.ps1 -Kind App -Release`。`releaseCheck.ready` 表示通用回归条件满足，不单独代表整个版本可以发布。
 
-本地与 GitHub Actions 共用测试和证据规范；云端不另设一套产品通过条件。比较同一提交的发布验证时，本地执行 `npm run test:release`，Actions 执行相同的 `node scripts/test.mjs --release`。普通 `npm test` 的完整回归通过条件相同，但允许未提交改动，不能据此宣称已完成干净提交的发布验证。
+本地与 GitHub Actions 共用测试实现、断言和证据规范，按覆盖范围分工：Actions 执行完整通用回归（CPU、界面、API、GPU 选择及不可用回退），本地执行受影响功能检查、真实 GPU 硬件验收及 Windows 交互验收。不要求两边重复整套通用回归。GPU 精度矩阵保留 8/10-bit、420/422、全/限范围、VFR、AV1/HEVC/H.264 和 1080p 真实素材逐帧及统计对照；必须实际使用 GPU，不能以 CPU 回退或跳过代替。
 
 | 统一项目 | 本地与 Actions 的共同要求 |
 | --- | --- |
-| 测试范围与断言 | 使用同一 `scripts/test.mjs`、测试文件和 `test/coverage.json`；完整回归不得以部分套件替代 |
+| 测试范围与断言 | 使用同一 `scripts/test.mjs`、测试实现和 `test/coverage.json`；通用与 GPU 范围分别完整通过，开发部分套件不能替代验收范围 |
 | 通过条件 | 非零实际检查，零失败、取消、跳过和 TODO，全部必需功能映射通过；环境或归档阻塞如实记录 |
 | 新测试证据 | 正常完成的运行使用 `evidenceRevision: 2` 独立记录，共用发布和校验函数，保留逐项结果、功能状态、采集规则涵盖的完整测量报告、无损压缩日志及必要失败诊断 |
 | 可重建内容 | 正式记录不保存临时源码、运行时、浏览器配置、生成媒体或模拟协议档案；成功封存后回收本次沙箱 |
@@ -48,7 +53,7 @@ npm run test:release
 
 `features.json` 保存实际功能事件和缺少证据的文件；映射不是代码覆盖率，不证明所有平台或素材组合均已验证。当前源码的必需功能不能通过自动跳过放行；只有显式历史对比允许不适用。主题检查验证文字与实际背景的对比度，不代表完整 WCAG 认证；性能观察不代表目标机器吞吐率。
 
-`manifest.validation` 区分 `full-regression`、`partial-regression`、`historical-comparison`，完整性为 `complete`、`partial`、`incomplete` 或 `failed`。部分范围或历史对比的 `outcome: passed` 只说明已执行检查通过；跳过和 TODO 使验证不完整。旧记录沿用原含义，不补造结论。验证陈述只引用对应源码/附件的真实记录，不累计历史通过数。
+`manifest.validation` 区分 `full-regression`（通用完整回归）、`gpu-regression`（独立 GPU 硬件范围）、`partial-regression`、`historical-comparison`，完整性为 `complete`、`partial`、`incomplete` 或 `failed`。`gpu-regression: complete` 只证明 GPU 范围；源码发布验收必须配对同一干净提交的通用记录。部分范围或历史对比的 `outcome: passed` 只说明已执行检查通过；跳过和 TODO 使验证不完整。旧记录沿用原含义，不补造结论。验证陈述只引用对应源码/附件的真实记录，不累计历史通过数。
 
 浏览器套件串行执行，使用独立数据目录、随机端口和有界等待。仅 Fetch 明确拒绝的 `bad port` 可在产品检查前重新申请端口，最多 10 次并保存日志；产品断言和其他启动错误不重试。
 
@@ -68,9 +73,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/recover-test-evidenc
 
 ## GitHub 自动测试
 
-[产品工作流](../.github/workflows/tests.yml) 在 push（包括 Tag）、PR、merge_group 和 workflow_dispatch 使用 Windows Server 2022 x64，下载并校验锁定运行时，执行 `npm ci --ignore-scripts` 和 `node scripts/test.mjs --release`。Edge 使用 runner 已装版本并记录身份。本地保存文件不触发远端测试，工作流修改提交推送后才生效。
+[产品工作流](../.github/workflows/tests.yml) 在分支 push、PR、merge_group 和 workflow_dispatch 使用 Windows Server 2022 x64，下载并校验锁定运行时，执行 `npm ci --ignore-scripts` 和 `node scripts/test.mjs --release`。Tag push 不再重复触发同提交的完整通用回归；发布仍须核验 Tag 指向的确切 SHA 已有合格通用记录，没有则手动对该 Tag 运行 workflow_dispatch。PR 合并测试 SHA 不同则不能复用。Edge 使用 runner 已装版本并记录身份；硬件精度矩阵由独立 GPU 范围覆盖。本地保存文件不触发远端测试，工作流修改提交推送后才生效。现有 job 名 `Windows full regression` 保留以兼容既有必需检查配置，其范围为通用回归。
 
 本地和远端是独立执行，不合并通过数。记录仓库、测试 SHA、run_id、run_attempt、job 和事件；PR 的 head SHA 与实际合并测试 SHA 分别保留。比较结果须核对源码、验证器、实际工具和范围，不要求日志/截图字节相同。当前只有一个产品回归 job，扩展矩阵前须同步扩展证据身份及产物名。
+
+同提交的通用记录可以复用，前提是源码、验证器、依赖/运行时与要求的覆盖范围未改变，并且没有尚未解释的失败或取消。发布前等待所有已触发的相关检查结束；重试成功不能抹掉原失败。GPU 记录保留每个素材的阶段和完整测量，测试超时将取消所启动的子进程并保留已写诊断；拆分范围本身不证明历史超时已修复，也不改变 0.2.10 的预发布结论。
 
 测试步骤结束后，即使失败也尝试导出；初始化失败或中断保存明确 blocked 诊断。导出器只用于 GitHub-hosted runner，核对本次身份并验证记录，不导出凭证、完整环境、`.git`、事件载荷、临时源码或运行时。正常完成不重复保存初始化日志。
 

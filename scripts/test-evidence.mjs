@@ -15,7 +15,10 @@ export function measurementFile(relative) {
   return false;
 }
 
-export const criticalMeasurements = [{testName:'real video and two audio tracks: 100 ms aggregation matches direct 1 s without changing legacy accounting',pathPattern:/^bitrate-equivalence-[A-Za-z0-9]{6}\/measured-equivalence\.json$/}];
+export const criticalMeasurements = [
+  {testName:'real video and two audio tracks: 100 ms aggregation matches direct 1 s without changing legacy accounting',pathPattern:/^bitrate-equivalence-[A-Za-z0-9]{6}\/measured-equivalence\.json$/},
+  {testName:'GPU SI/TI hardware validates real frames against CPU without accepting CPU fallback',pathPattern:/^siti-gpu-[A-Za-z0-9]{6}\/hardware-equivalence\.json$/}
+];
 export async function saveMeasurements(generated,evidence,{failed=false,requiredMeasurements=[]}={}) {
   const entries=[],diagnostics=[];
   async function visit(directory) {
