@@ -1,0 +1,60 @@
+name: Verify release 0.2.10 deployment
+on:
+  push:
+    branches: [codex/verify-release-0.2.10]
+permissions:
+  contents: read
+jobs:
+  deployment:
+    runs-on: windows-2022
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: e5e16367e072730e4163a11894edccfbb1ba5a10
+          persist-credentials: false
+      - name: Download and verify the exact draft ZIP
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Force releases | Out-Null
+          @'
+          import fs from 'node:fs/promises';
+          import {createHash} from 'node:crypto';
+          const response=await fetch('https://api.github.com/repos/Gavin-530/MediaScope/releases/assets/628340927',{headers:{Authorization:'Bearer '+process.env.GH_TOKEN,Accept:'application/octet-stream','User-Agent':'MediaScope-release-verification'},redirect:'manual'});
+          let content=response;
+          if([302,307].includes(response.status)){const url=new URL(response.headers.get('location'));if(url.protocol!=='https:'||url.hostname!=='release-assets.githubusercontent.com')throw Error('Unexpected asset redirect');content=await fetch(url);}
+          if(!content.ok)throw Error('Asset download HTTP '+content.status);
+          const bytes=Buffer.from(await content.arrayBuffer());const sha=createHash('sha256').update(bytes).digest('hex');
+          if(bytes.length!==195307||sha!=='786a3435b0e7d133ea1ed58cbbdffe4296e41017e5ac248a99c27a9fef70c39e')throw Error('Release ZIP identity mismatch');
+          await fs.writeFile('releases/MediaScope-0.2.10-win-x64.zip',bytes);console.log(JSON.stringify({bytes:bytes.length,sha256:sha}));
+          '@ | node --input-type=module
+          if($LASTEXITCODE -ne 0){throw 'Release ZIP download failed'}
+      - name: Prepare verified offline transport archives
+        run: |
+          . ./scripts/deployment.ps1
+          New-Item -ItemType Directory -Force .build/downloads | Out-Null
+          foreach($component in (Read-Json runtime-lock.json).components){
+            $file=".build/downloads/$($component.name).zip"
+            Invoke-WebRequest -UseBasicParsing -Uri $component.url -OutFile $file -TimeoutSec 300
+            if((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant() -ne $component.sha256){throw 'Runtime ZIP digest mismatch'}
+          }
+      - name: Verify exact package and offline deployment
+        run: |
+          ./scripts/record-test.ps1 -Kind Package -Archive releases/MediaScope-0.2.10-win-x64.zip -RequireClean
+          if($LASTEXITCODE -ne 0){throw 'Package deployment verification failed'}
+      - name: Verify real first online deployment
+        run: |
+          ./scripts/record-test.ps1 -Kind OnlineDeployment -Archive releases/MediaScope-0.2.10-win-x64.zip -RequireClean
+          if($LASTEXITCODE -ne 0){throw 'Online deployment verification failed'}
+      - name: Upload sealed deployment evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-0.2.10-deployment-evidence
+          path: evidence-archive/records/
+          if-no-files-found: error
+          retention-days: 90
