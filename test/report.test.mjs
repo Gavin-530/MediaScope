@@ -12,7 +12,7 @@ before(async()=>{
  app=await startServer(path.join(root,'reports'));
  reports.inspect=await app.request('probe','POST',{file:media.source});
  for(const input of [
-  {type:'analyze',file:media.source,stream:0,complexity:true},
+  {type:'analyze',file:media.sitiSource,stream:0,complexity:true},
   {type:'compare',reference:media.source,candidate:media.candidate,refStream:0,candidateStream:0,confirm:true,metrics:['psnr','ssim','vmaf'],vmafModel:'vmaf_v0.6.1neg'},
   {type:'trial',file:media.source,stream:0,start:0,duration:1,encoder:'libx264',depthMode:'native',presets:['ultrafast'],crfs:[20,38],metrics:['psnr','ssim']}
  ]){
@@ -33,6 +33,7 @@ before(async()=>{
 after(async()=>{await app?.stop()});
 test('all four actual report types round trip without altering measurements, tools or command evidence',()=>{
  for(const report of Object.values(reports))assert.deepEqual(parseReport('\uFEFF'+JSON.stringify(report)),report);
+ assert.equal(reports.analyze.content.points[0].ti,null);assert.equal(reports.analyze.content.execution.configuration.standard,'ITU-T P.910 (10/2023)');
 });
 test('real report parser rejects unknown versions and deliberately removed required structures',()=>{
  for(const report of Object.values(reports))assert.throws(()=>parseReport(JSON.stringify({...report,schema:'MediaScope/unsupported'})),/版本/);

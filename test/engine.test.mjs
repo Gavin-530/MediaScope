@@ -122,7 +122,14 @@ test('AV1 trace preserves hidden frames, show-existing events and reference slot
  const file=path.join(dir,'av1.mp4'),p=await probe(file),f=await scan(file,0),r=await structure(file,p.raw.streams[0],f,context());assert.ok(r.counts.hidden>0);assert.ok(r.counts.showExisting>0);assert.equal(r.counts.shown,f.length);assert.equal(r.matchedDisplayFrames,f.length);assert.equal(r.events[0].kind,'KEY');assert.ok(r.events.filter(e=>e.showExisting).every(e=>Number.isInteger(e.sourceEvent)));assert.ok(r.events.filter(e=>e.kind==='INTER').every(e=>e.referenceSlots.length===7));
 });
 test('short reference signaling yields seven valid slots',()=>{const refs=av1ShortRefs(0,1,10,7,[9,5,11,12,8,7,6,4]);assert.equal(refs.length,7);assert.equal(refs[0],0);assert.equal(refs[3],1);assert.equal(refs[6],3);assert.ok(refs.every(x=>x>=0&&x<8))});
-test('SI/TI preserves one measurement per decoded frame',async()=>{const p=await probe(source),r=await complexity(source,p.raw.streams[0],context());assert.equal(r.points.length,12);assert.ok(r.si.mean>0);assert.ok(r.ti.mean>0)});
+test('SI/TI preserves one measurement per decoded frame',async()=>{
+ const native=path.join(dir,'sdr-lossless.mkv');await run(FF,['-v','error','-y','-f','lavfi','-i','testsrc2=size=192x108:rate=12:duration=1,setfield=prog,setparams=range=limited:color_trc=bt709:color_primaries=bt709:colorspace=bt709','-c:v','ffv1','-level','3',native]);
+ const p=await probe(native),r=await complexity(native,p.raw.streams[0],context());assert.equal(r.points.length,12);assert.ok(r.si.mean>0);assert.ok(r.ti.mean>0);assert.equal(r.points[0].ti,null);
+ // Explicit out-of-range boundary media, losslessly encoded. Preserve the
+ // worker's useful rejection reason instead of a downstream pipe error.
+ const invalid=path.join(dir,'sdr-invalid-range.mkv');await run(FF,['-v','error','-y','-f','lavfi','-i','color=black:size=192x108:rate=12:duration=1,format=yuv420p,geq=lum=15:cb=128:cr=128,setfield=prog,setparams=range=limited:color_trc=bt709:color_primaries=bt709:colorspace=bt709','-c:v','ffv1','-level','3',invalid]);
+ const rejected=await probe(invalid);await assert.rejects(complexity(invalid,rejected.raw.streams[0],context()),/亮度码值 15 超出声明范围/);
+});
 test('metadata summary merges repeated side data with explicit provenance',()=>{const r=metadataSummary({raw:{streams:[{index:0,side_data_list:[{side_data_type:'Mastering display',x:1}]}]},frameSample:{frames:[{stream_index:0,side_data_list:[{side_data_type:'Mastering display',x:1}]}]},frameSampleScope:'sample'});assert.equal(r.items.length,1);assert.equal(r.items[0].occurrences,2);assert.equal(r.items[0].sources.length,2)});
 test('trial produces a measured curve and removes temporary media',async()=>{
  const cwd=path.join(dir,'trial');await mkdir(cwd,{recursive:true});const r=await trial({file:source,stream:0,start:0,duration:1,encoder:'libx264',crfs:[20,38],metrics:['psnr','ssim']},{...context(),cwd});assert.equal(r.rows.length,2);assert.ok(r.rows[0].videoBytes>r.rows[1].videoBytes);assert.ok(r.rows[0].metrics.psnr.pooled>r.rows[1].metrics.psnr.pooled);assert.ok(!(await readdir(cwd)).some(f=>/\.(nut|mkv)$/.test(f)));

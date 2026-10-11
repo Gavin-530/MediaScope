@@ -5,6 +5,7 @@ import { parsePortable, makePortable, maxPortableBytes, utcFilename } from "./po
 import { plot, gopOverview } from "./charts.js";
 import { basicInfoHTML, initBasicInfo } from "./basic-info.js";
 import {vmafModels} from "./vmaf.js";
+import {validateSitiSceneStarts} from "./siti-scenes.js";
 import {
   parseCrfs,
   rowLabel,
@@ -543,8 +544,19 @@ $("#file").oninput = () => {
 const syncSitiWorkers = () => {
   $("#siti-device").disabled = !$("#complexity").checked;
   $("#siti-workers").disabled = !$("#complexity").checked || $("#siti-device").value === "gpu";
+  $("#siti-scenes").disabled = !$("#complexity").checked;
+  $("#siti-scene-frames").disabled = !$("#complexity").checked || $("#siti-scenes").value !== "confirmed";
+  $("#siti-scene-frames-label").classList.toggle("hidden", $("#siti-scenes").value !== "confirmed");
 };
 $("#complexity").onchange = syncSitiWorkers;
+$("#siti-scenes").onchange = syncSitiWorkers;
+function sitiSceneInput(){
+  if(!$("#complexity").checked||$("#siti-scenes").value==='unconfirmed')return {};
+  const text=$("#siti-scene-frames").value.trim();
+  if($("#siti-scenes").value==='confirmed'&&!/^\d+(?:\s*[,，\s]\s*\d+)*$/.test(text))throw Error('请输入全部已确认的场景起始帧，例如 1, 101, 251');
+  const starts=$("#siti-scenes").value==='single'?[0]:text.split(/[,，\s]+/).map(x=>Number(x)-1);
+  validateSitiSceneStarts(starts);return {sitiSceneStarts:starts};
+}
 let sitiGpuCheck;
 $("#siti-device").onchange = async () => {
   syncSitiWorkers();
@@ -580,8 +592,8 @@ $("#inspect").onclick = async () => {
     message(e.message, true);
   }
 };
-$("#analyze").onclick = () =>
-  launch({
+$("#analyze").onclick = () => {
+  try{launch({
     type: "analyze",
     file: infoPath,
     stream: Number($("#stream").value),
@@ -589,7 +601,9 @@ $("#analyze").onclick = () =>
     bitrateWindowMs: Number($("#bitrate-window").value),
     sitiWorkers: $("#siti-workers").value,
     sitiDevice: $("#siti-device").value,
-  });
+    ...sitiSceneInput(),
+  })}catch(e){message(e.message,true)}
+};
 $("#compare").onclick = (event) => {
   const input = {
     type: "compare",
@@ -641,8 +655,8 @@ $("#compare").onclick = (event) => {
   launch({ ...input, enqueue: event?.currentTarget?.id === "enqueue-compare" });
 };
 $("#enqueue-compare").onclick = $("#compare").onclick;
-$("#enqueue-analyze").onclick = () =>
-  launch({
+$("#enqueue-analyze").onclick = () => {
+  try{launch({
     type: "analyze",
     enqueue: true,
     file: clean($("#file").value),
@@ -652,7 +666,9 @@ $("#enqueue-analyze").onclick = () =>
     bitrateWindowMs: Number($("#bitrate-window").value),
     sitiWorkers: $("#siti-workers").value,
     sitiDevice: $("#siti-device").value,
-  });
+    ...sitiSceneInput(),
+  })}catch(e){message(e.message,true)}
+};
 $("#enqueue-trial").onclick = () => {
   try {
     launch({ ...trialInput(), enqueue: true });
@@ -1055,14 +1071,17 @@ function renderMedia(r) {
       html += section(
         "SI/TI 内容复杂度",
         execution +
-          table(
+          (r.content.scenes?.length>1?table(
+            ["场景", "显示帧（从 1 计）", "SI 均值", "SI P95", "SI 最大值", "TI 均值", "TI P95", "TI 最大值"],
+            r.content.scenes.map(s=>[s.index+1,`${s.startFrame+1}–${s.endFrame+1}`,fmt(s.si.mean),fmt(s.si.p95),fmt(s.si.max),fmt(s.ti?.mean),fmt(s.ti?.p95),fmt(s.ti?.max)]),
+          ):table(
             ["指标", "均值", "P95", "最大值"],
             [
               [
                 "SI / 空间细节",
-                fmt(r.content.si.mean),
-                fmt(r.content.si.p95),
-                fmt(r.content.si.max),
+                fmt(r.content.si?.mean),
+                fmt(r.content.si?.p95),
+                fmt(r.content.si?.max),
               ],
               [
                 "TI / 帧间变化",
@@ -1071,7 +1090,7 @@ function renderMedia(r) {
                 fmt(r.content.ti?.max),
               ],
             ],
-          ) +
+          )) +
           `<h4>SI</h4><div id="si"></div><h4>TI</h4><div id="ti"></div>` +
           notices(r.content.notes),
       );

@@ -123,6 +123,15 @@
             </select></label
           >
         </div>
+        <div class="row siti-options">
+          <label for="siti-scenes">场景范围<select id="siti-scenes" disabled>
+            <option value="unconfirmed">边界未确认（全片参考）</option>
+            <option value="single">已确认只有一个场景</option>
+            <option value="confirmed">按已确认边界分场景</option>
+          </select></label>
+          <label id="siti-scene-frames-label" class="hidden" for="siti-scene-frames">各场景起始帧<input id="siti-scene-frames" placeholder="例如 1, 101, 251" disabled /></label>
+        </div>
+        <p class="hint">场景起始帧从 1 计数，须包含 1；填写全部已确认边界。各场景分别统计，场景首帧没有 TI；未确认时全片统计可能包含剪辑点影响。</p>
         <p class="hint">
           <span id="siti-device-status" aria-live="polite">GPU 按完整分辨率逐帧计算 SI/TI，视频仍由软件解码；GPU 不可用时回退 CPU 并记录原因。</span>并行上限只影响 CPU SI/TI；自动或手动上限均会按
           CPU、可用内存和帧数降低，异常时回退串行。直接加入队列时，未读取信息的文件自动选择第一个视频轨道；需选择其他轨道时请先读取信息。完整分析还包含全流

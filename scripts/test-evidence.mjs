@@ -6,7 +6,7 @@ import {gzipSync} from 'node:zlib';
 export function measurementFile(relative) {
   const name=path.posix.basename(relative),top=relative.split('/')[0];
   if(/^(psnr|ssim|vmaf)\.(log|json)$/.test(name)&&(!relative.includes('/')||['bitdepth','trial','trial-libx265','trial-libaom-av1'].includes(top)))return true;
-  if(/^(metrics-equivalence|reference-cache|vfr-equivalence|structure-equivalence|siti-parallel|siti-gpu|bitrate-equivalence|vmaf-official)-[A-Za-z0-9]{6}$/.test(top))return name.endsWith('.json');
+  if(/^(metrics-equivalence|reference-cache|vfr-equivalence|structure-equivalence|siti-parallel|siti-gpu|siti-p910|bitrate-equivalence|vmaf-official)-[A-Za-z0-9]{6}$/.test(top))return name.endsWith('.json');
   if(['browser','server-reports','chroma-assumption','portable','report-validation'].includes(top))return name==='report.json'||/^theme-.*\.json$/.test(name)||name==='sidebar-links.json';
   if(['trials-expanded','chart-model'].includes(top))return name==='measured-trial.json';
   if(top==='startup-desktop')return ['cache-result.json','page-timing.json'].includes(name);
@@ -17,7 +17,10 @@ export function measurementFile(relative) {
 
 export const criticalMeasurements = [
   {testName:'real video and two audio tracks: 100 ms aggregation matches direct 1 s without changing legacy accounting',pathPattern:/^bitrate-equivalence-[A-Za-z0-9]{6}\/measured-equivalence\.json$/},
-  {testName:'GPU SI/TI hardware validates real frames against CPU without accepting CPU fallback',pathPattern:/^siti-gpu-[A-Za-z0-9]{6}\/hardware-equivalence\.json$/}
+  {testName:'GPU SI/TI hardware validates real frames against CPU without accepting CPU fallback',pathPattern:/^siti-gpu-[A-Za-z0-9]{6}\/hardware-equivalence\.json$/},
+  {testName:'P.910 SI/TI CPU decodes lossless native SDR frames and preserves source time and reference values',pathPattern:/^siti-p910-[A-Za-z0-9]{6}\/normative-cpu\.json$/},
+  {testName:'P.910 SI/TI CPU frame parallel preserves every unrounded value, overlap TI and source VFR time',pathPattern:/^siti-p910-[A-Za-z0-9]{6}\/parallel-equivalence\.json$/},
+  {testName:'P.910 GPU SI/TI hardware validates unrounded fp64 native SDR results without CPU fallback',pathPattern:/^siti-p910-[A-Za-z0-9]{6}\/gpu-equivalence\.json$/}
 ];
 export async function saveMeasurements(generated,evidence,{failed=false,requiredMeasurements=[]}={}) {
   const entries=[],diagnostics=[];

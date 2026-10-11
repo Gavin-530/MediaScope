@@ -260,8 +260,8 @@ scenario('[basic-properties] real subtitles attachments chapters and narrow layo
   assert.deepEqual(exported.results[0].report,report);
 });
 
-scenario('[analysis] GPU SI/TI selection runs the real backend and displays the actual device',async({page,app})=>{
-  await preview(page);await page.locator('#complexity').check();
+scenario('[analysis] GPU SI/TI selection preserves the P.910 SDR method and displays the actual device',async({page,app})=>{
+  await preview(page,media.sitiSource);await page.locator('#complexity').check();
   const checked=page.waitForResponse(r=>r.url().endsWith('/api/siti-gpu'));
   await page.locator('#siti-device').selectOption('gpu');const capability=await(await checked).json();
   await page.waitForFunction(()=>!document.querySelector('#siti-device-status').textContent.includes('正在检查'));
@@ -269,12 +269,29 @@ scenario('[analysis] GPU SI/TI selection runs the real backend and displays the 
   assert.equal(await page.locator('#siti-workers').isDisabled(),capability.available);
   const {report}=await runTask(page,app,'#analyze');
   assert.equal(report.content.execution.device,capability.available?'gpu':'cpu');
+  assert.equal(report.content.execution.method,'P910-2023-SDR-BT1886-text-v1');
+  if(capability.available)assert.equal(report.content.execution.validation.selfTest,'passed');
   assert.equal(report.content.points.length,report.frames.length);
-  assert.match(await page.locator('#inspect-details').innerText(),capability.available?/GPU · .*OpenCL/:/CPU ·/);
+  assert.match(await page.locator('#inspect-details').innerText(),capability.available?/GPU ·/:/CPU ·/);
+  assert.match(await page.locator('#inspect-details').innerText(),/P.910（10\/2023）/);
+});
+
+scenario('[analysis] SI/TI confirmed scenes exclude boundary TI and export separate scene statistics',async({page,app,dir})=>{
+  await preview(page,media.sitiSource);await page.locator('#complexity').check();
+  assert.equal(await page.locator('#siti-scenes').inputValue(),'unconfirmed');
+  await page.locator('#siti-scenes').selectOption('confirmed');await page.locator('#siti-scene-frames').fill('1, 7, 12');
+  const {report}=await runTask(page,app,'#analyze');
+  assert.deepEqual(report.content.sceneAnalysis.starts,[0,6,11]);assert.equal(report.content.si,null);assert.equal(report.content.ti,null);
+  assert.deepEqual(report.content.points.filter(p=>p.ti===null).map(p=>p.frame),[0,6,11]);assert.equal(report.content.scenes.at(-1).ti,null);
+  const details=page.locator('#inspect-details');assert.match(await details.innerText(),/按用户确认/);assert.match(await details.innerText(),/1–6/);assert.match(await details.innerText(),/7–11/);
+  assert.equal(await details.locator('#si canvas').count(),1);assert.equal(await details.locator('#ti canvas').count(),1);
+  const exported=await download(page,'#inspect-export',path.join(dir,'scene-export.json'));assert.deepEqual(exported.results[0].report,report);
+  await importReport(page,path.join(dir,'scene-export.json'));assert.match(await details.innerText(),/12–12/);
+  await page.screenshot({path:path.join(dir,'siti-scenes.png'),fullPage:true});
 });
 
 scenario('[analysis] [units] actual multi-audio file, frame scan, GOP, SI/TI and export match the server report',async({page,app,dir})=>{
-  const info=await preview(page);assert.deepEqual(info.raw,media.info.raw);
+  const info=await preview(page,media.sitiSource);assert.deepEqual(info.raw,(await probe(media.sitiSource)).raw);
   assert.equal(info.raw.streams.length,3);
   await page.locator('#complexity').check();await page.locator('#siti-workers').selectOption('8');
   assert.equal(await page.locator('#siti-device').inputValue(),'cpu');
@@ -285,6 +302,7 @@ scenario('[analysis] [units] actual multi-audio file, frame scan, GOP, SI/TI and
   assert.equal(report.content.points.length,report.frames.length);
   assert.equal(report.content.execution.requestedWorkers,8);
   assert.equal(report.content.execution.device,'cpu');
+  assert.equal(report.content.points[0].ti,null);assert.equal(report.content.ti.count,report.frames.length-1);
   assert.ok(report.commands.length>0&&report.commands.every(c=>c.exitCode===0));
   assert.ok(await page.locator('#frame-plot canvas').isVisible());
   const fileSize=page.locator('[data-property="size"] dd');

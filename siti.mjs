@@ -1,6 +1,8 @@
 import {availableParallelism,freemem} from 'node:os';
 import {FF,run} from './engine.mjs';
 import {measureSitiGpu} from './siti-gpu.mjs';
+import {sitiTimestamp,validateSitiPoints} from './siti-validation.mjs';
+import {sitiP910Eligible,measureSitiP910} from './siti-p910.mjs';
 
 export function sitiWorkerCount(stream,count,requested=4){
   if(!Number.isSafeInteger(count)||count<60)return 1;
@@ -20,9 +22,10 @@ async function measure(file,stream,ctx,from=0,end=null){
     point=null;
   };
   const select=end===null?(from?`select='gte(n,${from})',`:''):`select='between(n,${from},${end})',`;
-  await run(FF,['-hide_banner','-nostdin','-v','error','-xerror','-noauto_conversion_filters','-noautorotate','-i',file,'-map',`0:${stream.index}`,'-vf',select+'siti,metadata=mode=print:file=-','-an','-fps_mode','passthrough','-f','null','-'],ctx,line=>{
-    let m=line.match(/^frame:(\d+)\s+pts:.*?pts_time:([^\s]+)/);
-    if(m){finish();point={frame:Number(m[1]),t:Number(m[2])};return}
+  await run(FF,['-hide_banner','-nostdin','-v','error','-xerror','-copyts','-noauto_conversion_filters','-noautorotate','-i',file,'-map',`0:${stream.index}`,'-vf',select+'siti,metadata=mode=print:file=-','-an','-fps_mode','passthrough','-f','null','-'],ctx,line=>{
+    let m=line.match(/^frame:(\d+)\s+pts:\s*(\S+)\s+pts_time:/);
+    if(m){finish();point={frame:Number(m[1]),t:sitiTimestamp(m[2],stream.time_base)};return}
+    if(line.startsWith('frame:'))throw Error('SI/TI 帧时间戳记录无效');
     m=line.match(/^lavfi.siti.(si|ti)=(.+)/);if(m&&point)point[m[1]]=Number(m[2]);
   });
   finish();return points;
@@ -31,9 +34,10 @@ async function measure(file,stream,ctx,from=0,end=null){
 export async function measureSiti(file,stream,ctx={},frames=null){
   const requestedDevice=ctx.sitiDevice??'cpu';
   if(!['cpu','gpu'].includes(requestedDevice))throw Error('SI/TI 计算设备无效');
+  if(sitiP910Eligible(stream))return measureSitiP910(file,stream,ctx,frames);
   let gpuFailure;
   if(requestedDevice==='gpu'){
-    try{return await measureSitiGpu(file,stream,ctx,frames)}
+    try{const result=await measureSitiGpu(file,stream,ctx,frames);validateSitiPoints(result.points,frames);return result}
     catch(e){if(ctx.signal?.aborted)throw e;gpuFailure=e.message;ctx.update?.({detail:'GPU SI/TI 不可用，回退 CPU：'+e.message,completed:0,total:frames?.length??null,unit:'帧'})}
   }
   const configured=ctx.sitiWorkers??Number(process.env.MEDIASCOPE_SITI_WORKERS??4);
@@ -67,7 +71,7 @@ export async function measureSiti(file,stream,ctx={},frames=null){
           points.push({...p,frame:points.length});
         }
       }
-      if(points.length!==frames.length)throw Error('并行总帧数不一致');
+      validateSitiPoints(points,frames);
       execution={mode:'frame-parallel',workers,requestedWorkers,setting,implementation:'FFmpeg siti',overlapFrames:1};
     }catch(e){
       execution.fallbackReason=e.message;
@@ -75,7 +79,8 @@ export async function measureSiti(file,stream,ctx={},frames=null){
       points=await measure(file,stream,{...ctx,onSitiPoint:count=>{if(count===1||count%30===0||count===frames.length)ctx.update?.({detail:`已测量 ${count.toLocaleString()} / ${frames.length.toLocaleString()} 帧 SI/TI`,completed:count,total:frames.length,unit:'帧'})}});
     }
   }else points=await measure(file,stream,{...ctx,onSitiPoint:count=>{const total=frames?.length??null;if(count===1||count%30===0||count===total)ctx.update?.({detail:total?`已测量 ${count.toLocaleString()} / ${total.toLocaleString()} 帧 SI/TI`:`已测量 ${count.toLocaleString()} 帧 SI/TI`,completed:count,total,unit:'帧'})}});
+  validateSitiPoints(points,frames);
   ctx.update?.({detail:`SI/TI 已完成 ${points.length.toLocaleString()} 帧`,completed:points.length,total:points.length,unit:'帧'});
-  execution={...execution,device:'cpu',requestedDevice,...(gpuFailure?{gpuFallbackReason:gpuFailure}:{})};
+  execution={...execution,method:'FFmpeg-siti-legacy-v1',device:'cpu',requestedDevice,...(gpuFailure?{gpuFallbackReason:gpuFailure}:{})};
   return {points,execution};
 }

@@ -29,9 +29,14 @@ test('GPU SI/TI preserves CPU default, actual device selection and unavailable r
   if(!capability.available){assert.ok(gpu.execution.gpuFallbackReason);assert.deepEqual(gpu.points,cpu.points)}
   assert.equal(gpu.points.length,cpu.points.length);
   // A missing frame scan is a real production guard, independent of the host GPU.
-  const fallback=await complexity(file,stream,{...ctx,sitiDevice:'gpu'},[]);
+  const fallback=await complexity(file,stream,{...ctx,sitiDevice:'gpu'},null);
   assert.equal(fallback.execution.device,'cpu');assert.match(fallback.execution.gpuFallbackReason,/帧/);
   assert.deepEqual(fallback.points,cpu.points);
+  for(const invalid of [[],frames.slice(0,-1),[...frames,frames.at(-1)]])await assert.rejects(complexity(file,stream,{...ctx,sitiDevice:'gpu'},invalid),/帧数/);
+  const shifted=structuredClone(frames);shifted[1].t+=0.01;
+  await assert.rejects(complexity(file,stream,{...ctx,sitiDevice:'gpu'},shifted),/时间戳与预扫描/);
+  const missing=structuredClone(frames);missing[1].t=null;
+  await assert.rejects(complexity(file,stream,{...ctx,sitiDevice:'gpu'},missing),/预扫描.*时间戳/);
   const controller=new AbortController();controller.abort();
   await assert.rejects(complexity('unused',{pix_fmt:'yuv420p',width:98,height:66},{sitiDevice:'gpu',signal:controller.signal},[{}]),/取消/);
   assert.equal((await complexity('unused',{pix_fmt:'yuv444p'})).available,false);

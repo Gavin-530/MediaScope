@@ -1,4 +1,7 @@
 import {measureSiti} from './siti.mjs';
+import {sitiP910Eligible} from './siti-p910.mjs';
+import {distribution,sitiSceneSummary,validateSitiSceneStarts} from './public/siti-scenes.js';
+export {distribution} from './public/siti-scenes.js';
 import {createBitrateAccumulator} from './public/bitrate-model.js';
 import {createAudioPacketDistribution} from './public/distribution-model.js';
 import {byteLimit} from './public/units.js';
@@ -10,7 +13,6 @@ import {FF,FP,run,probe,video,scan,compare,comparisonProfile,scanSegment,segment
 const HEVC={0:'TRAIL_N',1:'TRAIL_R',2:'TSA_N',3:'TSA_R',4:'STSA_N',5:'STSA_R',6:'RADL_N',7:'RADL_R',8:'RASL_N',9:'RASL_R',16:'BLA_W_LP',17:'BLA_W_RADL',18:'BLA_N_LP',19:'IDR_W_RADL',20:'IDR_N_LP',21:'CRA_NUT'};
 const AV1_TYPES=['KEY','INTER','INTRA_ONLY','SWITCH'];
 const num=v=>v==null||v==='N/A'?null:Number(v);
-export function distribution(values){const a=values.filter(Number.isFinite).sort((a,b)=>a-b);return a.length?{min:a[0],mean:a.reduce((s,x)=>s+x,0)/a.length,p05:a[Math.floor((a.length-1)*.05)],p95:a[Math.floor((a.length-1)*.95)],max:a.at(-1),count:a.length}:null}
 
 // All selected streams share the same absolute PTS-based bins, including explicit empty seconds.
 export async function allPackets(file,streams,ctx){
@@ -137,10 +139,27 @@ export function metadataSummary(info){
 }
 
 export async function complexity(file,stream,ctx={},frames=null){
+  validateSitiSceneStarts(ctx.sitiSceneStarts,frames?.length??null);
+  if(ctx.sitiSceneStarts!==undefined&&!sitiP910Eligible(stream))throw Error('SI/TI 已确认场景处理需要本版支持的 P.910 BT.709 SDR 输入；不使用旧流程替代');
   if(!/^yuv(420|422)p(10le)?$/.test(stream.pix_fmt))return {available:false,reason:'SI/TI 本版仅分析原生平面 YUV 420/422 8/10-bit；不自动转换其他像素格式。'};
   const {points,execution}=await measureSiti(file,stream,ctx,frames);
   if(!points.length)throw Error('SI/TI 未产生可用结果');
-  return {available:true,points,execution,si:distribution(points.map(p=>p.si)),ti:distribution(points.slice(1).map(p=>p.ti)),notes:['SI 表示亮度空间细节；TI 表示相邻帧亮度变化（排除首帧 TI=0 的汇总）。','TI 峰值可能来自运动、剪辑、闪光或噪声，不能直接认定为场景切换。','这些是复杂度描述，不是剩余压缩空间或质量评分。只在相同分辨率、帧率、位深、范围和传递函数下对比。','有限范围亮度按 FFmpeg siti 整数规则扩展到全范围并裁剪越界值；未声明范围按有限范围。','逐帧 SI/TI 保留两位小数，汇总从这些值计算；均值按帧统计，不按播放时长加权。','GPU 保持相同算法口径，但浮点归约顺序不同，不承诺逐位一致；这不是 P.910 合规认证。','HDR 结果在编码值域计算，不代表感知亮度复杂度。']};
+  if(execution.configuration){
+    const summary=sitiSceneSummary(points,ctx.sitiSceneStarts);
+    execution.configuration={...execution.configuration,aggregationScope:ctx.sitiSceneStarts?'user-confirmed scenes; no cross-scene TI or whole-sequence aggregation':'whole sequence reference; scene boundaries unconfirmed',
+      clauses:[...execution.configuration.clauses,...(ctx.sitiSceneStarts?['7.8.5']:[])]};
+    return {available:true,points,execution,...summary,notes:[
+    '计算依据：ITU-T P.910（10/2023）7.8.1–7.8.4、附录 B；本阶段仅覆盖声明明确的 BT.709 SDR 8/10-bit 逐行素材。',
+    '原生亮度 → 位深归一化 → 范围缩放 → BT.1886（白位 300、黑位 0.01 cd/m²）→ PQ → Sobel/相邻帧差总体标准差。',
+    `后处理按正文公式乘 ${execution.configuration.outputMultiplier}（输入位深）；与 VQEG 默认固定乘 255 不同，跨位深不可直接比较。`,
+    '逐帧与汇总保留未舍入浮点结果；首帧 TI 无定义，保存为 null 且不纳入汇总；均值按帧统计。',
+    ctx.sitiSceneStarts?'按用户确认的显示帧边界分别计算场景；每个场景首帧 TI 为 null，排除跨场景帧差；多场景不生成混合的全片 SI/TI 汇总。边界来自用户确认，不代表软件已自动验证全部剪辑点。':'场景边界未确认：全片曲线与汇总仅作参考，可能含跨剪辑点 TI；不宣称已按 7.8.5 分场景。',
+    'CPU 串行、CPU 帧级并行和 GPU 使用同一固定配置；GPU 双精度归约顺序不同，不承诺逐位一致。数值自检阈值属于工程验证。',
+    '未实现 HDR、未知声明及其他 SDR 传递函数的新版流程。',
+    '计算配置和参考版本保存在 execution.configuration；不是完整 P.910 合规认证或 ITU 官方误差保证。',
+    'SI/TI 描述内容复杂度，不能直接当作质量评分、剩余可压缩率或场景切换判断；分辨率与帧率也影响比较。'
+  ]};}
+  return {available:true,points,execution,si:distribution(points.map(p=>p.si)),ti:distribution(points.slice(1).map(p=>p.ti)),notes:['本结果使用 FFmpeg 旧编码值域 SI/TI 口径；输入不在本阶段明确 BT.709 SDR、范围和逐行条件的新版 CPU 覆盖范围内，不标为 P.910（10/2023）结果。','SI 表示亮度空间细节；TI 表示相邻帧亮度变化（排除首帧 TI=0 的汇总）。','TI 峰值可能来自运动、剪辑、闪光或噪声，不能直接认定为场景切换。','这些是复杂度描述，不是剩余压缩空间或质量评分。只在相同分辨率、帧率、位深、范围和传递函数下对比。','有限范围亮度按 FFmpeg siti 整数规则扩展到全范围并裁剪越界值；未声明范围按有限范围。','逐帧 SI/TI 保留两位小数，汇总从这些值计算；均值按帧统计，不按播放时长加权。','GPU 保持相同算法口径，但浮点归约顺序不同，不承诺逐位一致；这不是 P.910 合规认证。','HDR 结果在编码值域计算，不代表感知亮度复杂度。']};
 }
 
 export function trialOptions(input){

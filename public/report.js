@@ -2,6 +2,7 @@ import {validateBitrateCurve} from './bitrate-model.js';
 import {validateAudioPacketDistribution} from './distribution-model.js';
 import {vmafModel,parseVmafLog,vmafConfiguration,vmafInputReason} from './vmaf.js';
 import {parseMetricSummary} from './metric-summary.js';
+import {validateSitiSceneResult} from './siti-scenes.js';
 // Validate the saved data without normalizing, rounding or discarding evidence.
 export function parseReport(text) {
   let r;
@@ -158,8 +159,9 @@ export function validateReport(r) {
         });
       }
       if (r.content?.available) {
-        obj(r.content.si, "content.si");
         objects(r.content.points, "content.points");
+        if(r.content.sceneAnalysis!==undefined){try{validateSitiSceneResult(r.content,r.frames)}catch{fail('content.sceneAnalysis / SI/TI')}}
+        else obj(r.content.si, "content.si");
       }
       if (r.coding?.gops) {
         objects(r.coding.gops, "coding.gops");

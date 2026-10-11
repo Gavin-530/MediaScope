@@ -5,12 +5,13 @@ import {startServer} from './helpers/server.mjs';
 import {mkdir,lstat} from 'node:fs/promises';
 import path from 'node:path';
 import {FF,run} from '../engine.mjs';
-const source=path.resolve('test-work/http-fixture.mp4');let reportRoot,caseNumber=0;
+const source=path.resolve('test-work/http-fixture.mp4'),sitiSource=path.resolve('test-work/http-sdr-lossless.mkv');let reportRoot,caseNumber=0;
 let base;
 let app,token;
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 before(async()=>{
  await mkdir(path.dirname(source),{recursive:true});await run(FF,['-v','error','-y','-f','lavfi','-i','testsrc2=size=128x96:rate=12:duration=1','-c:v','libx264','-color_range','tv','-colorspace','bt709','-color_primaries','bt709','-color_trc','bt709','-chroma_sample_location','left',source]);
+ await run(FF,['-v','error','-y','-f','lavfi','-i','testsrc2=size=128x96:rate=12:duration=1,setfield=prog,setparams=range=limited:color_trc=bt709:color_primaries=bt709:colorspace=bt709','-c:v','ffv1','-level','3',sitiSource]);
 });
 beforeEach(async()=>{reportRoot=path.resolve('test-work/server-reports',String(++caseNumber));app=await startServer(reportRoot);base=app.base;token=app.token});
 afterEach(async()=>{await app?.stop()});
@@ -29,7 +30,7 @@ test('API protects local data and streams a reproducible completed report',async
 test('SI/TI worker setting validates input and records requested versus actual workers',async()=>{
  const invalidDevice=await request('jobs','POST',{type:'analyze',file:source,complexity:true,sitiDevice:'invalid'});assert.equal(invalidDevice.status,400);assert.match((await invalidDevice.json()).error,/设备/);
  const invalid=await request('jobs','POST',{type:'analyze',file:source,stream:0,complexity:true,sitiWorkers:3});assert.equal(invalid.status,400);assert.match((await invalid.json()).error,/并行上限/);
- const job=await(await request('jobs','POST',{type:'analyze',file:source,stream:0,complexity:true,sitiWorkers:8})).json(),status=await finished(job.id);assert.equal(status.status,'done',status.message);
+ const job=await(await request('jobs','POST',{type:'analyze',file:sitiSource,stream:0,complexity:true,sitiWorkers:8})).json(),status=await finished(job.id);assert.equal(status.status,'done',status.message);
  const report=await(await request(`jobs/${job.id}/report`)).json();assert.deepEqual({setting:report.content.execution.setting,requested:report.content.execution.requestedWorkers,actual:report.content.execution.workers},{setting:'manual',requested:8,actual:1});
  const html=await(await fetch(base)).text();assert.match(html,/id="siti-workers"/);assert.match(html,/value="8">8 路/);
  assert.equal(report.content.execution.device,'cpu');assert.equal(report.content.execution.requestedDevice,'cpu');assert.match(html,/id="siti-device"/);
@@ -38,14 +39,32 @@ test('SI/TI worker setting validates input and records requested versus actual w
 test('GPU SI/TI API records actual device and round-trips queued device selection',async()=>{
  const capability=await(await request('siti-gpu')).json();assert.equal(typeof capability.available,'boolean');
  await request('queue','POST',{action:'pause'});
- await request('jobs','POST',{type:'analyze',file:source,stream:0,complexity:true,sitiDevice:'gpu',enqueue:true});
+ await request('jobs','POST',{type:'analyze',file:sitiSource,stream:0,complexity:true,sitiDevice:'gpu',sitiSceneStarts:[0,1,6,11],enqueue:true});
  const saved=await(await request('plans')).json();assert.equal(saved.plans[0].input.sitiDevice,'gpu');
+ assert.deepEqual(saved.plans[0].input.sitiSceneStarts,[0,1,6,11]);
  const imported=await(await request('plans/import','POST',{mode:'replace',start:true,plans:saved.plans})).json();
  const job={id:imported.ids[0]};
  const status=await finished(job.id);assert.equal(status.status,'done',status.message);
  const report=await(await request(`jobs/${job.id}/report`)).json();
- assert.equal(report.content.execution.requestedDevice,'gpu');assert.equal(report.content.execution.device,capability.available?'gpu':'cpu');
+ assert.equal(report.content.execution.requestedDevice,'gpu');assert.equal(report.content.execution.method,'P910-2023-SDR-BT1886-text-v1');
+ assert.equal(report.content.execution.device,capability.available?'gpu':'cpu');
+ if(capability.available)assert.equal(report.content.execution.validation.selfTest,'passed');else assert.ok(report.content.execution.gpuFallbackReason);
  assert.deepEqual(parseReport(JSON.stringify(report)),report);
+ assert.equal(report.content.si,null);assert.equal(report.content.ti,null);assert.equal(report.content.scenes.length,4);assert.equal(report.content.scenes.at(-1).ti,null);
+ assert.deepEqual(report.content.points.filter(p=>p.ti===null).map(p=>p.frame),[0,1,6,11]);
+});
+test('SI/TI scene boundaries validate input, exclude boundary TI and survive report validation',async()=>{
+ for(const starts of [[],[1],[0,0],[0,4,2],null,[0,1.5]]){
+  const invalid=await request('jobs','POST',{type:'analyze',file:sitiSource,complexity:true,sitiSceneStarts:starts});assert.equal(invalid.status,400);assert.match((await invalid.json()).error,/场景/);
+ }
+ const job=await(await request('jobs','POST',{type:'analyze',file:sitiSource,stream:0,complexity:true,sitiSceneStarts:[0,1,6,11]})).json(),status=await finished(job.id);assert.equal(status.status,'done',status.message);
+ const report=await(await request(`jobs/${job.id}/report`)).json();assert.deepEqual(parseReport(JSON.stringify(report)),report);
+ assert.equal((await fetch(base+'/siti-scenes.js')).status,200);
+ assert.equal(report.content.sceneAnalysis.mode,'confirmed');assert.equal(report.content.scenes[0].ti,null);assert.ok(report.content.execution.configuration.clauses.includes('7.8.5'));
+ for(const damage of [c=>c.points[1].ti=0,c=>c.sceneAnalysis.starts=[0,12],c=>c.scenes[1].si.mean+=1,c=>c.scenes.pop(),c=>c.si=c.scenes[1].si,c=>c.points.pop(),c=>c.points[2].t+=1]){
+  const broken=structuredClone(report);damage(broken.content);assert.throws(()=>parseReport(JSON.stringify(broken)),/SI\/TI/);
+ }
+ const outside=await(await request('jobs','POST',{type:'analyze',file:sitiSource,complexity:true,sitiSceneStarts:[0,12]})).json();assert.equal((await finished(outside.id)).status,'error');
 });
 test('API cancellation ends the job and does not leave experiment video files',async()=>{
  const job=await(await request('jobs','POST',{type:'trial',file:source,stream:0,start:0,duration:1,encoder:'libx265',crfs:[20,32],metrics:['psnr']})).json();await request('jobs/'+job.id,'DELETE');await removed(job.id);await assert.rejects(lstat(path.join(reportRoot,job.id)),e=>e.code==='ENOENT');assert.ok(!(await(await request('status')).json()).jobs.some(j=>j.id===job.id));
