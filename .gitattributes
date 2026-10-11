@@ -1,0 +1,2 @@
+# Preserve the exact upstream bytes used by the SI/TI reference SHA-256 check.
+test/reference/siti/vqeg-v0.3.0.py -text
