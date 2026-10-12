@@ -29,7 +29,8 @@
 | `releases/` | 发布包唯一正式位置；ZIP 不进入 Git，测试清理不得触及 |
 | `local-test-archive` | 旧位置；明确迁移并验证前保留 |
 | `test-work/acceptance-20260921` | 历史验收资料；清理保护 |
-| `test-work`、`.build` | 生成项与未知/恢复资料混存；只回收明确属于本次任务或显式类别的可重建内容 |
+| `test-work` | 生成项与历史验收资料混存；只清理明确识别的生成项 |
+| `.build` | 可重建的构建中间文件、测试沙箱及下载缓存；无任务运行时可整目录删除 |
 | `.build/downloads`、`node_modules` | 下载缓存 / 可由锁文件重建的开发依赖 |
 
 本地测试不向开发版运行目录写入结果。成功任务先保存必要结果再回收自身沙箱，不为每次可重建媒体、浏览器或运行时保存永久副本。用户导出的报告、视频、接收原件、未知项及历史验收材料不能因“不属于源码”删除。
@@ -40,7 +41,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/local-data.ps1 -Acti
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/local-data.ps1 -Action Clean -Category TestGenerated
 ```
 
-`Clean` 默认预览，核对后加 `-Apply`。`TestGenerated` 仅选择已知生成命名；`BuildStages`、`Downloads` 是其他显式类别。保留路径边界、目录链接、受保护资料和活动进程检查。通用清理不得删除平台档案根、其子目录或包含它的上级目录。`archive-test-generated.ps1` 是特殊情况下的显式素材快照工具，不是普通清理前置要求；构建维护不自动处理未知项或旧 pending。
+`Clean` 默认预览，核对后加 `-Apply`。`TestGenerated` 仅选择已知生成命名；`Build` 清理整个 `.build`（包括下载缓存），`BuildStages` 仅清理已识别的构建暂存，`Downloads` 仅清理下载缓存。保留路径边界、目录链接、受保护资料和活动进程检查。通用清理不得删除平台档案根、其子目录或包含它的上级目录。`archive-test-generated.ps1` 是特殊情况下的显式素材快照工具，不是普通清理前置要求；`.build` 禁止写入唯一原件、正式回执和恢复必需资料；这些资料分别进入归档和 pending。普通临时日志可随构建产物删除。`scripts/maintain-build.ps1` 是 `Clean -Category Build` 的兼容入口，默认预览，不要求为可重建文件创建永久副本。
+
+旧工作区中的恢复资料、未完成事务及评审资料须先恢复或移出，整目录清理会拒绝已知的这些历史位置。
+
+构建目录缺失时由构建工具自动创建。源码、配置和锁定输入须足以重新生成构建产物；离线部署测试需要预先取得 `.build/downloads` 中锁定版本的归档，清理后须重新准备。
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/local-data.ps1 -Action Clean -Category Build
+# 确认预览并停止构建、测试后执行：
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/local-data.ps1 -Action Clean -Category Build -Apply
+```
 
 ## 软件运行数据
 
@@ -93,7 +104,7 @@ npm run evidence:list -- -Scope all
 
 收到完整记录或整个 `evidence-archive`，放入本机 inbox 后执行 `npm run evidence:import` 预览；核对后用 `npm run evidence:import -- -Contributor 'Alice' -Apply`。`-Folder` 可指定外层目录。按实际记录验证，不信任外来 catalog，同身份同内容跳过、冲突拒绝覆盖；跳过对方 inbox、received、pending、tools，不执行对方程序。贡献者字段是接收者填写的声明，不是认证。received 原件及回执保留，但不构成产品记录读取依赖。
 
-旧 schema、`evidenceRevision 0/1` 及封装继续原样读取，普通运行不改写旧记录。显式 `scripts/maintain-test-evidence.ps1` 默认预览，`-Apply` 取得锁后逐份校验、暂存、核验保留内容再替换；中断保留 `.build/evidence-maintenance-*` 事务资料。
+旧 schema、`evidenceRevision 0/1` 及封装继续原样读取，普通运行不改写旧记录。历史维护工具可能遗留 `.build/evidence-maintenance-*` 中断资料，须先人工核查和恢复，再清理构建目录。新维护事务只能写入 `evidence-archive/pending`。
 
 整理结果用独立的 `archiveRevision: 1`，保留原运行身份、计数、结果和时间精度，记录迁移来源与原摘要，不补造功能映射或测量。目录统一为 records，未知时间用 `undated`。可回收源码/验证器 ZIP、模拟资料、生成媒体和环境副本；移除的清单字段记录在 `archive.discardedManifestFields`。实际历史附件无损收入 `historical-data.json.gz`，逐项保存原路径、长度、SHA-256 和 base64 字节，验证器核对并可恢复原文件。
 
@@ -120,7 +131,7 @@ npm run github:boundary
 npm run github:backup -- --backup 'E:\MediaScope-backups'
 ```
 
-`inventory` 先盘点本地身份、证据、发布包和远端能力/权限，回执在 `.build/github-archive-implementation`。写入前须有成功联网核对仓库身份的盘点；`migrate` 校验后复制可靠云端记录，保存映射并实际验证独立复制与原路径恢复，保留旧源。`sync` 每次完整分页并复核首页，默认 30 分钟、单次下载 3072 MiB，可用 `--budget-minutes`、`--max-download-mib` 降低或在支持范围内调整；到限额留下缺口/检查点，不删除历史。旧 `evidence:sync` 为兼容入口，启动和测试均不自动同步。
+`inventory` 先盘点本地身份、证据、发布包和远端能力/权限，盘点报告和清理计划在 `.build/github-archive-implementation`，属于可重建工作资料，不要求永久保留或另行备份；清理 `.build` 后，相关归档写入操作须先重新运行联网盘点。写入前须有成功联网核对仓库身份的盘点；`migrate` 校验后复制可靠云端记录，保存映射并实际验证独立复制与原路径恢复，保留旧源。`sync` 每次完整分页并复核首页，默认 30 分钟、单次下载 3072 MiB，可用 `--budget-minutes`、`--max-download-mib` 降低或在支持范围内调整；到限额留下缺口/检查点，不删除历史。旧 `evidence:sync` 为兼容入口，启动和测试均不自动同步。
 
 `node scripts/github-archive.mjs capacity` 只读统计正式资料、暂存、缓存及剩余空间，同步命令完成时也输出这项统计。容量政策版本 1：可用空间低于 1 GiB、正式资料达到 1 GiB 或暂存达到 512 MiB 时在结果的 warnings 中告警，不自动删除。此统计不是首次迁移解包峰值，也不创建后台监控。
 

@@ -48,8 +48,8 @@
     },
     {
       "path": ".build",
-      "class": "mixed",
-      "reason": "Rebuildable cache and build stages; retained evidence lives in evidence-archive"
+      "class": "cache",
+      "reason": "Disposable build stages, test sandboxes and downloads; recreate from source and pinned inputs while no build/test is active"
     },
     {
       "path": ".build/downloads",

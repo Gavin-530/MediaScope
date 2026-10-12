@@ -6,7 +6,6 @@ $project=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..')).TrimEnd('\')
 . (Join-Path $PSScriptRoot 'evidence-lib.ps1')
 $root=Get-EvidenceRoot $project
 $testRoot=Join-Path $project 'test-work'
-$buildRoot=Join-Path $project '.build'
 if(!(Test-Path -LiteralPath $testRoot)){throw 'No test-work directory to archive'}
 if((Get-Item -LiteralPath $testRoot -Force).Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Linked test-work root is forbidden'}
 
@@ -40,7 +39,6 @@ $dirs=@(Get-ChildItem -LiteralPath $testRoot -Directory -Force | Where-Object {I
 $rootFiles=@(Get-ChildItem -LiteralPath $testRoot -File -Force | Where-Object {Is-GeneratedFile $_.Name} | Sort-Object Name)
 $items=@($dirs)+@($rootFiles)
 if(!$items.Count){Write-Output 'No generated test files or directories to archive.';exit 0}
-New-Item -ItemType Directory -Force -Path $buildRoot | Out-Null
 $gate=$null
 try {
   try {$gate=[IO.File]::Open((Get-EvidenceLockPath $project),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)}

@@ -1,6 +1,6 @@
 param(
   [ValidateSet('Status','Verify','Clean')][string]$Action='Status',
-  [ValidateSet('BuildStages','TestGenerated','Downloads')][string]$Category,
+  [ValidateSet('Build','BuildStages','TestGenerated','Downloads')][string]$Category,
   [switch]$Apply
 )
 
@@ -78,7 +78,7 @@ function Assert-CleanTarget([string]$Path) {
 
 function Test-GeneratedName([string]$Name) {
   return ($Name -match '^(bitdepth|server-reports|trial|trial-libaom-av1|trial-libx265|trials-expanded|startup-desktop|runtime-data)$' -or
-    $Name -match '^(metrics-equivalence|reference-cache|siti-parallel|structure-equivalence|vfr-equivalence|archive-layout|local-import|github-evidence|test-system|independent-evidence)-[A-Za-z0-9]{6}$')
+    $Name -match '^(metrics-equivalence|reference-cache|siti-parallel|siti-gpu|structure-equivalence|vfr-equivalence|archive-layout|local-import|github-evidence|test-system|independent-evidence)-[A-Za-z0-9]{6}$')
 }
 
 function Test-GeneratedFileName([string]$Name) {
@@ -122,7 +122,7 @@ function Verify-ProtectedData {
   Verify-Acceptance
 }
 
-function Assert-NoActiveTests {
+function Assert-NoActiveTests([switch]$IncludeBuild) {
   $nodePaths=@()
   $pathNode=Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
   if($pathNode){$nodePaths+=@($pathNode.Source)}
@@ -137,11 +137,29 @@ function Assert-NoActiveTests {
     }
   }
   if(@(Get-Process ffmpeg,ffprobe -ErrorAction SilentlyContinue).Count){throw 'FFmpeg or FFprobe is running; test cleanup refused'}
+  if($IncludeBuild){
+    $builders=@(Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" | Where-Object {
+      $_.ProcessId -ne $PID -and $_.CommandLine -and
+      $_.CommandLine -match 'scripts[\\/](package|test-deployment|verify-release|record-test|run-ci-tests)\.ps1'
+    })
+    if($builders.Count){throw 'A build or deployment test is running; cleanup refused'}
+  }
 }
 
 function Get-Candidates([string]$Kind) {
   $found=@()
-  if($Kind -eq 'Downloads'){
+  if($Kind -eq 'Build'){
+    $target=Assert-Contained $rules['.build'].path
+    if(Test-Path -LiteralPath $target){
+      # Older tools may have left unique receipts or interrupted evidence here.
+      $legacy=@(Get-ChildItem -LiteralPath $target -Force | Where-Object {
+        $_.Name -in @('evidence-staging','test-runs','github-evidence-import','test-run.lock','evidence-recording.lock') -or
+        $_.Name -like 'evidence-maintenance-*' -or $_.Name -like 'pr-*-review-*'
+      })
+      if($legacy.Count){throw 'Legacy recovery data in .build; recover or explicitly move it before cleanup'}
+      $found+=@{path=$target;why='Explicitly selected all disposable build output and download cache'}
+    }
+  }elseif($Kind -eq 'Downloads'){
     $target=$rules['.build\downloads'].path
     if(Test-Path -LiteralPath $target){$found+=@{path=$target;why='Explicitly selected runtime download cache'}}
   }elseif($Kind -eq 'TestGenerated'){
@@ -181,12 +199,11 @@ if($Action -eq 'Status'){
     [pscustomobject]@{Path=$name;Class=$rule.class;Files=$size.count;MiB=[math]::Round($size.bytes/1MB,2);Exists=(Test-Path -LiteralPath $rule.path)}
   }
   $rows | Format-Table -AutoSize
-  foreach($rootName in @('test-work','.build')){
+  foreach($rootName in @('test-work')){
     $root=$rules[$rootName].path
     if(!(Test-Path -LiteralPath $root)){continue}
     $unknown=@(Get-ChildItem -LiteralPath $root -Force | Where-Object {
-      if($rootName -eq 'test-work'){$_.Name -ne 'acceptance-20260921' -and !($_.PSIsContainer -and (Test-GeneratedName $_.Name)) -and !(!$_.PSIsContainer -and (Test-GeneratedFileName $_.Name))}
-      else {$_.Name -notin @('downloads','evidence-staging','test-runs','test-run.lock','evidence-recording.lock') -and $_.Name -notmatch '^deployment-test-[a-f0-9]{32}$' -and $_.Name -notmatch '^MediaScope-\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)(?:\.\d+)?)?-win-x64$'}
+      $_.Name -ne 'acceptance-20260921' -and !($_.PSIsContainer -and (Test-GeneratedName $_.Name)) -and !(!$_.PSIsContainer -and (Test-GeneratedFileName $_.Name))
     })
     Write-Output "$rootName unclassified entries: $($unknown.Count) (preserved)"
     $unknown | Select-Object -First 10 -ExpandProperty Name
@@ -203,16 +220,17 @@ if($Action -eq 'Verify'){
   exit 0
 }
 
-if(!$Category){throw 'Clean requires -Category BuildStages, TestGenerated, or Downloads'}
+if(!$Category){throw 'Clean requires -Category Build, BuildStages, TestGenerated, or Downloads'}
 $gate=$null
 try {
   if($Apply){
-    $build=Assert-Contained $rules['.build'].path
-    New-Item -ItemType Directory -Force -Path $build | Out-Null
     $lock=Get-EvidenceLockPath $project
     try {$gate=[IO.File]::Open($lock,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)}
     catch {throw 'Evidence recording is active; cleanup refused'}
-    if($Category -eq 'TestGenerated'){Assert-NoActiveTests}
+    if($Category -eq 'Build'){
+      if(Test-Path -LiteralPath (Join-Path (Get-EvidencePendingRoot $project) 'test-run.lock')){throw 'Active or interrupted test run; cleanup refused'}
+      Assert-NoActiveTests -IncludeBuild
+    }elseif($Category -eq 'TestGenerated'){Assert-NoActiveTests}
     Verify-Acceptance
   }
   $candidates=@(Get-Candidates $Category)

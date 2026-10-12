@@ -86,3 +86,5 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/recover-test-evidenc
 `Commit messages` 在 Ubuntu 24.04 检查提交及 PR 标题，规则见[贡献规范](contributing.md)。必需合并检查须由管理员配置，绿色工作流不自动发布，也不替代包验证、真实首次联网部署和[人工发布验收](releasing.md)。
 
 归档工具变更先运行 `npm run test:github` 和受影响的存储协议检查；测试入口、导出器等影响产品验证的改动还须完成本次完整回归。
+
+构建目录或清理策略可通过以下命令检查： `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/local-data.test.ps1`，在独立测试工作区验证预览、历史资料及目录链接保护、未完成运行保护、清理不影响回执和发布包，以及删除 `.build` 后重新打包的应用文件摘要一致。该检查需要读取 Windows 进程信息，无需联网。
