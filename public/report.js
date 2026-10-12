@@ -3,6 +3,7 @@ import {validateAudioPacketDistribution} from './distribution-model.js';
 import {vmafModel,parseVmafLog,vmafConfiguration,vmafInputReason} from './vmaf.js';
 import {parseMetricSummary} from './metric-summary.js';
 import {validateSitiSceneResult} from './siti-scenes.js';
+import {validateSitiConfiguration} from './siti-settings.js';
 // Validate the saved data without normalizing, rounding or discarding evidence.
 export function parseReport(text) {
   let r;
@@ -159,6 +160,10 @@ export function validateReport(r) {
         });
       }
       if (r.content?.available) {
+        const execution=r.content.execution,version=execution?.configuration?.configurationVersion;
+        if(['P910-2023-reference-255-v1','P910-2023-rgb-text-v1','P910-2023-float-text-v1','P910-2023-native-storage-text-v1'].some(p=>[execution?.method,execution?.configuration?.profile].includes(p))&&version!==3)fail('content.execution.configurationVersion');
+        if(['P910-2023-linear-light-float-v1','P910-2023-absolute-light-float-v1','P910-2023-linear-alpha-v1'].some(p=>[execution?.method,execution?.configuration?.profile].includes(p))&&version!==4)fail('content.execution.configurationVersion');
+        if([2,3,4].includes(version)){try{validateSitiConfiguration(execution,r.raw.streams.find(s=>s.index===r.stream),r.content.points.length)}catch{fail('content.execution.configuration')}}
         objects(r.content.points, "content.points");
         if(r.content.sceneAnalysis!==undefined){try{validateSitiSceneResult(r.content,r.frames)}catch{fail('content.sceneAnalysis / SI/TI')}}
         else obj(r.content.si, "content.si");

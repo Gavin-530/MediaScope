@@ -1,4 +1,5 @@
 import { validateReport } from "./report.js";
+import {timingSummary} from './timing.js';
 
 export const utcNow = () => new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
 export const utcFilename = () => utcNow().replace(/[-:]/g, "");
@@ -104,7 +105,7 @@ export function makePortable({
   results = [],
   plans = [],
 } = {}) {
-  const value = { schema: portableSchema, createdAt, results, plans };
+  const value = { schema: portableSchema, createdAt, results, plans, timing: timingSummary(results.map(item => item.report?.timing)) };
   validatePortable(value);
   return value;
 }

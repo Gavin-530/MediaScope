@@ -34,7 +34,7 @@ async function measure(file,stream,ctx,from=0,end=null){
 export async function measureSiti(file,stream,ctx={},frames=null){
   const requestedDevice=ctx.sitiDevice??'cpu';
   if(!['cpu','gpu'].includes(requestedDevice))throw Error('SI/TI 计算设备无效');
-  if(sitiP910Eligible(stream))return measureSitiP910(file,stream,ctx,frames);
+  if(sitiP910Eligible(stream,ctx.sitiSettings))return measureSitiP910(file,stream,ctx,frames);
   let gpuFailure;
   if(requestedDevice==='gpu'){
     try{const result=await measureSitiGpu(file,stream,ctx,frames);validateSitiPoints(result.points,frames);return result}

@@ -1,5 +1,7 @@
 import {measureSiti} from './siti.mjs';
 import {sitiP910Eligible} from './siti-p910.mjs';
+import {validateSitiSettings} from './public/siti-settings.js';
+import {sitiFormat} from './public/siti-formats.js';
 import {distribution,sitiSceneSummary,validateSitiSceneStarts} from './public/siti-scenes.js';
 export {distribution} from './public/siti-scenes.js';
 import {createBitrateAccumulator} from './public/bitrate-model.js';
@@ -140,8 +142,10 @@ export function metadataSummary(info){
 
 export async function complexity(file,stream,ctx={},frames=null){
   validateSitiSceneStarts(ctx.sitiSceneStarts,frames?.length??null);
-  if(ctx.sitiSceneStarts!==undefined&&!sitiP910Eligible(stream))throw Error('SI/TI 已确认场景处理需要本版支持的 P.910 BT.709 SDR 输入；不使用旧流程替代');
-  if(!/^yuv(420|422)p(10le)?$/.test(stream.pix_fmt))return {available:false,reason:'SI/TI 本版仅分析原生平面 YUV 420/422 8/10-bit；不自动转换其他像素格式。'};
+  validateSitiSettings(ctx.sitiSettings);
+  const eligible=sitiP910Eligible(stream,ctx.sitiSettings);
+  if((ctx.sitiSceneStarts!==undefined||ctx.sitiSettings!==undefined)&&!eligible)throw Error('SI/TI 需要受支持的原始分量及明确范围/传递函数；RGB 须有一致矩阵依据，浮点须确认输入语义和等效位深；线性光须有显示参数，透明 RGB 须有 Alpha 语义和背景，HDR/隔行处理须明确选择；不使用旧流程替代');
+  if(!sitiFormat(stream.pix_fmt)||!eligible&&!/^yuv(420|422)p(10le)?$/.test(stream.pix_fmt))return {available:false,reason:'SI/TI 需要受支持的 YUV/灰度/RGB 布局和明确输入解释；RGB 缺失或冲突的矩阵及浮点等效位深须用户确认。不自动解释线性、绝对亮度或任意像素格式。'};
   const {points,execution}=await measureSiti(file,stream,ctx,frames);
   if(!points.length)throw Error('SI/TI 未产生可用结果');
   if(execution.configuration){
@@ -149,15 +153,18 @@ export async function complexity(file,stream,ctx={},frames=null){
     execution.configuration={...execution.configuration,aggregationScope:ctx.sitiSceneStarts?'user-confirmed scenes; no cross-scene TI or whole-sequence aggregation':'whole sequence reference; scene boundaries unconfirmed',
       clauses:[...execution.configuration.clauses,...(ctx.sitiSceneStarts?['7.8.5']:[])]};
     return {available:true,points,execution,...summary,notes:[
-    '计算依据：ITU-T P.910（10/2023）7.8.1–7.8.4、附录 B；本阶段仅覆盖声明明确的 BT.709 SDR 8/10-bit 逐行素材。',
-    '原生亮度 → 位深归一化 → 范围缩放 → BT.1886（白位 300、黑位 0.01 cd/m²）→ PQ → Sobel/相邻帧差总体标准差。',
-    `后处理按正文公式乘 ${execution.configuration.outputMultiplier}（输入位深）；与 VQEG 默认固定乘 255 不同，跨位深不可直接比较。`,
+    `计算依据：ITU-T P.910（10/2023）7.8.1–7.8.4、附录 B；配置 ${execution.configuration.profile}，按报告中已声明解释计算，不声称解决标准文字歧义。`,
+    execution.configuration.configurationVersion===4?'独立物理亮度解释：原始分量 → 显式范围/单位解释 → 显示线性光（按需逐分量 EOTF）→ 已声明的 Alpha/background 合成 → 线性亮度 → PQ → Sobel/帧差总体标准差。':execution.configuration.inputDomain==='pq'?'按已记录格式／矩阵读取并归一化 PQ 亮度 → 范围缩放 → 保留 PQ → Sobel/相邻帧差总体标准差；采用明确选择的 PQ 保留解释。':execution.configuration.inputDomain==='hlg'?`按已记录格式／矩阵读取并归一化 HLG 亮度 → 范围缩放 → HLG 非彩色亮度显示模型（峰值 ${execution.configuration.whiteCdM2}、黑位 ${execution.configuration.blackCdM2} cd/m²，系统 gamma ${execution.configuration.gamma}）→ PQ → Sobel/相邻帧差总体标准差。`:'按已记录格式／矩阵读取并归一化亮度 → 范围缩放 → BT.1886（白位 300、黑位 0.01 cd/m²）→ PQ → Sobel/相邻帧差总体标准差。',
+    execution.configuration.configurationVersion===4?`独立物理亮度配置输出乘 ${execution.configuration.outputMultiplier}；透明非线性分量的有限范围使用原位深合法端点，不使用原文 16/255 比例。背景、线性域与显示映射属于已记录输入假设，不能把整条流程称为原文配置或官方修正。`:execution.configuration.input?.scale==='reference-255'?'独立范围/尺度参考配置：有限范围按原位深合法黑白端点缩放，输出固定乘 255；显示模型仍采用本项目参数，不代表 VQEG 默认整条流程或 ITU 官方勘误。比较仍须相同矩阵、传递函数、显示假设、分辨率和帧率。':`后处理按正文公式乘 ${execution.configuration.outputMultiplier}（输入或已确认等效位深）；跨位深不可直接比较。`,
+    ...(execution.configuration.lumaDerivation?[`RGB 转亮度：${execution.configuration.lumaDerivation.matrix}，权重 ${execution.configuration.lumaDerivation.coefficients.join(', ')}；${execution.configuration.configurationVersion===4?'在线性显示光域加权，再编码 PQ':'从原非线性分量加权'}；双精度计算，不先量化到整数 Y。`]:[]),
+    ...(execution.configuration.input?.floatAssumption?[`浮点输入假设：${execution.configuration.input.floatAssumption.encoding}；等效位深 ${execution.configuration.input.depth}；仅接受已声明单位、域与范围内的有限非负样本。`]:[]),
     '逐帧与汇总保留未舍入浮点结果；首帧 TI 无定义，保存为 null 且不纳入汇总；均值按帧统计。',
     ctx.sitiSceneStarts?'按用户确认的显示帧边界分别计算场景；每个场景首帧 TI 为 null，排除跨场景帧差；多场景不生成混合的全片 SI/TI 汇总。边界来自用户确认，不代表软件已自动验证全部剪辑点。':'场景边界未确认：全片曲线与汇总仅作参考，可能含跨剪辑点 TI；不宣称已按 7.8.5 分场景。',
     'CPU 串行、CPU 帧级并行和 GPU 使用同一固定配置；GPU 双精度归约顺序不同，不承诺逐位一致。数值自检阈值属于工程验证。',
-    '未实现 HDR、未知声明及其他 SDR 传递函数的新版流程。',
+    ...(execution.configuration.input?.deinterlace?['已明确选择 BWDIF 去隔行：每个输入帧输出一个逐行帧，按输出帧计算；帧数和时间戳须与源预扫描一致。该处理不是 P.910 指定的唯一隔行方法。']:[]),
+    ...(execution.configuration.interpretationIssues??[]).map(issue=>'解释与假设记录：'+issue),
     '计算配置和参考版本保存在 execution.configuration；不是完整 P.910 合规认证或 ITU 官方误差保证。',
-    'SI/TI 描述内容复杂度，不能直接当作质量评分、剩余可压缩率或场景切换判断；分辨率与帧率也影响比较。'
+    'SI/TI 描述内容复杂度，不能直接当作质量评分、剩余可压缩率或场景切换判断；不同帧率的 TI 不可直接比较，不同分辨率的 SI/TI 原则上不可直接比较（7.8.6 对宽高各相差不超过 10% 的宽高比补偿有例外）；本软件不自动补偿。'
   ]};}
   return {available:true,points,execution,si:distribution(points.map(p=>p.si)),ti:distribution(points.slice(1).map(p=>p.ti)),notes:['本结果使用 FFmpeg 旧编码值域 SI/TI 口径；输入不在本阶段明确 BT.709 SDR、范围和逐行条件的新版 CPU 覆盖范围内，不标为 P.910（10/2023）结果。','SI 表示亮度空间细节；TI 表示相邻帧亮度变化（排除首帧 TI=0 的汇总）。','TI 峰值可能来自运动、剪辑、闪光或噪声，不能直接认定为场景切换。','这些是复杂度描述，不是剩余压缩空间或质量评分。只在相同分辨率、帧率、位深、范围和传递函数下对比。','有限范围亮度按 FFmpeg siti 整数规则扩展到全范围并裁剪越界值；未声明范围按有限范围。','逐帧 SI/TI 保留两位小数，汇总从这些值计算；均值按帧统计，不按播放时长加权。','GPU 保持相同算法口径，但浮点归约顺序不同，不承诺逐位一致；这不是 P.910 合规认证。','HDR 结果在编码值域计算，不代表感知亮度复杂度。']};
 }

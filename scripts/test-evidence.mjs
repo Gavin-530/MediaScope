@@ -20,6 +20,13 @@ export const criticalMeasurements = [
   {testName:'GPU SI/TI hardware validates real frames against CPU without accepting CPU fallback',pathPattern:/^siti-gpu-[A-Za-z0-9]{6}\/hardware-equivalence\.json$/},
   {testName:'P.910 SI/TI CPU decodes lossless native SDR frames and preserves source time and reference values',pathPattern:/^siti-p910-[A-Za-z0-9]{6}\/normative-cpu\.json$/},
   {testName:'P.910 SI/TI CPU frame parallel preserves every unrounded value, overlap TI and source VFR time',pathPattern:/^siti-p910-[A-Za-z0-9]{6}\/parallel-equivalence\.json$/},
+  {testName:'SI/TI extended CPU preserves native luma, VFR timestamps, scene resets and explicit metadata overrides',pathPattern:/^siti-p910-[A-Za-z0-9]{6}\/extended-equivalence\.json$/},
+  {testName:'SI/TI RGB float native storage and reference scale preserve real decoded frames, VFR and parallel scenes',pathPattern:/^siti-p910-[A-Za-z0-9]{6}\/input-equivalence\.json$/},
+  {testName:'GPU SI/TI hardware verifies RGB float native-storage and independent range scale modes',pathPattern:/^siti-p910-[A-Za-z0-9]{6}\/input-gpu-equivalence\.json$/},
+  {testName:'SI/TI physical light and transparent RGB preserve real decoded frames, VFR, parallel scenes and report assumptions',pathPattern:/^siti-p910-[A-Za-z0-9]{6}\/physical-equivalence\.json$/},
+  {testName:'GPU SI/TI hardware verifies declared physical light and transparent RGB without CPU fallback',pathPattern:/^siti-p910-[A-Za-z0-9]{6}\/physical-gpu-equivalence\.json$/},
+  {testName:'SI/TI explicitly selected BWDIF measures progressive output and records preserved count, time and frame rate',pathPattern:/^siti-p910-[A-Za-z0-9]{6}\/deinterlace-equivalence\.json$/},
+  {testName:'P.910 extended GPU SI/TI hardware validates native 9/12/14/16-bit and declared PQ/HLG interpretations',pathPattern:/^siti-p910-[A-Za-z0-9]{6}\/extended-gpu-equivalence\.json$/},
   {testName:'P.910 GPU SI/TI hardware validates unrounded fp64 native SDR results without CPU fallback',pathPattern:/^siti-p910-[A-Za-z0-9]{6}\/gpu-equivalence\.json$/}
 ];
 export async function saveMeasurements(generated,evidence,{failed=false,requiredMeasurements=[]}={}) {

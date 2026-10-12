@@ -6,6 +6,80 @@ import {FF,run,probe,scan} from '../engine.mjs';
 import {complexity} from '../analysis.mjs';
 import {sitiGpuCapability} from '../siti-gpu.mjs';
 import {SITI_P910_PROFILE} from '../siti-p910.mjs';
+import {extendedSitiFixture} from './helpers/siti-extended.mjs';
+import {validateSitiConfiguration} from '../public/siti-settings.js';
+import {sitiInputFixture} from './helpers/siti-inputs.mjs';
+
+test('GPU SI/TI hardware verifies declared physical light and transparent RGB without CPU fallback',{timeout:180000},async t=>{
+  await mkdir('test-work',{recursive:true});const dir=await mkdtemp(path.resolve('test-work/siti-p910-')),ctx={signal:t.signal};
+  const vectors=JSON.parse(await readFile(new URL('./reference/siti/p910-2023-physical.json',import.meta.url),'utf8'));
+  const evidence={outcome:'running',cases:[]},save=()=>writeFile(path.join(dir,'physical-gpu-equivalence.json'),JSON.stringify(evidence,null,2));await save();
+  const close=(a,b,label)=>assert.ok(Math.abs(a-b)<=1e-8+Math.abs(b)*1e-10,`${label}: ${a} vs ${b}`);
+  for(const name of ['grayf32le-normalized-linear-opaque-reference-255','grayf32le-absolute-cdm2-opaque-literal','gbrpf32le-normalized-linear-opaque-reference-255','gbrpf32be-absolute-cdm2-opaque-literal','rgba-sdr-straight-literal','bgra64le-pq-premultiplied-signal-reference-255','gbrapf32le-normalized-linear-premultiplied-signal-reference-255','gbrapf32be-hlg-straight-reference-255']){
+    const c=vectors.cases.find(x=>x.name===name),fixture=await sitiInputFixture(dir,c,{},ctx),options={...ctx,sitiSettings:c.settings,sitiSceneStarts:[0,2,4]};
+    const cpu=await complexity(fixture.file,fixture.stream,{...options,sitiWorkers:1},fixture.frames),gpu=await complexity(fixture.file,fixture.stream,{...options,sitiDevice:'gpu'},fixture.frames);
+    assert.equal(gpu.execution.device,'gpu',gpu.execution.gpuFallbackReason);assert.equal(gpu.execution.validation.selfTest,'passed');assert.match(gpu.execution.precision,/host preprocessing/);
+    assert.deepEqual(gpu.execution.configuration,cpu.execution.configuration);validateSitiConfiguration(gpu.execution,fixture.stream,5);
+    for(let i=0;i<5;i++){
+      assert.equal(gpu.points[i].t,cpu.points[i].t);close(gpu.points[i].si,cpu.points[i].si,name+'/CPU SI');close(gpu.points[i].si,c.expected[i].si,name+'/NumPy SI');
+      if([0,2,4].includes(i))assert.equal(gpu.points[i].ti,null);else{close(gpu.points[i].ti,cpu.points[i].ti,name+'/CPU TI');close(gpu.points[i].ti,c.expected[i].ti,name+'/NumPy TI')}
+    }
+    evidence.cases.push({name,stream:fixture.stream,cpu,gpu});await save();
+  }
+  evidence.outcome='passed';await save();
+});
+
+test('GPU SI/TI hardware verifies RGB float native-storage and independent range scale modes',{timeout:180000},async t=>{
+  await mkdir('test-work',{recursive:true});const dir=await mkdtemp(path.resolve('test-work/siti-p910-')),ctx={signal:t.signal};
+  const vectors=JSON.parse(await readFile(new URL('./reference/siti/p910-2023-inputs.json',import.meta.url),'utf8'));
+  const evidence={outcome:'running',cases:[]},save=()=>writeFile(path.join(dir,'input-gpu-equivalence.json'),JSON.stringify(evidence,null,2));await save();
+  const close=(actual,expected,label)=>assert.ok(Math.abs(actual-expected)<=1e-8+Math.abs(expected)*1e-10,`${label}: ${actual} vs ${expected}`);
+  for(const name of ['rgb24-literal','rgb48be-reference-255','gbrpf32le-literal','gbrpf32be-reference-255','gray16be-reference-255','nv12-reference-255']){
+    const c=vectors.cases.find(c=>c.name===name),fixture=await sitiInputFixture(dir,c,{},ctx),options={...ctx,sitiSettings:c.settings,sitiSceneStarts:[0,2,4]};
+    const cpu=await complexity(fixture.file,fixture.stream,{...options,sitiWorkers:1},fixture.frames),gpu=await complexity(fixture.file,fixture.stream,{...options,sitiDevice:'gpu'},fixture.frames);
+    assert.equal(gpu.execution.device,'gpu',gpu.execution.gpuFallbackReason);assert.equal(gpu.execution.validation.selfTest,'passed');
+    assert.match(gpu.execution.precision,/host preprocessing/);assert.deepEqual(gpu.execution.configuration,cpu.execution.configuration);validateSitiConfiguration(gpu.execution,fixture.stream,5);
+    for(let i=0;i<5;i++){
+      assert.equal(gpu.points[i].t,cpu.points[i].t);close(gpu.points[i].si,cpu.points[i].si,name+'/CPU SI');close(gpu.points[i].si,c.expected[i].si,name+'/NumPy SI');
+      if([0,2,4].includes(i))assert.equal(gpu.points[i].ti,null);else{close(gpu.points[i].ti,cpu.points[i].ti,name+'/CPU TI');close(gpu.points[i].ti,c.expected[i].ti,name+'/NumPy TI')}
+    }
+    evidence.cases.push({name,stream:fixture.stream,cpu,gpu});await save();
+  }
+  evidence.outcome='passed';await save();
+});
+
+test('P.910 extended GPU SI/TI hardware validates native 9/12/14/16-bit and declared PQ/HLG interpretations',{timeout:180000},async t=>{
+  await mkdir('test-work',{recursive:true});const dir=await mkdtemp(path.resolve('test-work/siti-p910-')),ctx={signal:t.signal};
+  const vectors=JSON.parse(await readFile(new URL('./reference/siti/p910-2023-extended.json',import.meta.url),'utf8'));
+  const evidence={outcome:'running',cases:[],absoluteTolerance:1e-8,relativeTolerance:1e-10,toleranceSource:'engineering threshold, not ITU tolerance'},save=()=>writeFile(path.join(dir,'extended-gpu-equivalence.json'),JSON.stringify(evidence,null,2));await save();
+  const close=(actual,expected,label)=>assert.ok(Math.abs(actual-expected)<=1e-8+Math.abs(expected)*1e-10,`${label}: ${actual} vs ${expected}`);
+  const names=['sdr-9-tv','sdr-12-pc','sdr-14-tv','sdr-16-pc','pq-10-tv','pq-12-pc','hlg-10-tv','hlg-16-pc'];
+  for(const [index,name] of names.entries()){
+    const c=vectors.cases.find(c=>c.name===name),fixture=await extendedSitiFixture(dir,c,{gray:index%2===0},ctx);
+    const options={...ctx,sitiSettings:c.settings,sitiSceneStarts:[0,2,4]},cpu=await complexity(fixture.file,fixture.stream,{...options,sitiWorkers:1},fixture.frames),gpu=await complexity(fixture.file,fixture.stream,{...options,sitiDevice:'gpu'},fixture.frames);
+    assert.equal(gpu.execution.device,'gpu',gpu.execution.gpuFallbackReason);assert.equal(gpu.execution.validation.selfTest,'passed');validateSitiConfiguration(gpu.execution,fixture.stream,5);
+    assert.deepEqual(gpu.execution.configuration,cpu.execution.configuration);
+    for(let i=0;i<5;i++){
+      assert.equal(gpu.points[i].t,cpu.points[i].t);close(gpu.points[i].si,c.expected[i].si,name+'/NumPy SI');close(gpu.points[i].si,cpu.points[i].si,name+'/CPU SI');
+      if([0,2,4].includes(i))assert.equal(gpu.points[i].ti,null);else{close(gpu.points[i].ti,c.expected[i].ti,name+'/NumPy TI');close(gpu.points[i].ti,cpu.points[i].ti,name+'/CPU TI');}
+    }
+    evidence.cases.push({name,stream:fixture.stream,frames:fixture.frames,cpu,gpu});await save();
+  }
+  evidence.deinterlacing=[];
+  for(const name of ['sdr-12-pc','hlg-16-pc']){
+    const c=vectors.cases.find(c=>c.name===name),fixture=await extendedSitiFixture(dir,c,{interlaced:true},ctx);
+    const options={...ctx,sitiSettings:{...c.settings,interlaced:'bwdif'},sitiSceneStarts:[0,2,4]};
+    const cpu=await complexity(fixture.file,fixture.stream,{...options,sitiWorkers:1},fixture.frames),gpu=await complexity(fixture.file,fixture.stream,{...options,sitiDevice:'gpu'},fixture.frames);
+    assert.equal(gpu.execution.device,'gpu',gpu.execution.gpuFallbackReason);validateSitiConfiguration(gpu.execution,fixture.stream,5);
+    assert.deepEqual(gpu.execution.configuration,cpu.execution.configuration);assert.equal(gpu.execution.configuration.preprocessingEvidence.outputFrameRate,'24/1');
+    for(let i=0;i<5;i++){
+      assert.equal(gpu.points[i].t,cpu.points[i].t);close(gpu.points[i].si,cpu.points[i].si,name+'/BWDIF CPU SI');
+      if(cpu.points[i].ti===null)assert.equal(gpu.points[i].ti,null);else close(gpu.points[i].ti,cpu.points[i].ti,name+'/BWDIF CPU TI');
+    }
+    evidence.deinterlacing.push({name,stream:fixture.stream,frames:fixture.frames,cpu,gpu});await save();
+  }
+  evidence.outcome='passed';await save();
+});
 
 test('GPU SI/TI hardware validates real frames against CPU without accepting CPU fallback',{timeout:180000},async t=>{
   const ctx={signal:t.signal};

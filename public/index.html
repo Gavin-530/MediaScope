@@ -132,6 +132,37 @@
           <label id="siti-scene-frames-label" class="hidden" for="siti-scene-frames">各场景起始帧<input id="siti-scene-frames" placeholder="例如 1, 101, 251" disabled /></label>
         </div>
         <p class="hint">场景起始帧从 1 计数，须包含 1；填写全部已确认边界。各场景分别统计，场景首帧没有 TI；未确认时全片统计可能包含剪辑点影响。</p>
+        <details class="siti-options">
+          <summary>SI/TI 输入解释与 HDR 参数</summary>
+          <p class="hint">SI/TI 指标步骤依据 P.910（10/2023）。输入格式适配属于软件扩展；参考范围／尺度、RGB／浮点解释、显示模型和去隔行按具体配置记录。结果依赖已声明假设，格式覆盖不代表完整严格合规。</p>
+          <div class="row">
+            <label>范围／输出尺度<select id="siti-scale" disabled><option value="literal">P.910（10/2023）原文范围／尺度（默认）</option><option value="reference-255">独立参考配置：原位深端点、固定乘 255</option></select></label>
+            <label>亮度范围<select id="siti-range" disabled><option value="auto">按文件声明</option><option value="tv">用户确认：有限范围</option><option value="pc">用户确认：全范围</option></select></label>
+            <label>传递函数<select id="siti-transfer" disabled><option value="auto">按文件声明</option><option value="sdr">用户确认：SDR（BT.1886 模型）</option><option value="pq">用户确认：PQ（保留 PQ 的参考解释）</option><option value="hlg">用户确认：HLG（指定显示模型）</option></select></label>
+            <label>隔行处理<select id="siti-interlaced" disabled><option value="reject">新版流程不处理隔行</option><option value="bwdif">明确选择 BWDIF 去隔行（每帧输出一帧）</option></select></label>
+          </div>
+          <div class="row">
+            <label>RGB 亮度矩阵<select id="siti-matrix" disabled><option value="auto">按一致的矩阵／色原色声明</option><option value="bt601">用户确认：BT.601</option><option value="bt709">用户确认：BT.709</option><option value="bt2020">用户确认：BT.2020 非恒定亮度</option></select></label>
+            <label>浮点输入语义<select id="siti-float-encoding" disabled><option value="">未确认浮点语义</option><option value="normalized-nonlinear">用户确认：0–1 非线性归一化码值</option><option value="normalized-linear">用户确认：0–1 显示线性光</option><option value="absolute-cdm2">用户确认：绝对显示亮度 cd/m²</option></select></label>
+            <label>浮点等效位深<select id="siti-float-depth" disabled><option value="">未指定</option><option value="8">8-bit</option><option value="9">9-bit</option><option value="10">10-bit</option><option value="12">12-bit</option><option value="14">14-bit</option><option value="16">16-bit</option></select></label>
+          </div>
+          <div id="siti-linear-model" class="row hidden">
+            <label>线性光映射峰值（cd/m²）<input id="siti-linear-white" type="number" min="0.001" max="10000" step="any" placeholder="须明确输入" disabled /></label>
+            <label>线性光映射黑位（cd/m²）<input id="siti-linear-black" type="number" min="0" step="any" placeholder="须明确输入" disabled /></label>
+          </div>
+          <div class="row"><label>透明 RGB 处理<select id="siti-alpha" disabled><option value="">仅接受完全不透明样本（默认）</option><option value="straight">显式合成：直通 Alpha</option><option value="premultiplied-signal">显式合成：输入信号域预乘 Alpha</option></select></label></div>
+          <div id="siti-alpha-background" class="row hidden">
+            <label>背景线性 R（cd/m²）<input id="siti-background-r" type="number" min="0" max="10000" step="any" placeholder="须明确输入" disabled /></label>
+            <label>背景线性 G（cd/m²）<input id="siti-background-g" type="number" min="0" max="10000" step="any" placeholder="须明确输入" disabled /></label>
+            <label>背景线性 B（cd/m²）<input id="siti-background-b" type="number" min="0" max="10000" step="any" placeholder="须明确输入" disabled /></label>
+          </div>
+          <div id="siti-hlg-model" class="row hidden">
+            <label>HLG 显示峰值（cd/m²）<input id="siti-hlg-white" type="number" min="0.001" max="10000" step="any" value="1000" disabled /></label>
+            <label>HLG 显示黑位（cd/m²）<input id="siti-hlg-black" type="number" min="0" step="any" value="0.01" disabled /></label>
+            <label>HLG 系统 gamma<input id="siti-hlg-gamma" type="number" min="1" max="3" step="any" value="1.2" disabled /></label>
+          </div>
+          <p class="hint">RGB 双精度计算，不先量化；缺失或冲突的范围、矩阵、传递函数须确认。浮点须指定语义及等效位深；线性光和绝对亮度必须明确选择全范围，线性光另须输入显示黑位/峰值。物理亮度及透明合成为独立配置：在线性显示光域导出亮度后编码 PQ；有限范围使用原位深合法端点，输出按所选位深乘数或 255，不作为原文配置。背景 RGB 使用与源相同的色原色，以线性 cd/m² 输入；预乘仅指展开范围后的输入信号域关联，先解除关联再转换显示光，零 Alpha 须有零关联颜色。原文配置保持默认，参考配置不是官方勘误。HLG 默认 1000、0.01 cd/m²、gamma 1.2 为可调整显示假设；所有选择和源标签随报告保存。</p>
+        </details>
         <p class="hint">
           <span id="siti-device-status" aria-live="polite">GPU 按完整分辨率逐帧计算 SI/TI，视频仍由软件解码；GPU 不可用时回退 CPU 并记录原因。</span>并行上限只影响 CPU SI/TI；自动或手动上限均会按
           CPU、可用内存和帧数降低，异常时回退串行。直接加入队列时，未读取信息的文件自动选择第一个视频轨道；需选择其他轨道时请先读取信息。完整分析还包含全流
@@ -489,6 +520,7 @@
           ><button id="export-portable" class="secondary">导出 JSON</button>
         </div>
         <div class="list-toolbar"><h3>已完成结果</h3><button id="result-clear" class="secondary" disabled>清空结果</button></div>
+        <p id="result-timing-total" class="hint"></p>
         <div id="result-list"></div>
         </section>
       </div>

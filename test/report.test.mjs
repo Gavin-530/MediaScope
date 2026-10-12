@@ -20,7 +20,7 @@ before(async()=>{
   assert.equal(done.status,'done',JSON.stringify(done));reports[input.type]=await app.request(`jobs/${job.id}/report`);
  }
  const unknown=path.join(root,'undeclared.nut');
- await run(FF,['-v','error','-f','lavfi','-i','testsrc2=s=96x64:r=4:d=1,format=yuv422p10le,setparams=range=unknown:color_primaries=unknown:color_trc=unknown:colorspace=unknown','-c:v','rawvideo','-pix_fmt','yuv422p10le','-f','nut',unknown]);
+ await run(FF,['-v','error','-y','-f','lavfi','-i','testsrc2=s=96x64:r=4:d=1,format=yuv422p10le,setparams=range=unknown:color_primaries=unknown:color_trc=unknown:colorspace=unknown','-c:v','rawvideo','-pix_fmt','yuv422p10le','-f','nut',unknown]);
  for(const [name,input]of [
   ['undeclared',{type:'compare',reference:unknown,candidate:unknown,refStream:0,candidateStream:0,confirm:true,metrics:['vmaf']}],
   ['playback',{type:'compare',reference:media.source,candidate:media.candidate,refStream:0,candidateStream:0,confirm:true,timingMode:'playback-sample',playbackConfirmed:true,metrics:['vmaf']}],

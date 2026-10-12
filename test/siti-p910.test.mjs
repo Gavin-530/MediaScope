@@ -34,7 +34,9 @@ test('P.910 SI/TI pinned normative profile matches independent NumPy and origina
 test('P.910 SI/TI rejects unsupported interpretation, invalid code values and invalid first TI',()=>{
   const stream={pix_fmt:'yuv420p',color_range:'tv',color_transfer:'bt709',field_order:'progressive'};
   assert.equal(sitiP910Eligible(stream),true);
-  for(const changes of [{color_range:undefined},{color_transfer:undefined},{color_transfer:'smpte2084'},{color_transfer:'arib-std-b67'},{field_order:'tt'},{pix_fmt:'yuv420p12le'}])assert.equal(sitiP910Eligible({...stream,...changes}),false);
+  assert.equal(sitiP910Eligible({...stream,pix_fmt:'yuv420p12le'}),true);
+  assert.equal(sitiP910Eligible({...stream,color_transfer:'arib-std-b67'}),true);
+  for(const changes of [{color_range:undefined},{color_transfer:undefined},{color_transfer:'smpte2084'},{field_order:'tt'},{pix_fmt:'gbrp12le'}])assert.equal(sitiP910Eligible({...stream,...changes}),false);
   for(const [depth,range,code] of [[8,'tv',15],[8,'tv',236],[10,'tv',63],[10,'tv',941],[10,'pc',1024]]){
     const calculator=createSitiP910Calculator(3,3,depth,range);assert.throws(()=>calculator.measure(bytes(Array(9).fill(code),depth)),/超出声明范围/);
   }

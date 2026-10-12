@@ -592,6 +592,46 @@ td {
   overflow: auto;
 }
 
+.siti-chart-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 14px;
+  margin: 14px 0 8px;
+  font-size: 12px;
+}
+
+.siti-chart-heading dl,
+.siti-chart-heading dl > div {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.siti-chart-heading h4 {
+  margin: 0;
+}
+
+.siti-chart-heading dl {
+  margin: 0;
+  gap: 6px 14px;
+}
+
+.siti-chart-heading dt {
+  color: var(--muted);
+}
+
+.siti-chart-heading dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.siti-chart-heading h4,
+.siti-chart-heading dl > div {
+  white-space: nowrap;
+}
+
 pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -1271,6 +1311,17 @@ canvas.frames-canvas {
 .queue-item-main {
   flex: 1;
   min-width: 0;
+}
+
+.result-timing {
+  margin: 4px 0;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.result-timing-stages {
+  margin-top: 4px;
+  font-size: 12px;
 }
 
 .queue-item-main strong {

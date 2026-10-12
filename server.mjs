@@ -10,6 +10,7 @@ import { FF,FP,run,probe,video,scan,summarize,compare,normalizeMediaPath,decodeT
 import {allPackets,structure,traceStructure,mapStructure,metadataSummary,complexity,trial,trialOptions} from './analysis.mjs';
 import {sitiGpuCapability} from './siti-gpu.mjs';
 import {validateSitiSceneStarts} from './public/siti-scenes.js';
+import {validateSitiSettings} from './public/siti-settings.js';
 import {makePortable,maxPortableBytes,utcNow} from './public/portable.js';
 import {byteLimit} from './public/units.js';
 import {vmafModel} from './public/vmaf.js';
@@ -73,6 +74,7 @@ function normalizeInputPaths(input){
   if(input.type==='inspect'||input.type==='analyze'||input.type==='trial')input.file=normalizeMediaPath(input.file);
   if(input.type==='analyze'){
     validateSitiSceneStarts(input.sitiSceneStarts);
+    validateSitiSettings(input.sitiSettings);
     input.sitiDevice??='cpu';
     if(!['cpu','gpu'].includes(input.sitiDevice))throw Error('SI/TI 计算设备无效');
     if(input.sitiWorkers==null||input.sitiWorkers==='auto')input.sitiWorkers='auto';
@@ -84,7 +86,7 @@ function normalizeInputPaths(input){
 function portableInput(input){const copy=structuredClone(input);delete copy.enqueue;return copy}
 function validatePlanInput(value){
  if(!value||typeof value!=='object'||Array.isArray(value)||!['inspect','analyze','compare','trial'].includes(value.type))throw Error('计划任务类型无效');
- const keys={inspect:['type','file'],analyze:['type','file','stream','complexity','sitiWorkers','sitiDevice','sitiSceneStarts','bitrateWindowMs'],compare:['type','reference','candidate','refStream','candidateStream','comparisonMode','timingMode','metrics','vmafModel','confirm','timingConfirmed','playbackConfirmed','chromaConfirmed','chromaAssumptions'],trial:['type','file','stream','start','duration','encoder','depthMode','presets','cpuUsed','crfs','metrics','vmafModel','keepFiles','exportDirectory']}[value.type];
+ const keys={inspect:['type','file'],analyze:['type','file','stream','complexity','sitiWorkers','sitiDevice','sitiSceneStarts','sitiSettings','bitrateWindowMs'],compare:['type','reference','candidate','refStream','candidateStream','comparisonMode','timingMode','metrics','vmafModel','confirm','timingConfirmed','playbackConfirmed','chromaConfirmed','chromaAssumptions'],trial:['type','file','stream','start','duration','encoder','depthMode','presets','cpuUsed','crfs','metrics','vmafModel','keepFiles','exportDirectory']}[value.type];
  if(Object.keys(value).some(key=>!keys.includes(key)))throw Error('计划任务包含未知参数');
  const input=structuredClone(value);normalizeInputPaths(input);
  const index=v=>Number.isSafeInteger(v)&&v>=0;
@@ -158,7 +160,7 @@ async function execute(job,input){
       job.progress.subtasks={...previous,[next.subtask.id]:{...(previous[next.subtask.id]||{}),...item}};
     }
   };
-  const ctx={cwd,signal:job.controller.signal,commands:[],separateMetrics:process.env.MEDIASCOPE_SEPARATE_METRICS==='1',decodeThreads:decodeThreadCount(Number(process.env.MEDIASCOPE_DECODE_THREADS)),sitiWorkers:input.type==='analyze'&&input.sitiWorkers!=='auto'?input.sitiWorkers:undefined,sitiDevice:input.sitiDevice??'cpu',sitiSceneStarts:input.sitiSceneStarts,update:publish};
+  const ctx={cwd,signal:job.controller.signal,commands:[],separateMetrics:process.env.MEDIASCOPE_SEPARATE_METRICS==='1',decodeThreads:decodeThreadCount(Number(process.env.MEDIASCOPE_DECODE_THREADS)),sitiWorkers:input.type==='analyze'&&input.sitiWorkers!=='auto'?input.sitiWorkers:undefined,sitiDevice:input.sitiDevice??'cpu',sitiSceneStarts:input.sitiSceneStarts,sitiSettings:input.sitiSettings,update:publish};
   const stage=async(name,work,{phaseIndex,phaseCount,concurrentGroup=null,subtask=null}={})=>{
     const base={stage:concurrentGroup||name,phaseIndex,phaseCount};
     const scoped={...ctx,update:value=>{
@@ -215,6 +217,7 @@ async function execute(job,input){
     }else throw Error('未知任务');
     if(job.controller.signal.aborted)throw Error('任务已取消');
     job.result={schema:'MediaScope/0.2',createdAt:utcNow(),type:job.type,tools:versions,commands:ctx.commands,timing:{computeSeconds:(performance.now()-started)/1000,decodeThreads:ctx.decodeThreads,stages,scope:'计算阶段，不含报告序列化、保存、传输及浏览器渲染；同一 concurrentGroup 的阶段时间相互重叠，不能相加；子进程耗时见 commands[].elapsedSeconds'},...result};
+    job.timing=job.result.timing;
     await writeFile(path.join(cwd,'report.json'),JSON.stringify(job.result,null,2));
     job.reportPath=path.join(cwd,'report.json');delete job.result;
     job.status='done';job.message='完成';job.progress={...(job.progress||{}),stage:'完成',detail:'报告已保存',completed:1,total:1,unit:'份报告',updatedAt:utcNow()};
@@ -333,7 +336,8 @@ const server=http.createServer(async(req,res)=>{
       }
       send(res,404,{error:'接口不存在'});return;
     }
-    const files={'/':'index.html','/app.js':'app.js','/report.js':'report.js','/vmaf.js':'vmaf.js','/metric-summary.js':'metric-summary.js','/properties.js':'properties.js','/basic-info.js':'basic-info.js','/portable.js':'portable.js','/bitrate-model.js':'bitrate-model.js','/distribution-model.js':'distribution-model.js','/siti-scenes.js':'siti-scenes.js','/charts.js':'charts.js','/trial-model.js':'trial-model.js','/units.js':'units.js','/style.css':'style.css'};
+    const files={'/':'index.html','/app.js':'app.js','/report.js':'report.js','/vmaf.js':'vmaf.js','/metric-summary.js':'metric-summary.js','/properties.js':'properties.js','/basic-info.js':'basic-info.js','/portable.js':'portable.js','/bitrate-model.js':'bitrate-model.js','/distribution-model.js':'distribution-model.js','/siti-scenes.js':'siti-scenes.js','/siti-settings.js':'siti-settings.js','/siti-formats.js':'siti-formats.js','/siti-physical.js':'siti-physical.js','/charts.js':'charts.js','/trial-model.js':'trial-model.js','/units.js':'units.js','/style.css':'style.css'};
+    files['/timing.js']='timing.js';
     if(req.method!=='GET'||!files[url.pathname]){res.writeHead(404);res.end();return}
     const name=files[url.pathname];let data=await readFile(path.join(root,'public',name));if(name==='index.html')data=Buffer.from(data.toString().replace('__TOKEN__',token).replace('__APP_VERSION__',appVersion).replace('__LOCAL_THEME__',localData.settings.theme).replace('__PORTABLE_LIMIT__',byteLimit(maxPortableBytes)).replace('__RECENT_LIMIT__',byteLimit(recentBytes)));
     res.writeHead(200,{'Content-Type':name.endsWith('.html')?'text/html; charset=utf-8':name.endsWith('.js')?'text/javascript; charset=utf-8':'text/css; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' blob:; object-src 'none'; frame-ancestors 'none'"});res.end(data);

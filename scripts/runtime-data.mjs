@@ -121,7 +121,8 @@ export class RuntimeData {
         const report=await lstat(path.join(folder,'report.json')).catch(e=>{if(e.code==='ENOENT')return null;throw e});
         const failure=report?null:JSON.parse(await readFile(path.join(folder,'failure.json'),'utf8').catch(e=>{if(e.code==='ENOENT')return '{"status":"cancelled","error":"上次运行意外结束"}';throw e}));
         const stat=report||await lstat(folder);
-        job={id:entry.name,type:input.type,status:report?'done':failure.status==='error'?'error':'cancelled',message:report?'完成':failure.error||'任务未完成',file:input.file,reference:input.reference,candidate:input.candidate,description:job?.description||'近期任务',queuedAt:job?.queuedAt||stat.mtime.toISOString(),startedAt:job?.startedAt,finishedAt:job?.finishedAt||stat.mtime.toISOString(),restored:true};
+        job={id:entry.name,type:input.type,status:report?'done':failure.status==='error'?'error':'cancelled',message:report?'完成':failure.error||'任务未完成',file:input.file,reference:input.reference,candidate:input.candidate,description:job?.description||'近期任务',queuedAt:job?.queuedAt||stat.mtime.toISOString(),startedAt:job?.startedAt,finishedAt:job?.finishedAt||stat.mtime.toISOString(),timing:job?.timing,restored:true};
+        if(report&&!job.timing)job.timing=JSON.parse(await readFile(path.join(folder,'report.json'),'utf8')).timing;
         if(!['inspect','analyze','compare','trial'].includes(job.type))throw Error('未知任务类型');
         if(report&&input.keepFiles){
           const media=(await readdir(folder)).filter(name=>name.endsWith('.mkv')).map(name=>path.join(folder,name));
