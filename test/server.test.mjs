@@ -1,7 +1,7 @@
 import {parseReport} from '../public/report.js';
 import {test,before,beforeEach,afterEach} from 'node:test';
 import assert from 'node:assert/strict';
-import {startServer} from './helpers/server.mjs';
+import {startServer,waitForJob} from './helpers/server.mjs';
 import {mkdir,mkdtemp,lstat,readFile} from 'node:fs/promises';
 import {extendedSitiFixture} from './helpers/siti-extended.mjs';
 import {sitiInputFixture} from './helpers/siti-inputs.mjs';
@@ -19,7 +19,8 @@ before(async()=>{
 beforeEach(async()=>{reportRoot=path.join(suiteRoot,String(++caseNumber));app=await startServer(reportRoot);base=app.base;token=app.token});
 afterEach(async()=>{await app?.stop()});
 const request=(url,method='GET',data)=>fetch(base+'/api/'+url,{method,headers:{'x-mediascope-token':token,'content-type':'application/json'},body:data?JSON.stringify(data):undefined});
-async function finished(id){for(let i=0;i<200;i++){const j=await(await request('jobs/'+id)).json();if(!['running','queued'].includes(j.status))return j;await delay(100)}throw Error('Timed out')}
+// GPU initialization may take 30 seconds before CPU recovery; use the shared task deadline.
+const finished=id=>waitForJob(async url=>(await request(url)).json(),id);
 async function removed(id){for(let i=0;i<200;i++){if((await request('jobs/'+id)).status===404)return;await delay(100)}throw Error('Cancellation did not remove the job')}
 test('API protects local data and streams a reproducible completed report',async()=>{
  assert.equal((await fetch(base+'/api/status')).status,403);
