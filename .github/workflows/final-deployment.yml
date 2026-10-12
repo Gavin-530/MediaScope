@@ -1,0 +1,51 @@
+name: MediaScope final ZIP deployment acceptance
+on:
+  push:
+    branches: ['codex/release-0.2.11-deployment']
+permissions:
+  contents: read
+jobs:
+  deployment:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: 9f089ab8e5935922902c6606b9629ca434f31f83
+          persist-credentials: false
+      - name: Build the ordinary 0.2.11 ZIP from the exact release commit
+        run: ./scripts/package.ps1 -Version 0.2.11
+      - name: Fetch and verify locked offline transport fixtures
+        run: |
+          $ErrorActionPreference='Stop'
+          New-Item -ItemType Directory -Force .build/downloads | Out-Null
+          foreach($component in (Get-Content runtime-lock.json -Raw | ConvertFrom-Json).components){
+            $file='.build/downloads/'+$component.name+'.zip'
+            Invoke-WebRequest -UseBasicParsing -Uri $component.url -OutFile $file
+            if((Get-FileHash $file -Algorithm SHA256).Hash.ToLowerInvariant() -ne $component.sha256){throw 'Transport fixture SHA-256 mismatch'}
+          }
+      - name: Offline exact ZIP deployment acceptance
+        run: ./scripts/record-test.ps1 -Kind Package -Archive releases/MediaScope-0.2.11-win-x64.zip -RequireClean
+      - name: Real first online deployment acceptance
+        run: ./scripts/record-test.ps1 -Kind OnlineDeployment -Archive releases/MediaScope-0.2.11-win-x64.zip -RequireClean
+      - name: Preserve the exact tested ordinary software ZIP
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: mediascope-reissued-package
+          path: releases/MediaScope-0.2.11-win-x64.zip
+          retention-days: 90
+          compression-level: 0
+          if-no-files-found: error
+      - name: Preserve sealed deployment records
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: mediascope-final-deployment-${{ github.run_id }}
+          path: |
+            evidence-archive/records/
+            evidence-archive/pending/staging/
+          retention-days: 90
+          if-no-files-found: error
