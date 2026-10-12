@@ -11,16 +11,21 @@ jobs:
     defaults:
       run:
         shell: powershell
+        working-directory: D:\m
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           ref: 9f089ab8e5935922902c6606b9629ca434f31f83
           persist-credentials: false
+      - name: Prepare a short clean checkout for nested installation fixtures
+        working-directory: ${{ github.workspace }}
+        run: git worktree add --detach D:\m 9f089ab8e5935922902c6606b9629ca434f31f83
       - name: Build the ordinary 0.2.11 ZIP from the exact release commit
         run: ./scripts/package.ps1 -Version 0.2.11
       - name: Fetch and verify locked offline transport fixtures
         run: |
           $ErrorActionPreference='Stop'
+          $ProgressPreference='SilentlyContinue'
           New-Item -ItemType Directory -Force .build/downloads | Out-Null
           foreach($component in (Get-Content runtime-lock.json -Raw | ConvertFrom-Json).components){
             $file='.build/downloads/'+$component.name+'.zip'
@@ -35,7 +40,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: mediascope-reissued-package
-          path: releases/MediaScope-0.2.11-win-x64.zip
+          path: D:\m\releases\MediaScope-0.2.11-win-x64.zip
           retention-days: 90
           compression-level: 0
           if-no-files-found: error
@@ -45,7 +50,7 @@ jobs:
         with:
           name: mediascope-final-deployment-${{ github.run_id }}
           path: |
-            evidence-archive/records/
-            evidence-archive/pending/staging/
+            D:\m\evidence-archive\records\
+            D:\m\evidence-archive\pending\staging\
           retention-days: 90
           if-no-files-found: error
