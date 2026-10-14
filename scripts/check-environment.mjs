@@ -18,7 +18,7 @@ for(const [name,exe] of [['ffmpeg',ffmpeg],['ffprobe',ffprobe]]) {
   if(!match || Number(match[1])<lock.ffmpegMinMajor) throw Error('Unsupported '+name+' version: '+line);
   versions[name]=line;
 }
-const required={filters:['libvmaf','siti','psnr','ssim','zscale'],encoders:['libx264','libx265','libaom-av1','ffv1'],bsfs:['trace_headers']};
+const required={filters:['libvmaf','psnr','ssim','zscale'],encoders:['libx264','libx265','libaom-av1','ffv1'],bsfs:['trace_headers']};
 for(const [kind,names] of Object.entries(required)) {
   const list=run(ffmpeg,['-hide_banner','-'+kind]);
   for(const name of names) if(!new RegExp('\\b'+name+'\\b').test(list)) throw Error('FFmpeg missing '+name);
@@ -30,7 +30,7 @@ try {
     run(ffmpeg,['-v','error','-nostdin','-f','lavfi','-i','testsrc2=size=64x64:rate=4:duration=0.5','-c:v',encoder,...(encoder==='libaom-av1'?['-cpu-used','8']:[]),file]);
     const info=JSON.parse(run(ffprobe,['-v','error','-show_streams','-of','json',file]));
     if(info.streams[0]?.width!==64) throw Error('FFprobe smoke test failed');
-    run(ffmpeg,['-v','error','-i',file,'-vf','siti,zscale,format=yuv420p','-f','null','-']);
+    run(ffmpeg,['-v','error','-i',file,'-vf','zscale,format=yuv420p','-f','null','-']);
     if(encoder!=='ffv1') run(ffmpeg,['-v','error','-i',file,'-c','copy','-bsf:v','trace_headers','-f','null','-']);
   }
   for(const metric of ['psnr','ssim','libvmaf=model=version=vmaf_v0.6.1'])

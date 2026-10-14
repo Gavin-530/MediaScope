@@ -128,7 +128,7 @@ test('SI/TI preserves one measurement per decoded frame',async()=>{
  // Explicit out-of-range boundary media, losslessly encoded. Preserve the
  // worker's useful rejection reason instead of a downstream pipe error.
  const invalid=path.join(dir,'sdr-invalid-range.mkv');await run(FF,['-v','error','-y','-f','lavfi','-i','color=black:size=192x108:rate=12:duration=1,format=yuv420p,geq=lum=15:cb=128:cr=128,setfield=prog,setparams=range=limited:color_trc=bt709:color_primaries=bt709:colorspace=bt709','-c:v','ffv1','-level','3',invalid]);
- const rejected=await probe(invalid);await assert.rejects(complexity(invalid,rejected.raw.streams[0],context()),/亮度码值 15 超出声明范围/);
+ const rejected=await probe(invalid);const unavailable=await complexity(invalid,rejected.raw.streams[0],context());assert.equal(unavailable.available,false);assert.match(unavailable.reason,/亮度码值 15 超出声明范围/);
 });
 test('metadata summary merges repeated side data with explicit provenance',()=>{const r=metadataSummary({raw:{streams:[{index:0,side_data_list:[{side_data_type:'Mastering display',x:1}]}]},frameSample:{frames:[{stream_index:0,side_data_list:[{side_data_type:'Mastering display',x:1}]}]},frameSampleScope:'sample'});assert.equal(r.items.length,1);assert.equal(r.items[0].occurrences,2);assert.equal(r.items[0].sources.length,2)});
 test('trial produces a measured curve and removes temporary media',async()=>{

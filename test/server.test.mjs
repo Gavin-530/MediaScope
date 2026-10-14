@@ -3,7 +3,6 @@ import {test,before,beforeEach,afterEach} from 'node:test';
 import assert from 'node:assert/strict';
 import {startServer,waitForJob} from './helpers/server.mjs';
 import {mkdir,mkdtemp,lstat,readFile} from 'node:fs/promises';
-import {extendedSitiFixture} from './helpers/siti-extended.mjs';
 import {sitiInputFixture} from './helpers/siti-inputs.mjs';
 import path from 'node:path';
 import {FF,run} from '../engine.mjs';
@@ -41,62 +40,30 @@ test('SI/TI worker setting validates input and records requested versus actual w
  assert.equal(report.content.execution.device,'cpu');assert.equal(report.content.execution.requestedDevice,'cpu');assert.match(html,/id="siti-device"/);
 });
 
-test('SI/TI extended API validates display assumptions and round-trips plans, native/HDR/deinterlace reports',async()=>{
- const vectors=JSON.parse(await readFile(new URL('./reference/siti/p910-2023-extended.json',import.meta.url),'utf8'));
- const invalid=await request('jobs','POST',{type:'analyze',file:sitiSource,complexity:true,sitiSettings:{transfer:'hlg',hlg:{whiteCdM2:1000,blackCdM2:1000,gamma:1.2}}});assert.equal(invalid.status,400);
- assert.equal((await fetch(base+'/siti-settings.js')).status,200);
- for(const [name,options,settings] of [
-  ['sdr-12-tv',{unknown:true},{range:'tv',transfer:'sdr'}],
-  ['pq-10-pc',{}, {transfer:'pq',pqInterpretation:'preserve-pq'}],
-  ['hlg-12-pc',{}, {transfer:'hlg',hlg:{whiteCdM2:1000,blackCdM2:.01,gamma:1.2}}],
-  ['sdr-12-tv',{interlaced:true},{interlaced:'bwdif'}]
- ]){
-  const c=vectors.cases.find(c=>c.name===name),fixture=await extendedSitiFixture(reportRoot,c,options);
-  await request('queue','POST',{action:'pause'});
-  await request('jobs','POST',{type:'analyze',file:fixture.file,stream:0,complexity:true,sitiSettings:settings,sitiSceneStarts:[0,2,4],enqueue:true});
-  const saved=await(await request('plans')).json();assert.deepEqual(saved.plans[0].input.sitiSettings,settings);
-  const imported=await(await request('plans/import','POST',{mode:'replace',start:true,plans:saved.plans})).json(),id=imported.ids[0],status=await finished(id);assert.equal(status.status,'done',status.message);
-  const report=await(await request(`jobs/${id}/report`)).json();assert.deepEqual(parseReport(JSON.stringify(report)),report);assert.equal(report.content.execution.configuration.configurationVersion,2);
-  for(const damage of [c=>c.outputMultiplier=1,c=>c.input.source.transfer='changed',c=>c.inputDomain='changed',c=>c.preprocessing='changed']){const broken=structuredClone(report);damage(broken.content.execution.configuration);assert.throws(()=>parseReport(JSON.stringify(broken)),/configuration/);}
- }
-});
-
-test('SI/TI RGB float and reference scale API preserves explicit assumptions, plans and validated reports',async()=>{
- const vectors=JSON.parse(await readFile(new URL('./reference/siti/p910-2023-inputs.json',import.meta.url),'utf8'));
- assert.equal((await fetch(base+'/siti-formats.js')).status,200);
- for(const name of ['rgb24-literal','gbrpf32le-reference-255']){
+test('SI/TI reference API preserves input settings, plans and validated reports',async()=>{
+ const vectors=JSON.parse(await readFile(new URL('./reference/siti/vqeg-pq.json',import.meta.url),'utf8'));
+ const invalid=await request('jobs','POST',{type:'analyze',file:sitiSource,complexity:true,sitiSettings:{scale:'literal'}});assert.equal(invalid.status,400);
+ assert.equal((await fetch(base+'/siti.js')).status,200);
+ for(const name of ['gray12le-hlg-pc','gray10le-pq-tv','rgb24-sdr-pc']){
   const c=vectors.cases.find(c=>c.name===name),fixture=await sitiInputFixture(reportRoot,c);
-  if(c.format.includes('f32')){
-   const ambiguous=await(await request('jobs','POST',{type:'analyze',file:fixture.file,complexity:true,sitiSettings:{range:'pc',transfer:'pq',pqInterpretation:'preserve-pq',matrix:'bt709'}})).json();
-   assert.equal((await finished(ambiguous.id)).status,'error');
-  }
   await request('queue','POST',{action:'pause'});
   await request('jobs','POST',{type:'analyze',file:fixture.file,stream:0,complexity:true,sitiSettings:c.settings,sitiSceneStarts:[0,2,4],enqueue:true});
   const saved=await(await request('plans')).json();assert.deepEqual(saved.plans[0].input.sitiSettings,c.settings);
-  const imported=await(await request('plans/import','POST',{mode:'replace',start:true,plans:saved.plans})).json(),status=await finished(imported.ids[0]);assert.equal(status.status,'done',status.message);
-  const report=await(await request(`jobs/${imported.ids[0]}/report`)).json();assert.deepEqual(parseReport(JSON.stringify(report)),report);assert.equal(report.content.execution.configuration.configurationVersion,3);
-  assert.equal(report.content.execution.configuration.input.scale,c.settings.scale);
-  for(const damage of [c=>c.outputMultiplier++,c=>c.input.matrix.name=c.input.matrix.name==='bt601'?'bt709':'bt601',c=>c.lumaDerivation.coefficients[0]=0,c=>delete c.configurationVersion]){
-   const broken=structuredClone(report);damage(broken.content.execution.configuration);assert.throws(()=>parseReport(JSON.stringify(broken)),/configuration/);
-  }
+  const imported=await(await request('plans/import','POST',{mode:'replace',start:true,plans:saved.plans})).json(),id=imported.ids[0],status=await finished(id);assert.equal(status.status,'done',status.message);
+  const report=await(await request(`jobs/${id}/report`)).json();assert.equal(report.content.available,true,report.content.reason);assert.deepEqual(parseReport(JSON.stringify(report)),report);assert.equal(report.content.execution.configuration.configurationVersion,c.domain==='hlg'?6:5);
+  for(const damage of [c=>c.outputMultiplier=1,c=>c.input.source.transfer='changed',c=>c.inputDomain='changed',c=>c.display={whiteCdM2:1},c=>delete c.configurationVersion,c=>c.reference.commit='changed']){const broken=structuredClone(report);damage(broken.content.execution.configuration);assert.throws(()=>parseReport(JSON.stringify(broken)),/configuration/)}
  }
 });
 
-test('SI/TI physical light and Alpha API preserves explicit mapping, backgrounds, plans and validated reports',async()=>{
- const vectors=JSON.parse(await readFile(new URL('./reference/siti/p910-2023-physical.json',import.meta.url),'utf8'));
- assert.equal((await fetch(base+'/siti-physical.js')).status,200);
- const invalid=await request('jobs','POST',{type:'analyze',file:sitiSource,complexity:true,sitiSettings:{alpha:{mode:'straight',backgroundCdM2:[0,0,10001]}}});assert.equal(invalid.status,400);
- for(const name of ['gbrapf32le-normalized-linear-premultiplied-signal-reference-255','gbrpf32be-absolute-cdm2-opaque-literal','rgba-pq-straight-reference-255']){
-  const c=vectors.cases.find(x=>x.name===name),fixture=await sitiInputFixture(reportRoot,c);
-  const job=await(await request('jobs','POST',{type:'analyze',file:fixture.file,stream:0,complexity:true,sitiSettings:c.settings,sitiSceneStarts:[0]})).json(),status=await finished(job.id);assert.equal(status.status,'done',status.message);
-  const report=await(await request(`jobs/${job.id}/report`)).json();assert.deepEqual(parseReport(JSON.stringify(report)),report);assert.equal(report.content.execution.configuration.configurationVersion,4);
-  assert.deepEqual(report.content.execution.configuration.input.settings,c.settings);
-  for(const damage of [x=>delete x.configurationVersion,x=>x.physicalLight.units='unknown',x=>x.outputMultiplier++,x=>x.eotf='sdr',x=>x.input.floatAssumption?x.input.floatAssumption.encoding='guess':x.alphaComposition.backgroundCdM2[0]++]){
-   const broken=structuredClone(report);damage(broken.content.execution.configuration);assert.throws(()=>parseReport(JSON.stringify(broken)),/configuration/);
-  }
-  await request('queue','POST',{action:'pause'});await request('jobs','POST',{type:'analyze',file:fixture.file,stream:0,complexity:true,sitiSettings:c.settings,sitiSceneStarts:[0],enqueue:true});
-  const saved=await(await request('plans')).json();assert.deepEqual(saved.plans[0].input.sitiSettings,c.settings);
-  const imported=await(await request('plans/import','POST',{mode:'replace',start:true,plans:saved.plans})).json();assert.equal((await finished(imported.ids[0])).status,'done');
+test('SI/TI rejects float and partial alpha while completing other media analysis',async()=>{
+ const vectors=JSON.parse(await readFile(new URL('./reference/siti/vqeg-pq.json',import.meta.url),'utf8'));
+ const pixels=Float32Array.from({length:80},(_,i)=>i/79),raw=Buffer.from(pixels.buffer).toString('base64');
+ const floating={name:'unreferenced-float',format:'grayf32le',width:10,height:8,range:'pc',domain:'sdr',frames:Array(5).fill(raw),settings:{range:'pc',transfer:'sdr'}};
+ const alpha=structuredClone(vectors.cases.find(c=>c.format==='rgba'));alpha.name='unreferenced-alpha';alpha.frames=alpha.frames.map(s=>{const raw=Buffer.from(s,'base64');raw[3]=128;return raw.toString('base64')});
+ for(const [c,reason] of [[floating,/浮点/],[alpha,/半透明/]]){
+  const fixture=await sitiInputFixture(reportRoot,c),job=await(await request('jobs','POST',{type:'analyze',file:fixture.file,stream:0,complexity:true,sitiSettings:c.settings})).json(),status=await finished(job.id);
+  assert.equal(status.status,'done',status.message);const report=await(await request(`jobs/${job.id}/report`)).json();
+  assert.equal(report.frames.length,5);assert.equal(report.content.available,false);assert.match(report.content.reason,reason);assert.ok(report.packets.bins.length);assert.deepEqual(parseReport(JSON.stringify(report)),report);
  }
 });
 
@@ -110,7 +77,7 @@ test('GPU SI/TI API records actual device and round-trips queued device selectio
  const job={id:imported.ids[0]};
  const status=await finished(job.id);assert.equal(status.status,'done',status.message);
  const report=await(await request(`jobs/${job.id}/report`)).json();
- assert.equal(report.content.execution.requestedDevice,'gpu');assert.equal(report.content.execution.method,'P910-2023-SDR-BT1886-text-v1');
+ assert.equal(report.content.execution.requestedDevice,'gpu');assert.equal(report.content.execution.method,'VQEG-siti-c537e337-PQ');
  assert.equal(report.content.execution.device,capability.available?'gpu':'cpu');
  if(capability.available)assert.equal(report.content.execution.validation.selfTest,'passed');else assert.ok(report.content.execution.gpuFallbackReason);
  assert.deepEqual(parseReport(JSON.stringify(report)),report);
@@ -123,8 +90,8 @@ test('SI/TI scene boundaries validate input, exclude boundary TI and survive rep
  }
  const job=await(await request('jobs','POST',{type:'analyze',file:sitiSource,stream:0,complexity:true,sitiSceneStarts:[0,1,6,11]})).json(),status=await finished(job.id);assert.equal(status.status,'done',status.message);
  const report=await(await request(`jobs/${job.id}/report`)).json();assert.deepEqual(parseReport(JSON.stringify(report)),report);
- assert.equal((await fetch(base+'/siti-scenes.js')).status,200);
- assert.equal(report.content.sceneAnalysis.mode,'confirmed');assert.equal(report.content.scenes[0].ti,null);assert.ok(report.content.execution.configuration.clauses.includes('7.8.5'));
+ assert.equal((await fetch(base+'/siti.js')).status,200);
+ assert.equal(report.content.sceneAnalysis.mode,'confirmed');assert.equal(report.content.scenes[0].ti,null);
  for(const damage of [c=>c.points[1].ti=0,c=>c.sceneAnalysis.starts=[0,12],c=>c.scenes[1].si.mean+=1,c=>c.scenes.pop(),c=>c.si=c.scenes[1].si,c=>c.points.pop(),c=>c.points[2].t+=1]){
   const broken=structuredClone(report);damage(broken.content);assert.throws(()=>parseReport(JSON.stringify(broken)),/SI\/TI/);
  }

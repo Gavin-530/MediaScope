@@ -6,8 +6,7 @@ import { parsePortable, makePortable, maxPortableBytes, utcFilename } from "./po
 import { plot, gopOverview } from "./charts.js";
 import { basicInfoHTML, initBasicInfo } from "./basic-info.js";
 import {vmafModels} from "./vmaf.js";
-import {validateSitiSceneStarts} from "./siti-scenes.js";
-import {validateSitiSettings} from "./siti-settings.js";
+import {validateSitiSceneStarts,validateSitiSettings} from "./siti.js";
 import {
   parseCrfs,
   rowLabel,
@@ -551,50 +550,25 @@ $("#file").oninput = () => {
 const syncSitiWorkers = () => {
   $("#siti-device").disabled = !$("#complexity").checked;
   $("#siti-workers").disabled = !$("#complexity").checked || $("#siti-device").value === "gpu";
+  $("#siti-gpu-recheck").disabled = !$("#complexity").checked;
   $("#siti-scenes").disabled = !$("#complexity").checked;
   $("#siti-scene-frames").disabled = !$("#complexity").checked || $("#siti-scenes").value !== "confirmed";
   $("#siti-scene-frames-label").classList.toggle("hidden", $("#siti-scenes").value !== "confirmed");
-  for(const id of ['siti-range','siti-transfer','siti-interlaced','siti-scale','siti-matrix','siti-float-encoding','siti-float-depth','siti-alpha'])$('#'+id).disabled=!$('#complexity').checked;
-  const encoding=$('#siti-float-encoding').value,physical=['normalized-linear','absolute-cdm2'].includes(encoding),linear=encoding==='normalized-linear',alpha=!!$('#siti-alpha').value;
-  $('#siti-transfer option[value="pq"]').textContent=alpha?'用户确认：PQ（分量解码后合成）':'用户确认：PQ（保留 PQ 的参考解释）';
-  $('#siti-scale option[value="literal"]').textContent=physical||alpha?'独立物理配置：原位深／等效位深乘数':'P.910（10/2023）原文范围／尺度（默认）';
-  $('#siti-scale option[value="reference-255"]').textContent=physical||alpha?'独立物理配置：固定乘 255':'独立参考配置：原位深端点、固定乘 255';
-  $('#siti-transfer').disabled=!$('#complexity').checked||physical;
-  $('#siti-linear-model').classList.toggle('hidden',!linear);$('#siti-alpha-background').classList.toggle('hidden',!alpha);
-  for(const id of ['siti-linear-white','siti-linear-black'])$('#'+id).disabled=!$('#complexity').checked||!linear;
-  for(const id of ['siti-background-r','siti-background-g','siti-background-b'])$('#'+id).disabled=!$('#complexity').checked||!alpha;
-  const hlg=!physical&&$('#siti-transfer').value==='hlg';$('#siti-hlg-model').classList.toggle('hidden',!hlg);
-  for(const id of ['siti-hlg-white','siti-hlg-black','siti-hlg-gamma'])$('#'+id).disabled=!$('#complexity').checked||!hlg;
+  for(const id of ['siti-range','siti-transfer','siti-interlaced','siti-matrix'])$('#'+id).disabled=!$('#complexity').checked;
+  const hlg=$('#siti-transfer').value==='hlg';$('#siti-hlg-model').classList.toggle('hidden',!hlg);
+  for(const id of ['siti-hlg-white','siti-hlg-black'])$('#'+id).disabled=!$('#complexity').checked||!hlg;
 };
-$("#complexity").onchange = syncSitiWorkers;
-$("#siti-scenes").onchange = syncSitiWorkers;
+$('#complexity').onchange=syncSitiWorkers;
+$('#siti-scenes').onchange=syncSitiWorkers;
 $('#siti-transfer').onchange=syncSitiWorkers;
-$('#siti-float-encoding').onchange=syncSitiWorkers;
-$('#siti-alpha').onchange=syncSitiWorkers;
 function sitiSettingsInput(){
   if(!$('#complexity').checked)return {};
-  const range=$('#siti-range').value,transfer=$('#siti-transfer').value,interlaced=$('#siti-interlaced').value;
-  const scale=$('#siti-scale').value,matrix=$('#siti-matrix').value,floatEncoding=$('#siti-float-encoding').value,floatDepth=$('#siti-float-depth').value;
-  const alpha=$('#siti-alpha').value,physical=['normalized-linear','absolute-cdm2'].includes(floatEncoding);
-  if(range==='auto'&&transfer==='auto'&&interlaced==='reject'&&scale==='literal'&&matrix==='auto'&&!floatEncoding&&!floatDepth&&!alpha)return {};
-  const settings={range,transfer,interlaced};
-  if(scale!=='literal')settings.scale=scale;
-  if(matrix!=='auto')settings.matrix=matrix;
-  if(floatEncoding||floatDepth){if(!floatEncoding||!floatDepth)throw Error('请同时确认浮点输入语义和等效位深');settings.floatEncoding=floatEncoding;settings.floatDepth=Number(floatDepth)}
-  if(physical){if(range!=='pc')throw Error('线性光／绝对亮度浮点须明确选择全范围');settings.transfer='auto'}
-  if(floatEncoding==='normalized-linear'){
-    if(['siti-linear-white','siti-linear-black'].some(id=>!$('#'+id).value.trim()))throw Error('请明确输入线性光的显示峰值和黑位');
-    settings.linearDisplay={whiteCdM2:Number($('#siti-linear-white').value),blackCdM2:Number($('#siti-linear-black').value)};
-  }
-  if(alpha){
-    const ids=['siti-background-r','siti-background-g','siti-background-b'];if(ids.some(id=>!$('#'+id).value.trim()))throw Error('请明确输入三个背景线性 RGB 亮度值（cd/m²）');
-    settings.alpha={mode:alpha,backgroundCdM2:ids.map(id=>Number($('#'+id).value))};
-  }
-  if(transfer==='pq'&&!physical&&!alpha)settings.pqInterpretation='preserve-pq';
-  if(transfer==='hlg'&&!physical){
-    const fields=['siti-hlg-white','siti-hlg-black','siti-hlg-gamma'];
-    if(fields.some(id=>!$('#'+id).value.trim()))throw Error('请填写 HLG 显示峰值、黑位和系统 gamma');
-    settings.hlg={whiteCdM2:Number($('#'+fields[0]).value),blackCdM2:Number($('#'+fields[1]).value),gamma:Number($('#'+fields[2]).value)};
+  const range=$('#siti-range').value,transfer=$('#siti-transfer').value,interlaced=$('#siti-interlaced').value,matrix=$('#siti-matrix').value;
+  if(range==='auto'&&transfer==='auto'&&interlaced==='reject'&&matrix==='auto')return {};
+  const settings={range,transfer,interlaced,matrix};
+  if(transfer==='hlg'){
+    const fields=['siti-hlg-white','siti-hlg-black'];if(fields.some(id=>!$('#'+id).value.trim()))throw Error('请填写 HLG 显示峰值和黑位');
+    settings.hlg={whiteCdM2:Number($('#'+fields[0]).value),blackCdM2:Number($('#'+fields[1]).value)};
   }
   validateSitiSettings(settings);return {sitiSettings:settings};
 }
@@ -605,26 +579,35 @@ function sitiSceneInput(){
   const starts=$("#siti-scenes").value==='single'?[0]:text.split(/[,，\s]+/).map(x=>Number(x)-1);
   validateSitiSceneStarts(starts);return {sitiSceneStarts:starts};
 }
-let sitiGpuCheck;
-$("#siti-device").onchange = async () => {
-  syncSitiWorkers();
-  if ($("#siti-device").value !== "gpu") return;
+let sitiGpuCheck,sitiGpuRevision=0;
+async function checkSitiGpu(force=false){
+  syncSitiWorkers();const revision=++sitiGpuRevision,requested=$("#siti-device").value;
+  if(force)sitiGpuCheck=null;
   $("#siti-device-status").textContent = "正在检查 GPU 并执行 SI/TI 数值自检…";
   try {
     const result = await (sitiGpuCheck ??= api("siti-gpu"));
+    if(revision!==sitiGpuRevision)return;
     $("#siti-device-status").textContent = result.available
-      ? `GPU：${result.device}；数值自检通过。完整逐帧计算，软件解码；运行失败回退 CPU，报告记录原因。`
-      : `GPU 不可用：${result.reason}。已选择 CPU。`;
+      ? `GPU：${result.device}；数值自检通过。软件解码，GPU 双精度前处理与指标；设备执行失败时回退 CPU。`
+      : `GPU 检查未通过：${result.reason}。可重新检查。`;
     if (!result.available) {
-      $("#siti-device").value = "cpu";
-      $("#siti-device option[value=gpu]").disabled = true;
+      sitiGpuCheck=null;
+      if(requested==='gpu'&&$("#siti-device").value==='gpu')$("#siti-device").value = "cpu";
       syncSitiWorkers();
     }
   } catch (e) {
+    if(revision!==sitiGpuRevision)return;
     sitiGpuCheck = null;
     $("#siti-device-status").textContent = `GPU 检查失败：${e.message}。运行时重新检查，失败回退 CPU。`;
   }
-};
+}
+$("#siti-device").onchange=()=>{syncSitiWorkers();++sitiGpuRevision;if($("#siti-device").value==='gpu')void checkSitiGpu();};
+$("#siti-gpu-recheck").onclick=()=>void checkSitiGpu(true);
+function sitiAttemptsHTML(attempts){
+  if(!Array.isArray(attempts)||!attempts.length)return '';
+  const phases={input:'输入',decode:'解码',validation:'数据校验',cpu:'CPU 执行',gpu:'GPU 执行','gpu-initialization':'GPU 初始化',cancelled:'取消'};
+  return `<details><summary>SI/TI 计算尝试与耗时</summary>${table(['设备','耗时','已测帧','结果','失败阶段','原因'],attempts.map(a=>[a.device.toUpperCase(),formatElapsedSeconds(a.elapsedSeconds),a.framesComputed,a.outcome==='passed'?'完成':a.outcome==='cancelled'?'取消':'失败',phases[a.phase]??'',a.reason??'']))}</details>`;
+}
 syncSitiWorkers();
 $("#inspect").onclick = async () => {
   const requested = clean($("#file").value);
@@ -1080,17 +1063,15 @@ function renderMedia(r) {
       `<p class="hint">显示顺序视图。I / P / B 是预测类型；IDR / CRA / BLA 是码流访问类型，二者不混用。GOP 以随机访问/关键帧区间呈现，不据此猜测开放或闭合。</p><div class="row"><label for="frame-axis">大小图横轴</label><select id="frame-axis"><option value="time">呈现时间（s）</option><option value="frame">显示帧序号</option></select><button id="frame-full" class="secondary">查看全片</button></div><p class="hint" id="frame-axis-note"></p><div id="gop-overview"></div><div class="pager"><button id="gop-prev" class="secondary">上一 GOP</button><label>GOP #<input id="gop-index" type="number" min="0" max="${gops.length - 1}" value="0"></label><button id="gop-next" class="secondary">下一 GOP</button><span id="gop-info"></span></div><div id="frame-plot"></div><div id="frame-detail" class="frame-detail"></div><details><summary>逐帧列表 / CSV</summary><div class="pager"><button id="prev" class="secondary">上一页</button><span id="page"></span><button id="next" class="secondary">下一页</button><button id="csv" class="secondary">导出帧 CSV</button></div><div id="frames"></div></details>`,
     );
     if (r.content?.available) {
+      if(r.content.execution?.gpuFallbackReason){sitiGpuCheck=null;$("#siti-device-status").textContent='该任务 GPU 执行失败，实际使用 CPU；可重新检查 GPU。';}
       const e = r.content.execution,
         execution = e
-          ? `<p class="hint">SI/TI 计算设备：${e.device === "gpu" ? `GPU · ${esc(e.gpuName)} · ${esc(e.backend)}；软件解码；数值自检通过` : `CPU · ${e.mode === "frame-parallel" ? `${e.workers} 路帧级并行` : "串行"}；设置 ${e.setting === "auto" ? `自动（请求上限 ${e.requestedWorkers} 路）` : `上限 ${e.requestedWorkers} 路`}`}${e.gpuFallbackReason ? `；GPU 已回退 CPU：${esc(e.gpuFallbackReason)}` : ""}${e.fallbackReason ? `；已回退：${esc(e.fallbackReason)}` : ""}。</p>`
+          ? `<p class="hint">SI/TI 计算设备：${e.device === "gpu" ? `GPU · ${esc(e.gpuName)} · ${esc(e.backend)}；软件解码${e.preprocessingDevice==='gpu'?'；GPU 前处理与指标':''}；数值自检通过` : `CPU · ${e.mode === "frame-parallel" ? `${e.workers} 路帧级并行` : "串行"}；设置 ${e.setting === "auto" ? `自动（请求上限 ${e.requestedWorkers} 路）` : `上限 ${e.requestedWorkers} 路`}`}${e.gpuFallbackReason ? `；GPU 已回退 CPU：${esc(e.gpuFallbackReason)}` : ""}${e.fallbackReason ? `；已回退：${esc(e.fallbackReason)}` : ""}。</p>${sitiAttemptsHTML(e.attempts)}`
           : "";
       html += section(
         "SI/TI 内容复杂度",
-        execution + (e?.configuration?`<p class="hint">计算配置：${esc(e.configuration.profile)}；${e.configuration.assessment==='declared-interpretation'?'按已声明解释计算；标准歧义未消除。':''}${e.configuration.input?`输入 ${esc(e.configuration.input.source.pixelFormat)} · ${e.configuration.input.floatAssumption?'等效 ':''}${e.configuration.inputBitDepth}-bit · ${esc(e.configuration.inputDomain.toUpperCase())} · ${e.configuration.inputRange==='tv'?'有限范围':'全范围'}；范围依据：${e.configuration.input.interpretation.range==='user-confirmed'?'用户确认':'文件声明'}，传递函数依据：${e.configuration.input.interpretation.transfer==='user-confirmed-physical-light'?'用户确认物理亮度':e.configuration.input.interpretation.transfer==='user-confirmed'?'用户确认':'文件声明'}。`:''}</p>`:'') +
-          (e?.configuration?.input?.version===3?`<p class="hint">范围／尺度：${e.configuration.input.scale==='reference-255'?'独立参考配置（原位深合法端点；输出固定乘 255）；显示模型保留本项目参数；不是 ITU 官方勘误':'P.910（10/2023）原文公式'}。${e.configuration.lumaDerivation?`RGB 亮度矩阵 ${esc(e.configuration.lumaDerivation.matrix)}，权重 ${esc(e.configuration.lumaDerivation.coefficients.join(', '))}；依据：${e.configuration.lumaDerivation.source==='user-confirmed'?'用户确认':e.configuration.lumaDerivation.source==='stream-matrix'?'文件矩阵':'文件色原色'}；双精度计算，不先量化。`:''}${e.configuration.input.floatAssumption?`浮点语义：用户确认的 0–1 非线性归一化码值；等效位深 ${e.configuration.input.depth}（计算假设）。`:''}</p>`:'') +
-          (e?.configuration?.input?.version===4?`<p class="hint">独立物理亮度配置：${e.configuration.inputDomain==='linear'?`0–1 显示线性光；黑位 ${fmt(e.configuration.blackCdM2,4)}、峰值 ${fmt(e.configuration.whiteCdM2)} cd/m²`:e.configuration.inputDomain==='absolute'?'绝对显示亮度 cd/m²；不再次执行 EOTF':'原始 RGB 分量先转换为显示线性光'}；在线性光域导出亮度，再编码 PQ；输出乘 ${e.configuration.outputMultiplier}。${e.configuration.lumaDerivation?`RGB 亮度矩阵 ${esc(e.configuration.lumaDerivation.matrix)}，权重 ${esc(e.configuration.lumaDerivation.coefficients.join(', '))}。`:''}${e.configuration.input.floatAssumption?`等效位深 ${e.configuration.input.depth} 属于计算假设。`:''}${e.configuration.alphaComposition?`Alpha：${e.configuration.alphaComposition.mode==='straight'?'直通':'输入信号域预乘'}；同色原色背景线性 RGB ${esc(e.configuration.alphaComposition.backgroundCdM2.join(', '))} cd/m²；显示线性光域 source-over 合成。`:''}该独立输入解释不代表 ITU 官方修正。</p>`:'') +
-          (e?.configuration?.inputDomain==='hlg'?`<p class="hint">HLG 显示模型：峰值 ${fmt(e.configuration.whiteCdM2)} cd/m²；黑位 ${fmt(e.configuration.blackCdM2,4)} cd/m²；系统 gamma ${fmt(e.configuration.gamma,6)}。参数来源：${e.configuration.input.hlgParameterSource==='user-supplied'?'用户输入':'已确认的项目假设'}；${e.configuration.configurationVersion===4?'按完整 RGB 分量及亮度相关 OOTF 解释':'按非彩色亮度信号解释'}。</p>`:'') +
-          (e?.configuration?.preprocessingEvidence?`<p class="hint">用户选择的去隔行：${esc(e.configuration.preprocessingEvidence.filter)}；输出 ${e.configuration.preprocessingEvidence.outputFrameCount} 帧；声明输出帧率 ${esc(e.configuration.preprocessingEvidence.outputFrameRate??'未知')} fps；按时间戳计算的平均帧率 ${fmt(e.configuration.preprocessingEvidence.outputAverageFps,6)} fps。</p>`:'') +
+        execution + (e?.configuration?`<p class="hint">计算流程：${esc(e.configuration.profile)}；${e.configuration.configurationVersion===6?'HLG BT.2100 表 5 · PQ 域 · 固定尺度 255':e.configuration.configurationVersion===5&&e.configuration.inputDomain!=='hlg'?'VQEG 公开参考流程 · PQ 域 · 固定尺度 255':'历史计算口径，保留原值'}。输入 ${esc(e.configuration.input?.source?.pixelFormat??'')} · ${esc(e.configuration.inputDomain??'SDR')} · ${e.configuration.inputBitDepth}-bit · ${e.configuration.inputRange==='tv'?'有限范围':'全范围'}。</p>`:'') +
+          (e?.configuration?.display?`<p class="hint">参考显示模型：峰值 ${fmt(e.configuration.display.whiteCdM2)}、黑位 ${fmt(e.configuration.display.blackCdM2,4)} cd/m²；gamma ${fmt(e.configuration.display.gamma,6)}。</p>`:'') +
           (r.content.scenes?.length>1?table(
             ["场景", "显示帧（从 1 计）", "SI 均值", "SI P95", "SI 最大值", "TI 均值", "TI P95", "TI 最大值"],
             r.content.scenes.map(s=>[s.index+1,`${s.startFrame+1}–${s.endFrame+1}`,fmt(s.si.mean),fmt(s.si.p95),fmt(s.si.max),fmt(s.ti?.mean),fmt(s.ti?.p95),fmt(s.ti?.max)]),
@@ -1098,7 +1079,7 @@ function renderMedia(r) {
           [["SI", r.content.si], ["TI", r.content.ti]].map(([metric, stats]) => `<div class="siti-chart-heading"><h4>${metric}</h4>${r.content.scenes?.length > 1 ? "" : `<dl>${[["均值", stats?.mean], ["P95", stats?.p95], ["最大值", stats?.max]].map(([name, value]) => `<div><dt>${name}</dt><dd>${fmt(value)}</dd></div>`).join("")}</dl>`}</div><div id="${metric.toLowerCase()}"></div>`).join("") +
           notices(r.content.notes),
       );
-    } else if (r.content) html += notices([r.content.reason]);
+    } else if (r.content) html += notices([r.content.reason])+sitiAttemptsHTML(r.content.attempts);
     if (r.coding?.codec === "av1")
       html += section(
         "AV1 编码帧 / 显示事件",

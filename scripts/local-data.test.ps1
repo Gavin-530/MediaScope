@@ -45,7 +45,7 @@ try{
   Assert (Test-Path -LiteralPath (Join-Path $work 'local-notes/note.json')) 'Protected receipt deleted'
   Assert ((Get-FileHash -LiteralPath $platformFile).Hash -eq $platformHash) 'Cleanup changed platform archive content'
   Assert ((Clean).code -eq 0) 'Missing build directory should be harmless'
-  foreach($item in @('analysis.mjs','siti.mjs','siti-gpu.mjs','siti-validation.mjs','siti-p910.mjs','siti-p910-worker.mjs','gpu','engine.mjs','server.mjs','package.json','README.md','start.cmd','Uninstall.cmd','runtime-lock.json','public','licenses')){
+  foreach($item in @('analysis.mjs','siti.mjs','gpu','engine.mjs','server.mjs','package.json','README.md','start.cmd','Uninstall.cmd','runtime-lock.json','public','licenses')){
     Copy-Item -LiteralPath (Join-Path $project $item) -Destination $work -Recurse
   }
   foreach($file in @('package.ps1','deployment.ps1','manage.ps1','install-location.ps1','uninstall.ps1','check-environment.mjs','desktop.mjs','runtime-data.mjs','time.mjs','validate-launch.ps1')){

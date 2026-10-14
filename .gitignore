@@ -2,8 +2,11 @@
 .mediascope/
 .mediascope-saved-media/
 test-work/
+/tmp/
 .build/
 node_modules/
+__pycache__/
+*.py[cod]
 /local-test-archive/
 /evidence-archive/*
 !/evidence-archive/tools/

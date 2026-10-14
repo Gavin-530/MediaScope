@@ -60,12 +60,8 @@ test('[test-system] successful critical checks require retained measurement data
   await assert.rejects(saveMeasurements(work,work,{requiredMeasurements:criticalMeasurements}),/Missing critical measurement evidence/);
   await fs.writeFile(path.join(p910,'parallel-equivalence.json'),JSON.stringify({outcome:'passed'}));
   await assert.rejects(saveMeasurements(work,work,{requiredMeasurements:criticalMeasurements}),/Missing critical measurement evidence/);
-  await fs.writeFile(path.join(p910,'gpu-equivalence.json'),JSON.stringify({outcome:'passed'}));
-  for(const name of ['extended-equivalence.json','deinterlace-equivalence.json','extended-gpu-equivalence.json','input-equivalence.json','input-gpu-equivalence.json','physical-equivalence.json','physical-gpu-equivalence.json']){
-    await assert.rejects(saveMeasurements(work,work,{requiredMeasurements:criticalMeasurements}),/Missing critical measurement evidence/);
-    await fs.writeFile(path.join(p910,name),JSON.stringify({outcome:'passed'}));
-  }
-  assert.equal((await saveMeasurements(work,work,{requiredMeasurements:criticalMeasurements})).measurements,12);
+  await fs.writeFile(path.join(p910,'deinterlace-equivalence.json'),JSON.stringify({outcome:'passed'}));
+  assert.equal((await saveMeasurements(work,work,{requiredMeasurements:criticalMeasurements})).measurements,5);
  } finally {assert.ok(work.startsWith(path.resolve('test-work')+path.sep));await fs.rm(work,{recursive:true,force:true})}
 });
 

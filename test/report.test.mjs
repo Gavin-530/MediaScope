@@ -1,11 +1,15 @@
 import {test,before,after} from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import {readFile} from 'node:fs/promises';
 import {parseReport} from '../public/report.js';
 import {makeMedia} from './helpers/real-media.mjs';
 import {startServer,waitForJob} from './helpers/server.mjs';
 import {legacyFrameSample} from './helpers/basic-properties.mjs';
 import {FF,run} from '../engine.mjs';
+import {sitiInputFixture} from './helpers/siti-inputs.mjs';
+import {sitiSceneSummary,SITI_PROFILE,SITI_HLG_PROFILE} from '../public/siti.js';
+const sitiVectors=JSON.parse(await readFile(new URL('./reference/siti/vqeg-pq.json',import.meta.url),'utf8'));
 let app,reports={};
 before(async()=>{
  const root=path.resolve('test-work/report-validation'),media=await makeMedia(path.join(root,'media'));
@@ -20,6 +24,8 @@ before(async()=>{
   assert.equal(done.status,'done',JSON.stringify(done));reports[input.type]=await app.request(`jobs/${job.id}/report`);
  }
  const unknown=path.join(root,'undeclared.nut');
+ const hlgCase=sitiVectors.cases.find(c=>c.name===sitiVectors.legacyHlg.case),hlg=await sitiInputFixture(path.join(root,'media'),hlgCase);
+ const hlgJob=await app.request('jobs','POST',{type:'analyze',file:hlg.file,stream:0,complexity:true,sitiSettings:hlgCase.settings});assert.equal((await waitForJob(app.request,hlgJob.id)).status,'done');reports.hlg=await app.request(`jobs/${hlgJob.id}/report`);
  await run(FF,['-v','error','-y','-f','lavfi','-i','testsrc2=s=96x64:r=4:d=1,format=yuv422p10le,setparams=range=unknown:color_primaries=unknown:color_trc=unknown:colorspace=unknown','-c:v','rawvideo','-pix_fmt','yuv422p10le','-f','nut',unknown]);
  for(const [name,input]of [
   ['undeclared',{type:'compare',reference:unknown,candidate:unknown,refStream:0,candidateStream:0,confirm:true,metrics:['vmaf']}],
@@ -34,6 +40,33 @@ after(async()=>{await app?.stop()});
 test('all four actual report types round trip without altering measurements, tools or command evidence',()=>{
  for(const report of Object.values(reports))assert.deepEqual(parseReport('\uFEFF'+JSON.stringify(report)),report);
  assert.equal(reports.analyze.content.points[0].ti,null);assert.equal(reports.analyze.content.execution.configuration.standard,'ITU-T P.910 (10/2023)');
+});
+test('historical SI/TI reports preserve their original method, settings and measured values',()=>{
+ const report=structuredClone(reports.analyze);
+ report.content.execution={...report.content.execution,method:'P910-2023-SDR-BT1886-text-v1',configuration:{profile:'P910-2023-SDR-BT1886-text-v1',standard:'ITU-T P.910 (10/2023)',inputBitDepth:8,inputRange:'tv',outputMultiplier:255,blackCdM2:.01}};
+ assert.deepEqual(parseReport(JSON.stringify(report)),report);
+});
+
+test('SI/TI attempt evidence rejects contradictory devices, counts and timings while accepting older reports',()=>{
+ const original=reports.analyze,e=original.content.execution;
+ assert.equal(e.attempts.at(-1).framesComputed,original.frames.length);
+ for(const damage of [a=>a.device='gpu',a=>a.framesComputed--,a=>a.elapsedSeconds=-1,a=>a.timeToFirstPointSeconds=a.elapsedSeconds+1,a=>a.outcome='failed']){
+  const broken=structuredClone(original);damage(broken.content.execution.attempts.at(-1));assert.throws(()=>parseReport(JSON.stringify(broken)),/attempts/);
+ }
+ const legacy=structuredClone(original);delete legacy.content.execution.attempts;assert.deepEqual(parseReport(JSON.stringify(legacy)),legacy);
+ const failed=structuredClone(original);failed.content={available:false,reason:'测试输入错误',errorPhase:'input',attempts:[{device:'gpu',workers:1,outcome:'failed',framesComputed:0,elapsedSeconds:.1,phase:'input',reason:'测试输入错误'}]};
+ assert.deepEqual(parseReport(JSON.stringify(failed)),failed);
+ failed.content.attempts[0].outcome='passed';assert.throws(()=>parseReport(JSON.stringify(failed)),/attempts/);
+});
+
+test('HLG corrected and historical reports retain distinct formulas and reject damaged declarations',()=>{
+ const corrected=reports.hlg;assert.equal(corrected.content.execution.method,SITI_HLG_PROFILE);assert.equal(corrected.content.execution.configuration.configurationVersion,6);
+ const historical=structuredClone(corrected),e=historical.content.execution,c=e.configuration,{whiteCdM2:white,blackCdM2:black}=c.input.hlg;
+ e.method=SITI_PROFILE;c.profile=SITI_PROFILE;c.configurationVersion=5;c.referenceAgreement='VQEG PQ pipeline; integer storage and RGB luma adapters';
+ c.input.hlg={whiteCdM2:white,blackCdM2:black};c.display={whiteCdM2:white,blackCdM2:black,gamma:white<=1000?1.2:1.2+.42*Math.log10(white/1000)};
+ historical.content.points=historical.content.points.map((p,i)=>({...p,...sitiVectors.legacyHlg.expected[i]}));Object.assign(historical.content,sitiSceneSummary(historical.content.points));historical.content.notes=['历史 HLG 参考公式；保留原值。'];
+ assert.deepEqual(parseReport(JSON.stringify(historical)),historical);assert.notDeepEqual(historical.content.points,corrected.content.points);
+ for(const report of [corrected,historical])for(const damage of [c=>c.display.gamma+=.01,c=>c.input.hlg.blackCdM2+=.001,c=>c.profile='changed']){const broken=structuredClone(report);damage(broken.content.execution.configuration);assert.throws(()=>parseReport(JSON.stringify(broken)),/configuration/)}
 });
 test('real report parser rejects unknown versions and deliberately removed required structures',()=>{
  for(const report of Object.values(reports))assert.throws(()=>parseReport(JSON.stringify({...report,schema:'MediaScope/unsupported'})),/版本/);

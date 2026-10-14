@@ -100,8 +100,12 @@ class SiTiCalculator:
     DEFAULT_L_MIN_HDR = 0.01
     DEFAULT_L_MAX_HDR = 1000.0
 
-    LIMITED_RANGE_MIN = 16 / 255
-    LIMITED_RANGE_MAX = 235 / 255
+    # Limited range values for different bit depths
+    LIMITED_RANGE = {
+        8: {"min": 16, "max": 235},
+        10: {"min": 64, "max": 940},
+        12: {"min": 256, "max": 3760},
+    }
 
     @staticmethod
     def from_settings(settings: Dict):
@@ -136,15 +140,12 @@ class SiTiCalculator:
             gamma (float, optional): Set the BT.1886 gamma. Defaults to 2.4.
             pu21_mode (Pu21Mode, optional): Set the default PU21 mode. Defaults to BANDING.
             verbose (bool, optional): Show verbose logging for the first frame.
-            show_histogram (bool, optional): Show a histogram for the first frame (computation-intensive, implies verbose=True).
+            show_histogram (bool, optional): Show a histogram for the first frame (computation-intensive).
             legacy (bool, optional): Use legacy SI/TI calculation. Defaults to False.
         """
         self.verbose = verbose
         self.show_histogram = show_histogram
         self.legacy = legacy
-
-        if self.show_histogram:
-            self.verbose = True
 
         self.callbacks: List[Callable] = []
 
@@ -489,7 +490,7 @@ class SiTiCalculator:
         if l_max <= 1000.0:
             gamma = 1.2
         else:
-            gamma = 1.2 + 0.42 * np.log10(l_max/1000.0)
+            gamma = 1.2 + 0.42 * np.log10(l_max / 1000.0)
 
         frame_data = (frame_data <= 0.5) * (np.power(frame_data, 2.0) / 3.0) + (
             frame_data > 0.5
@@ -519,9 +520,32 @@ class SiTiCalculator:
 
     def normalize_between_0_1(self, frame_data: Union[np.ndarray, float]):
         """
-        Normalize frame data in the range [0, x] to [0, 1], based on bit depth.
+        Normalize frame data in the range [0, x] to [0, 1], based on bit depth and color range.
+        For limited range, this directly converts from limited range values to [0, 1].
         """
-        return frame_data / (2**self.bit_depth - 1)
+        if self.color_range == ColorRange.LIMITED:
+            # Get the limited range values for the current bit depth
+            limited_min = self.LIMITED_RANGE[self.bit_depth]["min"]
+            limited_max = self.LIMITED_RANGE[self.bit_depth]["max"]
+
+            # Check if input is within expected limited range
+            input_min = np.min(frame_data)
+            input_max = np.max(frame_data)
+
+            # Provide a warning if values are outside limited range
+            if input_min < limited_min or input_max > limited_max:
+                raise RuntimeError(
+                    f"Input appears to be full range, but it is treated as limited range! "
+                    f"Input range is [{int(input_min)}-{int(input_max)}]. "
+                    f"Expected range for {self.bit_depth}-bit limited content [{limited_min}-{limited_max}]. "
+                    "Specify the range as full instead."
+                )
+
+            # Normalize from limited range directly to [0, 1]
+            return (frame_data - limited_min) / (limited_max - limited_min)
+        else:
+            # Full range: normalize from [0, 2^bit_depth - 1] to [0, 1]
+            return frame_data / (2**self.bit_depth - 1)
 
     def add_frame_callback(
         self, callback_fn: Callable[[float, Union[float, None], int], None]
@@ -532,39 +556,6 @@ class SiTiCalculator:
             callback_fn (Callable[[float, Union[float, None], int], None]): The function that should get called. It will receive SI, TI and the frame number.
         """
         self.callbacks.append(callback_fn)
-
-    def handle_limited_range(self, frame_data) -> np.ndarray:
-        """
-        Transforms data from limited range to full range. We expect the input to be in [16/255, 235/255] already.
-        Apply this to limited range content only! If we exceed the limited range, an error will be raised.
-
-        Args:
-            frame_data (np.ndarray): The frame data in limited range.
-
-        Returns:
-            frame_data: The frame data in full range between [0, 1].
-        """
-        input_min = np.min(frame_data)
-        input_max = np.max(frame_data)
-        if (input_min + 0.001 < self.LIMITED_RANGE_MIN) or (
-            input_max - 0.001 > self.LIMITED_RANGE_MAX
-        ):
-            # inform the user about the original range
-            raise RuntimeError(
-                "Input appears to be full range, but it is treated as limited range SDR! "
-                f"Input range is [{int(self.normalize_to_original_range(input_min))}-{int(self.normalize_to_original_range(input_max))}]. "
-                f"Expected range for limited content [{int(self.normalize_to_original_range(self.LIMITED_RANGE_MIN))}-{int(self.normalize_to_original_range(self.LIMITED_RANGE_MAX))}]. "
-                "Specify the range as full instead."
-            )
-        # scale up to full range
-        frame_data = np.clip(
-            (frame_data - self.LIMITED_RANGE_MIN)
-            / (self.LIMITED_RANGE_MAX - self.LIMITED_RANGE_MIN),
-            0,
-            1,
-        )
-
-        return frame_data
 
     @staticmethod
     def plot_histogram(frame_data: np.ndarray) -> str:
@@ -599,7 +590,7 @@ class SiTiCalculator:
 
         current_frame = 0
         for frame_data in read_container(input_file):
-            self.verbose and logger.debug(f"Frame {current_frame+1}")
+            self.verbose and logger.debug(f"Frame {current_frame + 1}")
 
             if current_frame == 0:
                 logger.debug("Original frame data")
@@ -607,38 +598,17 @@ class SiTiCalculator:
 
             # Normalize frame data according to bit depth between 0 and 1.
             # This will transform [0, 255] to [0, 1], and [0, 1023] to [0, 1] etc.
-            if not self.legacy:
-                frame_data = self.normalize_between_0_1(frame_data)
+            # For limited range, this directly converts from limited range values to [0, 1].
+            frame_data = self.normalize_between_0_1(frame_data)
 
-                if current_frame == 0:
-                    logger.debug("Frame data after normalization between 0 and 1")
-                    self._log_frame_data(frame_data)
+            if current_frame == 0:
+                logger.debug("Frame data after normalization between 0 and 1")
+                self._log_frame_data(frame_data)
 
-                # convert limited to full range
-                if self.color_range == ColorRange.LIMITED:
-                    frame_data = self.handle_limited_range(frame_data)
-                    if current_frame == 0:
-                        logger.debug("Frame data after limited-range normalization")
-                        self._log_frame_data(frame_data)
-                else:
-                    # in full range, we do not have to further process the data
-                    pass
+            if self.legacy:
+                # in legacy mode we'll compute the values directly in the SDR domain
+                pass
             else:
-                if self.color_range == ColorRange.LIMITED:
-                    # legacy mode, apply the old way of normalizing data between 16-235
-                    input_min = np.min(frame_data)
-                    input_max = np.max(frame_data)
-                    if input_min < 16 or input_max > 235:
-                        raise RuntimeError(
-                            f"Input appears to be full range ([{input_min}, {input_max}]), specify --color-range=full!"
-                        )
-                    # convert to grey by assumng limited range input
-                    frame_data = np.around((frame_data - 16) / ((235 - 16) / 255))
-                else:
-                    # in full range, we do not have to further process the data
-                    pass
-
-            if not self.legacy:
                 if self.hdr_mode == HdrMode.SDR:
                     frame_data = SiTiCalculator.apply_display_model(
                         frame_data,
@@ -684,29 +654,20 @@ class SiTiCalculator:
                 else:
                     raise RuntimeError(f"Invalid HDR mode '{self.hdr_mode}'")
 
-            if not self.legacy:
-                si_value = self.normalize_to_original_si_range(
-                    SiTiCalculator.si(frame_data)
-                )
-            else:
-                si_value = SiTiCalculator.si(frame_data)
+            si_value = self.normalize_to_original_si_range(
+                SiTiCalculator.si(frame_data)
+            )
+
             if current_frame != 0:
-                if not self.legacy:
-                    ti_value = self.normalize_to_original_si_range(
-                        cast(float, SiTiCalculator.ti(frame_data, previous_frame_data))
-                    )
-                else:
-                    ti_value = SiTiCalculator.ti(frame_data, previous_frame_data)
+                ti_value = self.normalize_to_original_si_range(
+                    cast(float, SiTiCalculator.ti(frame_data, previous_frame_data))
+                )
             else:
                 ti_value = None
 
-            logger.debug(
-                f"SI value {np.around(SiTiCalculator.si(frame_data), 3)}, normalized: {np.around(self.normalize_to_original_si_range(SiTiCalculator.si(frame_data)), 3)}"
-            )
+            logger.debug(f"SI value {np.around(si_value, 3)}")
             if ti_value is not None:
-                logger.debug(
-                    f"TI value {np.around(cast(float, SiTiCalculator.ti(frame_data, previous_frame_data)), 3)}, normalized: {np.around(self.normalize_to_original_si_range(cast(float, SiTiCalculator.ti(frame_data, previous_frame_data))), 3)}"
-                )
+                logger.debug(f"TI value {np.around(ti_value, 3)}")
 
             self.si_values.append(cast(float, si_value))
             if ti_value is not None:
@@ -751,12 +712,43 @@ class SiTiCalculator:
             )
         return output.getvalue()
 
+    def get_statistics(self) -> Dict:
+        """
+        Calculate statistics (min, max, median, average) for SI and TI values.
+
+        NaN values are ignored in the calculation using numpy's NaN-aware functions.
+
+        Returns:
+            dict: A dictionary containing statistics for SI and TI.
+        """
+        stats = {}
+
+        if self.si_values:
+            si_array = np.array(self.si_values)
+            stats["si"] = {
+                "min": float(np.nanmin(si_array)),
+                "max": float(np.nanmax(si_array)),
+                "mean": float(np.nanmean(si_array)),
+                "median": float(np.nanmedian(si_array)),
+            }
+
+        if self.ti_values:
+            ti_array = np.array(self.ti_values)
+            stats["ti"] = {
+                "min": float(np.nanmin(ti_array)),
+                "max": float(np.nanmax(ti_array)),
+                "mean": float(np.nanmean(ti_array)),
+                "median": float(np.nanmedian(ti_array)),
+            }
+
+        return stats
+
     def get_results(self) -> Dict:
         """
         Get a JSON-serializable result dictionary with SI, TI values, as well as used settings.
 
         Returns:
-            dict: A dictionary containing "si", "ti" arrays, "settings" as a dict, and the "input_file" name.
+            dict: A dictionary containing "si", "ti" arrays, "settings" as a dict, "input_file" name, and "aggregated_statistics" with min/max/mean/median.
         """
         return {
             "si": self.si_values,
@@ -765,6 +757,7 @@ class SiTiCalculator:
             "input_file": os.path.basename(self.last_input_file)
             if self.last_input_file is not None
             else "",
+            "aggregated_statistics": self.get_statistics(),
         }
 
     def _log_frame_data(self, frame_data: np.ndarray):
@@ -772,4 +765,4 @@ class SiTiCalculator:
             f"  [{np.around(np.min(frame_data), 3)}, {np.around(np.max(frame_data), 3)}], mean {np.around(np.mean(frame_data), 3)}, median {np.around(np.median(frame_data), 3)}"
         )
         if self.show_histogram:
-            logger.debug("\n" + SiTiCalculator.plot_histogram(frame_data))
+            logger.info("\n" + SiTiCalculator.plot_histogram(frame_data))

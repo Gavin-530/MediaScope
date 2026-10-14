@@ -13,8 +13,8 @@ import {metadataSummary} from '../analysis.mjs';
 import {legacyFrameSample} from './helpers/basic-properties.mjs';
 import {formatBytes, byteEvidence, quantityScale} from '../public/units.js';
 import {bitrateView} from '../public/bitrate-model.js';
-import {extendedSitiFixture} from './helpers/siti-extended.mjs';
 import {sitiInputFixture} from './helpers/siti-inputs.mjs';
+import {sitiSceneSummary,SITI_PROFILE} from '../public/siti.js';
 
 const root=path.resolve('test-work/browser');
 let browser,media,sequence=0;
@@ -262,77 +262,33 @@ scenario('[basic-properties] real subtitles attachments chapters and narrow layo
   assert.deepEqual(exported.results[0].report,report);
 });
 
-scenario('[analysis] SI/TI RGB float interpretation and independent reference scale survive GUI plans and reports',async({page,app,dir})=>{
-  const vectors=JSON.parse(await readFile(new URL('./reference/siti/p910-2023-inputs.json',import.meta.url),'utf8'));
-  const c=vectors.cases.find(c=>c.name==='gbrpf32le-reference-255'),fixture=await sitiInputFixture(dir,c);
-  await preview(page,fixture.file);await page.locator('#complexity').check();await page.locator('details.siti-options summary').click();
-  assert.equal(await page.locator('#siti-scale').inputValue(),'literal');
-  assert.match(await page.locator('details.siti-options').innerText(),/输入格式适配属于软件扩展/);
-  assert.match(await page.locator('#siti-scale option:checked').innerText(),/原文范围／尺度/);
-  await page.locator('#siti-scale').selectOption('reference-255');await page.locator('#siti-range').selectOption('pc');await page.locator('#siti-transfer').selectOption('pq');
-  await page.locator('#siti-matrix').selectOption(c.matrix);await page.locator('#siti-float-encoding').selectOption('normalized-nonlinear');await page.locator('#siti-float-depth').selectOption(String(c.depth));await page.locator('#siti-scenes').selectOption('single');
-  const {report}=await runTask(page,app,'#analyze');
-  assert.equal(report.content.execution.configuration.profile,'P910-2023-reference-255-v1');assert.equal(report.content.execution.configuration.input.floatAssumption.equivalentBitDepth,c.depth);
-  assert.equal(report.content.execution.configuration.outputMultiplier,255);assert.match(await page.locator('#inspect-details').innerText(),/浮点语义：用户确认的 0–1 非线性/);
-  assert.match(await page.locator('#inspect-details').innerText(),/gbrpf32le · 等效 10-bit/);
-  assert.match(await page.locator('#inspect-details').innerText(),new RegExp('RGB 亮度矩阵 '+c.matrix));assert.match(await page.locator('#inspect-details').innerText(),/不是 ITU 官方勘误/);
-  const exported=await download(page,'#inspect-export',path.join(dir,'float-siti.json'));assert.deepEqual(exported.results[0].report,report);
-  await importReport(page,path.join(dir,'float-siti.json'));assert.match(await page.locator('#inspect-details').innerText(),/等效位深 10/);
-  const queued=page.waitForResponse(r=>r.url().endsWith('/api/jobs')&&r.request().method()==='POST');await page.locator('#enqueue-analyze').click();const input=(await queued).request().postDataJSON();
-  assert.equal(input.sitiSettings.floatEncoding,'normalized-nonlinear');assert.equal(input.sitiSettings.floatDepth,10);assert.equal(input.sitiSettings.scale,'reference-255');
-  const plans=await app.request('plans');assert.deepEqual(plans.plans.at(-1).input.sitiSettings,input.sitiSettings);
-  await page.screenshot({path:path.join(dir,'float-siti.png'),fullPage:true});
-});
-
-scenario('[analysis] SI/TI physical light and explicit Alpha background survive GUI plans and reports',async({page,app,dir})=>{
-  const vectors=JSON.parse(await readFile(new URL('./reference/siti/p910-2023-physical.json',import.meta.url),'utf8'));
-  for(const name of ['gbrapf32le-normalized-linear-premultiplied-signal-reference-255','gbrpf32be-absolute-cdm2-opaque-literal','gbrapf32be-hlg-straight-reference-255']){
-    const c=vectors.cases.find(x=>x.name===name),fixture=await sitiInputFixture(dir,c);
+scenario('[analysis] SI/TI reference settings and HLG display survive GUI plans and reports',async({page,app,dir})=>{
+  const vectors=JSON.parse(await readFile(new URL('./reference/siti/vqeg-pq.json',import.meta.url),'utf8'));
+  for(const name of ['rgb24-sdr-pc','gray12le-hlg-pc','gray10le-hlg-tv-display']){
+    const c=vectors.cases.find(c=>c.name===name),fixture=await sitiInputFixture(dir,c);
     await preview(page,fixture.file);await page.locator('#complexity').check();
-    if(!await page.locator('#siti-float-encoding').isVisible())await page.locator('details.siti-options summary').click();
-    await page.locator('#siti-range').selectOption('pc');await page.locator('#siti-scale').selectOption(c.settings.scale);await page.locator('#siti-matrix').selectOption(c.matrix);
-    await page.locator('#siti-float-encoding').selectOption(c.settings.floatEncoding);await page.locator('#siti-float-depth').selectOption(String(c.depth));
-    const physical=['normalized-linear','absolute-cdm2'].includes(c.settings.floatEncoding);
-    assert.equal(await page.locator('#siti-transfer').isDisabled(),physical);
-    if(!physical)await page.locator('#siti-transfer').selectOption(c.settings.transfer);
-    if(c.settings.linearDisplay){assert.equal(await page.locator('#siti-linear-white').inputValue(),'');await page.locator('#siti-linear-white').fill(String(c.settings.linearDisplay.whiteCdM2));await page.locator('#siti-linear-black').fill(String(c.settings.linearDisplay.blackCdM2))}
-    await page.locator('#siti-alpha').selectOption(c.settings.alpha?.mode??'');
-    if(c.settings.alpha)for(const [i,id] of ['r','g','b'].entries())await page.locator('#siti-background-'+id).fill(String(c.settings.alpha.backgroundCdM2[i]));
+    if(!await page.locator('#siti-range').isVisible())await page.locator('details.siti-options summary').click();
+    assert.equal(await page.locator('#siti-scale').count(),0);assert.equal(await page.locator('#siti-float-depth').count(),0);assert.equal(await page.locator('#siti-alpha').count(),0);
+    await page.locator('#siti-range').selectOption(c.range);await page.locator('#siti-transfer').selectOption(c.domain);await page.locator('#siti-matrix').selectOption(c.matrix??'auto');
+    if(c.domain==='hlg'){if(name==='gray12le-hlg-pc')assert.equal(await page.locator('#siti-hlg-white').inputValue(),'1000');await page.locator('#siti-hlg-white').fill('2000');if(c.settings.hlg)await page.locator('#siti-hlg-black').fill(String(c.settings.hlg.blackCdM2))}
     await page.locator('#siti-scenes').selectOption('single');
-    const {report}=await runTask(page,app,'#analyze'),config=report.content.execution.configuration;
-    assert.equal(config.configurationVersion,4);assert.equal(config.input.floatAssumption.encoding,c.settings.floatEncoding);
-    assert.match(await page.locator('#inspect-details').innerText(),/独立物理亮度配置/);
-    assert.match(await page.locator('#inspect-details').innerText(),physical?/传递函数依据：用户确认物理亮度/:/传递函数依据：用户确认/);
-    if(c.domain==='hlg'){
-      assert.match(await page.locator('#inspect-details').innerText(),/按完整 RGB 分量及亮度相关 OOTF 解释/);
-      assert.doesNotMatch(await page.locator('#inspect-details').innerText(),/按非彩色亮度信号解释/);
-    }
-    if(c.settings.alpha){assert.deepEqual(config.alphaComposition.backgroundCdM2,c.settings.alpha.backgroundCdM2);assert.match(await page.locator('#inspect-details').innerText(),/背景线性 RGB 0.02, 17, 203 cd\/m²/)}
-    else assert.match(await page.locator('#inspect-details').innerText(),/绝对显示亮度 cd\/m²；不再次执行 EOTF/);
+    const {report}=await runTask(page,app,'#analyze');assert.equal(report.content.available,true,report.content.reason);
+    assert.equal(report.content.execution.configuration.configurationVersion,c.domain==='hlg'?6:5);assert.equal(report.content.execution.configuration.outputMultiplier,255);
+    if(c.domain==='hlg')assert.equal(report.content.execution.configuration.display.whiteCdM2,2000);
+    assert.match(await page.locator('#inspect-details').innerText(),c.domain==='hlg'?/HLG BT.2100 表 5/:/VQEG 公开参考流程/);
     const file=path.join(dir,name+'.json'),exported=await download(page,'#inspect-export',file);assert.deepEqual(exported.results[0].report,report);
-    await importReport(page,file);assert.match(await page.locator('#inspect-details').innerText(),/独立物理亮度配置/);
+    await importReport(page,file);assert.match(await page.locator('#inspect-details').innerText(),/固定尺度 255/);
     const response=page.waitForResponse(r=>r.url().endsWith('/api/jobs')&&r.request().method()==='POST');await page.locator('#enqueue-analyze').click();const submitted=(await response).request().postDataJSON();
-    assert.equal(submitted.sitiSettings.floatEncoding,c.settings.floatEncoding);assert.deepEqual(submitted.sitiSettings.alpha,c.settings.alpha);
     const plans=await app.request('plans');assert.deepEqual(plans.plans.at(-1).input.sitiSettings,submitted.sitiSettings);
-    await page.screenshot({path:path.join(dir,c.domain==='hlg'?'physical-hlg-alpha-siti.png':c.settings.alpha?'physical-alpha-siti.png':'physical-absolute-siti.png'),fullPage:true});
+    await page.screenshot({path:path.join(dir,name+'.png'),fullPage:true});
+    if(name===vectors.legacyHlg.case){
+      const legacy=structuredClone(exported),old=legacy.results[0].report,e=old.content.execution,cfg=e.configuration,{whiteCdM2:white,blackCdM2:black}=cfg.input.hlg;
+      e.method=SITI_PROFILE;cfg.profile=SITI_PROFILE;cfg.configurationVersion=5;cfg.referenceAgreement='VQEG PQ pipeline; integer storage and RGB luma adapters';cfg.input.hlg={whiteCdM2:white,blackCdM2:black};cfg.display={whiteCdM2:white,blackCdM2:black,gamma:white<=1000?1.2:1.2+.42*Math.log10(white/1000)};
+      old.content.points=old.content.points.map((p,i)=>({...p,...vectors.legacyHlg.expected[i]}));Object.assign(old.content,sitiSceneSummary(old.content.points,[0]));old.content.notes=['历史 HLG 参考公式；保留原值。'];
+      const oldFile=path.join(dir,'historical-hlg.json');await writeFile(oldFile,JSON.stringify(legacy));await importReport(page,oldFile);assert.match(await page.locator('#inspect-details').innerText(),/历史计算口径，保留原值/);
+      const roundTrip=await download(page,'#inspect-export',path.join(dir,'historical-hlg-roundtrip.json'));assert.deepEqual(roundTrip.results.at(-1).report,old);
+    }
   }
-});
-
-scenario('[analysis] SI/TI extended HLG assumptions and deinterlace selection survive GUI export and import',async({page,app,dir})=>{
-  const vectors=JSON.parse(await readFile(new URL('./reference/siti/p910-2023-extended.json',import.meta.url),'utf8'));
-  const fixture=await extendedSitiFixture(dir,vectors.cases.find(c=>c.name==='hlg-12-pc'),{interlaced:true});
-  await preview(page,fixture.file);await page.locator('#complexity').check();
-  await page.locator('details.siti-options summary').click();await page.locator('#siti-transfer').selectOption('hlg');await page.locator('#siti-interlaced').selectOption('bwdif');
-  assert.equal(await page.locator('#siti-hlg-white').inputValue(),'1000');assert.equal(await page.locator('#siti-hlg-black').inputValue(),'0.01');assert.equal(await page.locator('#siti-hlg-gamma').inputValue(),'1.2');
-  await page.locator('#siti-hlg-white').fill('2000');await page.locator('#siti-hlg-gamma').fill('1.3264326');await page.locator('#siti-scenes').selectOption('single');
-  const {report}=await runTask(page,app,'#analyze');
-  assert.equal(report.content.execution.configuration.inputDomain,'hlg');assert.equal(report.content.execution.configuration.whiteCdM2,2000);assert.equal(report.content.execution.configuration.preprocessingEvidence.outputFrameCount,5);
-  assert.match(await page.locator('#inspect-details').innerText(),/HLG/);assert.match(await page.locator('#inspect-details').innerText(),/BWDIF/);
-  assert.match(await page.locator('#inspect-details').innerText(),/按非彩色亮度信号解释/);
-  assert.match(await page.locator('#inspect-details').innerText(),/声明输出帧率 24\/1 fps/);assert.match(await page.locator('#inspect-details').innerText(),/系统 gamma 1\.326433/);
-  const exported=await download(page,'#inspect-export',path.join(dir,'extended-siti.json'));assert.deepEqual(exported.results[0].report,report);
-  await importReport(page,path.join(dir,'extended-siti.json'));assert.match(await page.locator('#inspect-details').innerText(),/2000/);
-  await page.screenshot({path:path.join(dir,'extended-siti.png'),fullPage:true});
 });
 
 scenario('[analysis] GPU SI/TI selection preserves the P.910 SDR method and displays the actual device',async({page,app})=>{
@@ -344,11 +300,21 @@ scenario('[analysis] GPU SI/TI selection preserves the P.910 SDR method and disp
   assert.equal(await page.locator('#siti-workers').isDisabled(),capability.available);
   const {report}=await runTask(page,app,'#analyze');
   assert.equal(report.content.execution.device,capability.available?'gpu':'cpu');
-  assert.equal(report.content.execution.method,'P910-2023-SDR-BT1886-text-v1');
+  assert.equal(report.content.execution.method,'VQEG-siti-c537e337-PQ');
   if(capability.available)assert.equal(report.content.execution.validation.selfTest,'passed');
   assert.equal(report.content.points.length,report.frames.length);
   assert.match(await page.locator('#inspect-details').innerText(),capability.available?/GPU ·/:/CPU ·/);
   assert.match(await page.locator('#inspect-details').innerText(),/P.910（10\/2023）/);
+});
+
+scenario('[analysis] a temporary GPU capability failure can be rechecked without disabling GPU selection',async({page})=>{
+  await preview(page,media.sitiSource);await page.locator('#complexity').check();
+  await page.route('**/api/siti-gpu',route=>route.fulfill({json:{available:false,reason:'临时设备检查失败'}}),{times:1});
+  await page.locator('#siti-device').selectOption('gpu');await page.waitForFunction(()=>document.querySelector('#siti-device-status').textContent.includes('临时设备检查失败'));
+  assert.equal(await page.locator('#siti-device').inputValue(),'cpu');assert.equal(await page.locator('#siti-device option[value="gpu"]').isDisabled(),false);
+  await page.route('**/api/siti-gpu',route=>route.fulfill({json:{available:true,device:'界面重试测试设备'}}),{times:1});
+  await page.locator('#siti-gpu-recheck').click();await page.waitForFunction(()=>document.querySelector('#siti-device-status').textContent.includes('界面重试测试设备'));
+  await page.locator('#siti-device').selectOption('gpu');assert.equal(await page.locator('#siti-device').inputValue(),'gpu');assert.equal(await page.locator('#siti-workers').isDisabled(),true);
 });
 
 scenario('[analysis] SI/TI confirmed scenes exclude boundary TI and export separate scene statistics',async({page,app,dir})=>{

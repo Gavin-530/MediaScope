@@ -8,9 +8,8 @@ import { fileURLToPath } from 'node:url';
 import {createReadStream} from 'node:fs';
 import { FF,FP,run,probe,video,scan,summarize,compare,normalizeMediaPath,decodeThreadCount } from './engine.mjs';
 import {allPackets,structure,traceStructure,mapStructure,metadataSummary,complexity,trial,trialOptions} from './analysis.mjs';
-import {sitiGpuCapability} from './siti-gpu.mjs';
-import {validateSitiSceneStarts} from './public/siti-scenes.js';
-import {validateSitiSettings} from './public/siti-settings.js';
+import {sitiGpuCapability,closeSitiGpu} from './siti.mjs';
+import {validateSitiSceneStarts,validateSitiSettings} from './public/siti.js';
 import {makePortable,maxPortableBytes,utcNow} from './public/portable.js';
 import {byteLimit} from './public/units.js';
 import {vmafModel} from './public/vmaf.js';
@@ -336,7 +335,7 @@ const server=http.createServer(async(req,res)=>{
       }
       send(res,404,{error:'接口不存在'});return;
     }
-    const files={'/':'index.html','/app.js':'app.js','/report.js':'report.js','/vmaf.js':'vmaf.js','/metric-summary.js':'metric-summary.js','/properties.js':'properties.js','/basic-info.js':'basic-info.js','/portable.js':'portable.js','/bitrate-model.js':'bitrate-model.js','/distribution-model.js':'distribution-model.js','/siti-scenes.js':'siti-scenes.js','/siti-settings.js':'siti-settings.js','/siti-formats.js':'siti-formats.js','/siti-physical.js':'siti-physical.js','/charts.js':'charts.js','/trial-model.js':'trial-model.js','/units.js':'units.js','/style.css':'style.css'};
+    const files={'/':'index.html','/app.js':'app.js','/report.js':'report.js','/vmaf.js':'vmaf.js','/metric-summary.js':'metric-summary.js','/properties.js':'properties.js','/basic-info.js':'basic-info.js','/portable.js':'portable.js','/bitrate-model.js':'bitrate-model.js','/distribution-model.js':'distribution-model.js','/siti.js':'siti.js','/charts.js':'charts.js','/trial-model.js':'trial-model.js','/units.js':'units.js','/style.css':'style.css'};
     files['/timing.js']='timing.js';
     if(req.method!=='GET'||!files[url.pathname]){res.writeHead(404);res.end();return}
     const name=files[url.pathname];let data=await readFile(path.join(root,'public',name));if(name==='index.html')data=Buffer.from(data.toString().replace('__TOKEN__',token).replace('__APP_VERSION__',appVersion).replace('__LOCAL_THEME__',localData.settings.theme).replace('__PORTABLE_LIMIT__',byteLimit(maxPortableBytes)).replace('__RECENT_LIMIT__',byteLimit(recentBytes)));
@@ -353,6 +352,7 @@ async function shutdown(){
   if(closing)return;closing=true;clearInterval(startupTimer);clearInterval(retentionTimer);queueRunning=false;
   for(const j of jobs.values())j.controller.abort();
   for(const controller of probes)controller.abort();pickerProcess?.kill();
+  await closeSitiGpu();
   let drained=false;server.close(()=>{drained=true});server.closeIdleConnections();
   const deadline=Date.now()+8000;
   while((active||!drained)&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,50));
