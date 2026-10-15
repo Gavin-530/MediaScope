@@ -275,6 +275,7 @@ scenario('[analysis] SI/TI reference settings and HLG display survive GUI plans 
     const {report}=await runTask(page,app,'#analyze');assert.equal(report.content.available,true,report.content.reason);
     assert.equal(report.content.execution.configuration.configurationVersion,7);assert.equal(report.content.execution.configuration.outputMultiplier,2**c.depth-1);
     if(c.domain==='hlg')assert.equal(report.content.execution.configuration.display.whiteCdM2,2000);
+    await page.locator('#inspect-details').getByRole('heading',{name:'SI/TI 内容复杂度',exact:true}).waitFor();
     assert.match(await page.locator('#inspect-details').innerText(),/P.910（10\/2023）· PQ 域 · 输入位深尺度/);
     const file=path.join(dir,name+'.json'),exported=await download(page,'#inspect-export',file);assert.deepEqual(exported.results[0].report,report);
     await importReport(page,file);assert.match(await page.locator('#inspect-details').innerText(),new RegExp(`输入位深尺度 ${2**c.depth-1}`));
