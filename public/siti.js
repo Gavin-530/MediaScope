@@ -1,10 +1,19 @@
-// P.910 SI/TI in PQ: pinned VQEG metrics; HLG EOTF from BT.2100-2 Table 5.
+// P.910 (10/2023) SI/TI with the documented interpretation of range, EOTF and PQ input.
 // VQEG mathematical functions are ported under MIT; see licenses/VQEG-siti-tools.txt.
+export const SITI_STANDARD_PROFILE='P910-2023-PQ-v1';
+// Historical profiles identify saved values only; new calculations use version 7.
 export const SITI_PROFILE='VQEG-siti-c537e337-PQ';
 export const SITI_HLG_PROFILE='P910-HLG-BT2100-2-PQ-v1';
 export const SITI_REFERENCE=Object.freeze({project:'VQEG/siti-tools',commit:'c537e33793266187aad87c859fd62a9de9033854',sourceSha256:'84557e030e302fa14e28a1cd1227f3320986050c4cf5f5f4d590215971329873'});
 export const SITI_MATRICES=Object.freeze({bt601:[.299,.587,.114],bt709:[.2126,.7152,.0722],bt2020:[.2627,.678,.0593]});
 const HLG_A=.17883277,HLG_B=1-4*HLG_A,HLG_C=.5-HLG_A*Math.log(4*HLG_A);
+const SDR_WHITE=300,SDR_BLACK=.01,GAMMA=2.4;
+const SDR_ROOT=SDR_WHITE**(1/GAMMA)-SDR_BLACK**(1/GAMMA);
+const SDR_GAIN=SDR_ROOT**GAMMA,SDR_LIFT=SDR_BLACK**(1/GAMMA)/SDR_ROOT;
+const SITI_INTERPRETATIONS=Object.freeze({range:'native integer nominal endpoints; 7.8.1.2 extended from 8-bit',sdr:'BT.1886 Annex 1 reference EOTF; B.2 Appendix 1 locator interpreted',pq:'already in target PQ domain; no repeated encoding',output:'7.8.1.5 b is the input integer bit depth'});
+function sitiDisplay(input){
+  return input.domain==='pq'?null:input.domain==='hlg'?{...input.hlg}:input.domain==='srgb'?{whiteCdM2:80,blackCdM2:.2,gamma:GAMMA,model:'inverse sRGB reference display'}:{whiteCdM2:SDR_WHITE,blackCdM2:SDR_BLACK,gamma:GAMMA,gain:SDR_GAIN,blackLift:SDR_LIFT,model:'BT.1886 Annex 1 reference EOTF'};
+}
 function hlgDisplay({whiteCdM2:white,blackCdM2:black}){
   // Table 5 note 5f; footnote 2 extends gamma outside 400–2000 cd/m².
   const gamma=white>=400&&white<=2000?1.2+.42*Math.log10(white/1000):1.2*1.111**Math.log2(white/1000);
@@ -40,16 +49,23 @@ export function sitiInput(stream,settings,options){
     source:{pixelFormat:stream.pix_fmt,range:stream.color_range??null,transfer:stream.color_transfer??null,fieldOrder:stream.field_order??null,matrix:stream.color_space??null,primaries:stream.color_primaries??null}};
 }
 export function sitiConfiguration(input){
-  return {configurationVersion:input.domain==='hlg'?6:5,profile:input.domain==='hlg'?SITI_HLG_PROFILE:SITI_PROFILE,standard:'ITU-T P.910 (10/2023)',reference:SITI_REFERENCE,referenceAgreement:input.domain==='hlg'?'BT.2100-2 Table 5 HLG EOTF; VQEG PQ metrics; integer storage and RGB luma adapters':'VQEG PQ pipeline; integer storage and RGB luma adapters',input:structuredClone(input),inputDomain:input.domain,inputBitDepth:input.depth,inputRange:input.range,domain:'PQ',
-    display:input.domain==='pq'?null:input.domain==='hlg'?{...input.hlg}:{whiteCdM2:300,blackCdM2:.1,gamma:2.4},
-    outputMultiplier:255,firstTi:null,preprocessing:input.deinterlace?'bwdif=mode=send_frame:parity=auto:deint=interlaced':'native decoded samples',
+  return {configurationVersion:7,profile:SITI_STANDARD_PROFILE,standard:'ITU-T P.910 (10/2023)',reference:SITI_REFERENCE,referenceAgreement:'VQEG Sobel/TI kernels; independently specified display models and input-bit-depth output',interpretations:{...SITI_INTERPRETATIONS},input:structuredClone(input),inputDomain:input.domain,inputBitDepth:input.depth,inputRange:input.range,domain:'PQ',
+    display:sitiDisplay(input),
+    outputMultiplier:2**input.depth-1,firstTi:null,preprocessing:input.deinterlace?'bwdif=mode=send_frame:parity=auto:deint=interlaced':'native decoded samples',
     lumaDerivation:input.matrix?{...input.matrix,coefficients:[...SITI_MATRICES[input.matrix.name]]}:null};
 }
 export function validateSitiConfiguration(execution,stream){
   const c=execution?.configuration;
   // Historical reports retain their original values and method, without running old algorithms.
-  if(![SITI_PROFILE,SITI_HLG_PROFILE].some(p=>execution?.method===p||c?.profile===p)&&![5,6].includes(c?.configurationVersion))return;
-  const expected=sitiConfiguration(sitiInput(stream,c?.input?.settings??undefined,{historical:true}));
+  if(![SITI_PROFILE,SITI_HLG_PROFILE,SITI_STANDARD_PROFILE].some(p=>execution?.method===p||c?.profile===p)&&![5,6,7].includes(c?.configurationVersion))return;
+  const expected=sitiConfiguration(sitiInput(stream,c?.input?.settings??undefined,{historical:c?.configurationVersion!==7}));
+  if([5,6].includes(c?.configurationVersion)){
+    if(c.configurationVersion===6&&expected.inputDomain!=='hlg')throw Error('SI/TI 历史计算配置版本无效');
+    expected.configurationVersion=c.configurationVersion;expected.profile=c.configurationVersion===6?SITI_HLG_PROFILE:SITI_PROFILE;
+    expected.referenceAgreement=c.configurationVersion===6?'BT.2100-2 Table 5 HLG EOTF; VQEG PQ metrics; integer storage and RGB luma adapters':'VQEG PQ pipeline; integer storage and RGB luma adapters';
+    expected.display=expected.inputDomain==='pq'?null:expected.inputDomain==='hlg'?{...expected.input.hlg}:{whiteCdM2:300,blackCdM2:.1,gamma:2.4};
+    expected.outputMultiplier=255;delete expected.interpretations;
+  }
   // Validate old HLG declarations without re-running or relabelling old values.
   if(c?.configurationVersion===5&&c?.profile===SITI_PROFILE&&expected.inputDomain==='hlg'){
     const {whiteCdM2:white,blackCdM2:black}=expected.input.hlg;
@@ -67,8 +83,7 @@ export function sitiPreprocessedValue(v,input){
     const linear=x<=.5?x*x/3:(Math.exp((x-HLG_C)/HLG_A)+HLG_B)/12;
     luminance=white*linear**gamma;
   }else{
-    const linear=input.domain==='srgb'?(v<=.04045?v/12.92:((v+.055)/1.055)**2.4):v**2.4;
-    luminance=(300-.1)*linear+.1;
+    luminance=input.domain==='srgb' ? .2+79.8*(v<=.04045?v/12.92:((v+.055)/1.055)**GAMMA) : SDR_GAIN*Math.max(v+SDR_LIFT,0)**GAMMA;
   }
   const y=(luminance/10000)**(2610/16384);
   return ((3424/4096+(2413/128)*y)/(1+(2392/128)*y))**(2523/32);
@@ -84,8 +99,8 @@ export function sitiFrameLayout(input,w,h){
   return {bytes,max,lo,hi,stride,red:stride?f.order.indexOf('r'):2*n,green:stride?f.order.indexOf('g'):0,blue:stride?f.order.indexOf('b'):n,alpha:stride?f.order.indexOf('a'):f.layout==='gbr-planar'?3*n:bytes/(f.storage/8)-n};
 }
 export function sitiGpuParameters(input,w,h){
-  const layout=sitiFrameLayout(input,w,h),display=sitiConfiguration(input).display;
-  return Float64Array.from([...(input.matrix?SITI_MATRICES[input.matrix.name]:[0,0,0]),layout.lo,layout.hi,{pq:0,sdr:1,srgb:2,hlg:3}[input.domain],display?.whiteCdM2??0,display?.blackCdM2??0,display?.gamma??0,input.hlg?.beta??0,HLG_A,HLG_B,HLG_C,2610/16384,2523/32,3424/4096,2413/128,2392/128]);
+  const layout=sitiFrameLayout(input,w,h),display=sitiDisplay(input);
+  return Float64Array.from([...(input.matrix?SITI_MATRICES[input.matrix.name]:[0,0,0]),layout.lo,layout.hi,{pq:0,sdr:1,srgb:2,hlg:3}[input.domain],display?.whiteCdM2??0,display?.blackCdM2??0,display?.gamma??0,input.hlg?.beta??0,HLG_A,HLG_B,HLG_C,2610/16384,2523/32,3424/4096,2413/128,2392/128,display?.gain??0,display?.blackLift??0]);
 }
 export function createSitiReader(input,w,h){
   const f=input.format,n=w*h,{bytes,max,lo,hi,stride,red,green,blue,alpha}=sitiFrameLayout(input,w,h);
@@ -118,7 +133,7 @@ function populationStd(values){
 }
 export function createSitiCalculator(w,h,input){
   if(!Number.isSafeInteger(w)||!Number.isSafeInteger(h)||w<3||h<3||w*h>33554432)throw Error('SI/TI 帧尺寸无效');
-  const reader=createSitiReader(input,w,h),n=w*h;let current,previous,gradient,motion,frame=0;
+  const reader=createSitiReader(input,w,h),n=w*h,multiplier=2**input.depth-1;let current,previous,gradient,motion,frame=0;
   return {...reader,measure(raw,first=false,previousRaw=null){
     if(!current){current=new Float64Array(n);previous=new Float64Array(n);gradient=new Float64Array((w-2)*(h-2));motion=new Float64Array(n)}
     reader.read(raw,current);const temporal=(frame>0||previousRaw!==null)&&!first;
@@ -129,7 +144,7 @@ export function createSitiCalculator(w,h,input){
       const i=y*w+x,tl=current[i-w-1],tr=current[i-w+1],bl=current[i+w-1],br=current[i+w+1];
       gradient[j++]=Math.hypot(-tl+tr-2*current[i-1]+2*current[i+1]-bl+br,-tl-2*current[i-w]-tr+bl+2*current[i+w]+br);
     }
-    const point={frame:frame++,si:populationStd(gradient)*255,ti:temporal?populationStd(motion)*255:null};[previous,current]=[current,previous];return point;
+    const point={frame:frame++,si:populationStd(gradient)*multiplier,ti:temporal?populationStd(motion)*multiplier:null};[previous,current]=[current,previous];return point;
   }};
 }
 

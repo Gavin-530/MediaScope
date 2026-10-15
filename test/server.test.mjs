@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {startServer,waitForJob} from './helpers/server.mjs';
 import {mkdir,mkdtemp,lstat,readFile} from 'node:fs/promises';
 import {sitiInputFixture} from './helpers/siti-inputs.mjs';
+import {SITI_STANDARD_PROFILE} from '../public/siti.js';
 import path from 'node:path';
 import {FF,run} from '../engine.mjs';
 const source=path.resolve('test-work/http-fixture.mp4'),sitiSource=path.resolve('test-work/http-sdr-lossless.mkv');let reportRoot,suiteRoot,caseNumber=0;
@@ -50,7 +51,7 @@ test('SI/TI reference API preserves input settings, plans and validated reports'
   await request('jobs','POST',{type:'analyze',file:fixture.file,stream:0,complexity:true,sitiSettings:c.settings,sitiSceneStarts:[0,2,4],enqueue:true});
   const saved=await(await request('plans')).json();assert.deepEqual(saved.plans[0].input.sitiSettings,c.settings);
   const imported=await(await request('plans/import','POST',{mode:'replace',start:true,plans:saved.plans})).json(),id=imported.ids[0],status=await finished(id);assert.equal(status.status,'done',status.message);
-  const report=await(await request(`jobs/${id}/report`)).json();assert.equal(report.content.available,true,report.content.reason);assert.deepEqual(parseReport(JSON.stringify(report)),report);assert.equal(report.content.execution.configuration.configurationVersion,c.domain==='hlg'?6:5);
+  const report=await(await request(`jobs/${id}/report`)).json();assert.equal(report.content.available,true,report.content.reason);assert.deepEqual(parseReport(JSON.stringify(report)),report);assert.equal(report.content.execution.configuration.configurationVersion,7);
   for(const damage of [c=>c.outputMultiplier=1,c=>c.input.source.transfer='changed',c=>c.inputDomain='changed',c=>c.display={whiteCdM2:1},c=>delete c.configurationVersion,c=>c.reference.commit='changed']){const broken=structuredClone(report);damage(broken.content.execution.configuration);assert.throws(()=>parseReport(JSON.stringify(broken)),/configuration/)}
  }
 });
@@ -77,7 +78,7 @@ test('GPU SI/TI API records actual device and round-trips queued device selectio
  const job={id:imported.ids[0]};
  const status=await finished(job.id);assert.equal(status.status,'done',status.message);
  const report=await(await request(`jobs/${job.id}/report`)).json();
- assert.equal(report.content.execution.requestedDevice,'gpu');assert.equal(report.content.execution.method,'VQEG-siti-c537e337-PQ');
+ assert.equal(report.content.execution.requestedDevice,'gpu');assert.equal(report.content.execution.method,SITI_STANDARD_PROFILE);
  assert.equal(report.content.execution.device,capability.available?'gpu':'cpu');
  if(capability.available)assert.equal(report.content.execution.validation.selfTest,'passed');else assert.ok(report.content.execution.gpuFallbackReason);
  assert.deepEqual(parseReport(JSON.stringify(report)),report);

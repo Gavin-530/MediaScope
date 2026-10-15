@@ -1070,7 +1070,7 @@ function renderMedia(r) {
           : "";
       html += section(
         "SI/TI 内容复杂度",
-        execution + (e?.configuration?`<p class="hint">计算流程：${esc(e.configuration.profile)}；${e.configuration.configurationVersion===6?'HLG BT.2100 表 5 · PQ 域 · 固定尺度 255':e.configuration.configurationVersion===5&&e.configuration.inputDomain!=='hlg'?'VQEG 公开参考流程 · PQ 域 · 固定尺度 255':'历史计算口径，保留原值'}。输入 ${esc(e.configuration.input?.source?.pixelFormat??'')} · ${esc(e.configuration.inputDomain??'SDR')} · ${e.configuration.inputBitDepth}-bit · ${e.configuration.inputRange==='tv'?'有限范围':'全范围'}。</p>`:'') +
+        execution + (e?.configuration?`<p class="hint">计算流程：${esc(e.configuration.profile)}；${e.configuration.configurationVersion===7?`P.910（10/2023）· PQ 域 · 输入位深尺度 ${e.configuration.outputMultiplier}`:'历史计算口径，保留原值'}。输入 ${esc(e.configuration.input?.source?.pixelFormat??'')} · ${esc(e.configuration.inputDomain??'SDR')} · ${e.configuration.inputBitDepth}-bit · ${e.configuration.inputRange==='tv'?'有限范围':'全范围'}。</p>`:'') +
           (e?.configuration?.display?`<p class="hint">参考显示模型：峰值 ${fmt(e.configuration.display.whiteCdM2)}、黑位 ${fmt(e.configuration.display.blackCdM2,4)} cd/m²；gamma ${fmt(e.configuration.display.gamma,6)}。</p>`:'') +
           (r.content.scenes?.length>1?table(
             ["场景", "显示帧（从 1 计）", "SI 均值", "SI P95", "SI 最大值", "TI 均值", "TI P95", "TI 最大值"],

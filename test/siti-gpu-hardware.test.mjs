@@ -4,7 +4,7 @@ import {readFile,mkdir,mkdtemp,writeFile,rename,unlink} from 'node:fs/promises';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
 import {sitiGpuCapability,measureSiti,closeSitiGpu,sitiGpuRequest} from '../siti.mjs';
-import {sitiInput,sitiRawBytes} from '../public/siti.js';
+import {sitiInput,sitiRawBytes,SITI_STANDARD_PROFILE} from '../public/siti.js';
 import {sitiInputFixture} from './helpers/siti-inputs.mjs';
 const vectors=JSON.parse(await readFile(new URL('./reference/siti/vqeg-pq.json',import.meta.url),'utf8'));
 const close=(a,b)=>assert.ok(Math.abs(a-b)<=1e-8+Math.abs(b)*1e-10,`${a} vs ${b}`);
@@ -49,6 +49,7 @@ test('GPU SI/TI hardware validates real frames against CPU without accepting CPU
     const c=vectors.cases.find(c=>c.name===name),fixture=await sitiInputFixture(dir,c,{},ctx),options={...ctx,sitiSettings:c.settings,sitiSceneStarts:[0,2,4]};
     const jobCommands=[],cpu=await measureSiti(fixture.file,fixture.stream,{...options,sitiWorkers:1},fixture.frames),gpu=await measureSiti(fixture.file,fixture.stream,{...options,sitiDevice:'gpu',commands:jobCommands},fixture.frames);
     assert.equal(gpu.execution.device,'gpu',gpu.execution.gpuFallbackReason);assert.equal(gpu.execution.validation.selfTest,'passed');assert.deepEqual(gpu.execution.configuration,cpu.execution.configuration);
+    assert.equal(gpu.execution.method,SITI_STANDARD_PROFILE);assert.equal(gpu.execution.configuration.configurationVersion,7);assert.equal(gpu.execution.configuration.outputMultiplier,2**c.depth-1);
     assert.equal(jobCommands.some(c=>c.exe==='powershell.exe'),false,'jobs reuse the compiled bridge');assert.equal(jobCommands[0].exe,bridge);
     const input=sitiInput(fixture.stream,c.settings);assert.equal(gpu.execution.inputBytesPerFrame,sitiRawBytes(input.format,c.width,c.height));
     assert.equal(gpu.execution.preprocessingDevice,'gpu');assert.equal(gpu.execution.sessionPid,evidence.cases[0]?.gpu.execution.sessionPid??gpu.execution.sessionPid);

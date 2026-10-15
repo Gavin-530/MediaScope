@@ -8,7 +8,7 @@ import {startServer,waitForJob} from './helpers/server.mjs';
 import {legacyFrameSample} from './helpers/basic-properties.mjs';
 import {FF,run} from '../engine.mjs';
 import {sitiInputFixture} from './helpers/siti-inputs.mjs';
-import {sitiSceneSummary,SITI_PROFILE,SITI_HLG_PROFILE} from '../public/siti.js';
+import {sitiSceneSummary,SITI_STANDARD_PROFILE} from '../public/siti.js';
 const sitiVectors=JSON.parse(await readFile(new URL('./reference/siti/vqeg-pq.json',import.meta.url),'utf8'));
 let app,reports={};
 before(async()=>{
@@ -24,8 +24,10 @@ before(async()=>{
   assert.equal(done.status,'done',JSON.stringify(done));reports[input.type]=await app.request(`jobs/${job.id}/report`);
  }
  const unknown=path.join(root,'undeclared.nut');
- const hlgCase=sitiVectors.cases.find(c=>c.name===sitiVectors.legacyHlg.case),hlg=await sitiInputFixture(path.join(root,'media'),hlgCase);
- const hlgJob=await app.request('jobs','POST',{type:'analyze',file:hlg.file,stream:0,complexity:true,sitiSettings:hlgCase.settings});assert.equal((await waitForJob(app.request,hlgJob.id)).status,'done');reports.hlg=await app.request(`jobs/${hlgJob.id}/report`);
+ for(const history of sitiVectors.historical.filter(h=>h.id!=='vqeg-hlg')){
+  const c=sitiVectors.cases.find(c=>c.name===history.case),fixture=await sitiInputFixture(path.join(root,'media'),c);
+  const job=await app.request('jobs','POST',{type:'analyze',file:fixture.file,stream:0,complexity:true,sitiSettings:c.settings});assert.equal((await waitForJob(app.request,job.id)).status,'done');reports[history.id]=await app.request(`jobs/${job.id}/report`);
+ }
  await run(FF,['-v','error','-y','-f','lavfi','-i','testsrc2=s=96x64:r=4:d=1,format=yuv422p10le,setparams=range=unknown:color_primaries=unknown:color_trc=unknown:colorspace=unknown','-c:v','rawvideo','-pix_fmt','yuv422p10le','-f','nut',unknown]);
  for(const [name,input]of [
   ['undeclared',{type:'compare',reference:unknown,candidate:unknown,refStream:0,candidateStream:0,confirm:true,metrics:['vmaf']}],
@@ -59,14 +61,16 @@ test('SI/TI attempt evidence rejects contradictory devices, counts and timings w
  failed.content.attempts[0].outcome='passed';assert.throws(()=>parseReport(JSON.stringify(failed)),/attempts/);
 });
 
-test('HLG corrected and historical reports retain distinct formulas and reject damaged declarations',()=>{
- const corrected=reports.hlg;assert.equal(corrected.content.execution.method,SITI_HLG_PROFILE);assert.equal(corrected.content.execution.configuration.configurationVersion,6);
- const historical=structuredClone(corrected),e=historical.content.execution,c=e.configuration,{whiteCdM2:white,blackCdM2:black}=c.input.hlg;
- e.method=SITI_PROFILE;c.profile=SITI_PROFILE;c.configurationVersion=5;c.referenceAgreement='VQEG PQ pipeline; integer storage and RGB luma adapters';
- c.input.hlg={whiteCdM2:white,blackCdM2:black};c.display={whiteCdM2:white,blackCdM2:black,gamma:white<=1000?1.2:1.2+.42*Math.log10(white/1000)};
- historical.content.points=historical.content.points.map((p,i)=>({...p,...sitiVectors.legacyHlg.expected[i]}));Object.assign(historical.content,sitiSceneSummary(historical.content.points));historical.content.notes=['历史 HLG 参考公式；保留原值。'];
- assert.deepEqual(parseReport(JSON.stringify(historical)),historical);assert.notDeepEqual(historical.content.points,corrected.content.points);
- for(const report of [corrected,historical])for(const damage of [c=>c.display.gamma+=.01,c=>c.input.hlg.blackCdM2+=.001,c=>c.profile='changed']){const broken=structuredClone(report);damage(broken.content.execution.configuration);assert.throws(()=>parseReport(JSON.stringify(broken)),/configuration/)}
+test('SI/TI new and frozen historical reports retain distinct formulas and reject damaged declarations',()=>{
+ for(const snapshot of sitiVectors.historical){
+  const current=reports[snapshot.id==='vqeg-hlg'?'hlg':snapshot.id];assert.equal(current.content.execution.method,SITI_STANDARD_PROFILE);assert.equal(current.content.execution.configuration.configurationVersion,7);
+  const historical=structuredClone(current),e=historical.content.execution,source=e.configuration.input.source;
+  e.configuration=structuredClone(snapshot.configuration);e.configuration.input.source=source;e.method=e.configuration.profile;
+  historical.content.points=historical.content.points.map((p,i)=>({...p,...snapshot.expected[i]}));Object.assign(historical.content,sitiSceneSummary(historical.content.points));historical.content.notes=['历史计算口径；保留原值。'];
+  assert.deepEqual(parseReport(JSON.stringify(historical)),historical);assert.notDeepEqual(historical.content.points,current.content.points);
+  for(const report of [current,historical])for(const damage of [c=>c.display.gamma+=.01,c=>c.outputMultiplier++,c=>c.profile='changed',c=>c.configurationVersion=8]){const broken=structuredClone(report);damage(broken.content.execution.configuration);assert.throws(()=>parseReport(JSON.stringify(broken)),/配置|configuration/)}
+ }
+ for(const damage of [c=>c.display.gain++,c=>c.interpretations.pq='changed',c=>c.referenceAgreement='changed']){const broken=structuredClone(reports.sdr);damage(broken.content.execution.configuration);assert.throws(()=>parseReport(JSON.stringify(broken)),/配置|configuration/)}
 });
 test('real report parser rejects unknown versions and deliberately removed required structures',()=>{
  for(const report of Object.values(reports))assert.throws(()=>parseReport(JSON.stringify({...report,schema:'MediaScope/unsupported'})),/版本/);

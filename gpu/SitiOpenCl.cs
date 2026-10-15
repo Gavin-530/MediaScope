@@ -50,7 +50,8 @@ uint code_at(__global const uchar *raw,int i,int bytes,int little,int shift,int 
 double transfer(double v,__global const double *p) {
     if(p[5]==0)return v;double luminance;
     if(p[5]==3){double x=fmax(0,(1-p[9])*v+p[9]);double linear=x<=.5?x*x/3:(exp((x-p[12])/p[10])+p[11])/12;luminance=p[6]*pow(linear,p[8]);}
-    else{double linear=p[5]==2?(v<=.04045?v/12.92:pow((v+.055)/1.055,p[8])):pow(v,p[8]);luminance=(p[6]-p[7])*linear+p[7];}
+    else if(p[5]==2){double linear=v<=.04045?v/12.92:pow((v+.055)/1.055,p[8]);luminance=(p[6]-p[7])*linear+p[7];}
+    else luminance=p[18]*pow(fmax(v+p[19],0),p[8]);
     double y=pow(luminance/10000,p[13]);return pow((p[15]+p[16]*y)/(1+p[17]*y),p[14]);
 }
 __kernel void convert(__global const uchar *raw,__global double *curr,__global const double *lut,__global int *invalid,int n,int bytes,int shift,int little,int alpha,int maxCode,int layout,int stride,int red,int green,int blue) {
@@ -107,7 +108,7 @@ __kernel void finish_stat(__global const double *partial,int groups,int count,__
     bool Configure(int width,int height,int storage,int bits,int padding,int endian,int payloadBytes,int alphaOffset,int family,int pixelStride,int r,int g,int b,double[] lookup){
         if(width<3||height<3||(long)width*height>33554432)throw new InputException("Invalid SITI GPU dimensions");
         w=width;h=height;n=checked(w*h);sampleBytes=storage/8;depth=bits;shift=padding;little=endian;frameBytes=payloadBytes;alpha=alphaOffset;table=lookup;layout=family;stride=pixelStride;red=r;green=g;blue=b;
-        if(storage!=0&&storage!=8&&storage!=16||Array.IndexOf(new[]{8,9,10,12,14,16},depth)<0||shift!=0&&shift!=16-depth||little!=0&&little!=1||storage==8&&depth!=8||layout<0||layout>2||layout==0&&storage!=0||layout!=0&&storage==0||frameBytes<n*(storage==0?8:sampleBytes)||alpha< -1||stride<0||stride>4||layout!=2&&stride!=0||table.Length!=(layout==2?18:storage==0?1:1<<depth))throw new InputException("Invalid SITI native layout");
+        if(storage!=0&&storage!=8&&storage!=16||Array.IndexOf(new[]{8,9,10,12,14,16},depth)<0||shift!=0&&shift!=16-depth||little!=0&&little!=1||storage==8&&depth!=8||layout<0||layout>2||layout==0&&storage!=0||layout!=0&&storage==0||frameBytes<n*(storage==0?8:sampleBytes)||alpha< -1||stride<0||stride>4||layout!=2&&stride!=0||table.Length!=(layout==2?20:storage==0?1:1<<depth))throw new InputException("Invalid SITI native layout");
         if(layout==2&&(stride==0?(red!=2*n||green!=0||blue!=n):(stride<3||red<0||red>=stride||green<0||green>=stride||blue<0||blue>=stride))||layout==2&&frameBytes!=n*(stride==0?(alpha>=0?4:3):stride)*sampleBytes||alpha>=0&&(layout==2&&stride>0?alpha>=stride:(long)(alpha+n)*sampleBytes>frameBytes))throw new InputException("Invalid SITI RGB layout");
         if(layout==2){foreach(double v in table)if(double.IsNaN(v)||double.IsInfinity(v))throw new InputException("Invalid SITI display parameters");if(table[3]<0||table[4]>((1<<depth)-1)||table[3]>=table[4]||table[5]<0||table[5]>3)throw new InputException("Invalid SITI RGB parameters");}
         int capacity=Math.Max(n,469),payload=Math.Max(frameBytes,469*8),entries=table.Length;bool reused=planeCapacity>=capacity&&rawCapacity>=payload&&lutCapacity>=entries;
@@ -136,7 +137,7 @@ __kernel void finish_stat(__global const double *partial,int groups,int count,__
         Mem(metrics,0,curr);Mem(metrics,1,prev);Mem(metrics,2,values);Int(metrics,3,w);Int(metrics,4,h);Int(metrics,5,first?1:0);Launch(metrics,n);
         Statistics(0,(w-2)*(h-2),0);if(!first)Statistics(n,n,1);Read(stats,result,32);Read(invalid,invalidFlag,4);
         if(invalidFlag[0]!=0)throw new InputException((invalidFlag[0]&2)!=0?"SI/TI 半透明输入缺少参考合成流程":(invalidFlag[0]&4)!=0?"SI/TI 填充位非零或样本超出位深":layout==2?"SI/TI RGB 分量超出声明范围；不裁剪或改判范围":"SI/TI 亮度样本超出声明范围；不裁剪或改判范围");
-        IntPtr swap=prev;prev=curr;curr=swap;return new[]{result[2]*255,first?0:result[3]*255};
+        IntPtr swap=prev;prev=curr;curr=swap;double multiplier=(1<<depth)-1;return new[]{result[2]*multiplier,first?0:result[3]*multiplier};
     }
     static double Std(double[] a){double sum=0,c=0;foreach(double v in a){double y=v-c,t=sum+y;c=(t-sum)-y;sum=t;}double mean=sum/a.Length;sum=0;c=0;foreach(double v in a){double d=v-mean,y=d*d-c,t=sum+y;c=(t-sum)-y;sum=t;}return Math.Sqrt(sum/a.Length);}
     double[] Reference(byte[] data,ref double[] previous){
@@ -147,12 +148,13 @@ __kernel void finish_stat(__global const double *partial,int groups,int count,__
         }
         int[] sx={-1,0,1,-2,0,2,-1,0,1},sy={-1,-2,-1,0,0,0,1,2,1};
         for(int y=1;y<h-1;y++)for(int x=1;x<w-1;x++){double gx=0,gy=0;for(int k=0;k<9;k++){double v=a[(y+k/3-1)*w+x+k%3-1];gx+=v*sx[k];gy+=v*sy[k];}gradient[(y-1)*(w-2)+x-1]=Math.Sqrt(gx*gx+gy*gy);}
-        previous=a;return new[]{Std(gradient)*255,Std(motion)*255};
+        previous=a;double multiplier=(1<<depth)-1;return new[]{Std(gradient)*multiplier,Std(motion)*multiplier};
     }
     double Transfer(double v){
         if(table[5]==0)return v;double luminance;
         if(table[5]==3){double x=Math.Max(0,(1-table[9])*v+table[9]),linear=x<=.5?x*x/3:(Math.Exp((x-table[12])/table[10])+table[11])/12;luminance=table[6]*Math.Pow(linear,table[8]);}
-        else{double linear=table[5]==2?(v<=.04045?v/12.92:Math.Pow((v+.055)/1.055,table[8])):Math.Pow(v,table[8]);luminance=(table[6]-table[7])*linear+table[7];}
+        else if(table[5]==2){double linear=v<=.04045?v/12.92:Math.Pow((v+.055)/1.055,table[8]);luminance=(table[6]-table[7])*linear+table[7];}
+        else luminance=table[18]*Math.Pow(Math.Max(v+table[19],0),table[8]);
         double y=Math.Pow(luminance/10000,table[13]);return Math.Pow((table[15]+table[16]*y)/(1+table[17]*y),table[14]);
     }
     double SelfTest(){

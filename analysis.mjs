@@ -144,12 +144,13 @@ export async function complexity(file,stream,ctx={},frames=null){
   try{
     const {points,execution}=await measureSiti(file,stream,ctx,frames);
     return {available:true,points,execution,...sitiSceneSummary(points,ctx.sitiSceneStarts),notes:[
-      execution.configuration.inputDomain==='hlg'?'依据 ITU-T P.910（10/2023）7.8，HLG EOTF 按 BT.2100-2 表 5 修正，使用固定 VQEG 的 PQ 指标函数。范围按原位深合法端点归一化，输出固定乘 255。':'依据 ITU-T P.910（10/2023）7.8，使用报告中固定版本的 VQEG/siti-tools PQ 参考流程。范围按原位深合法端点归一化，输出固定乘 255。',
-      'SDR 使用 VQEG 默认显示模型（300 / 0.1 cd/m²）；其黑位与 P.910 附录 B.2 推荐的 0.01 cd/m² 存在差异。HLG 使用记录的显示参数；PQ 输入保留 PQ。RGB 先按 BT.601 / BT.709 / BT.2020 非恒定亮度矩阵导出非线性亮度。',
+      `依据 ITU-T P.910（10/2023）SI/TI 条款及报告列明的实施解释计算。范围按原位深标称端点归一化，PQ 域指标乘以 2^输入位深−1（本次 ${execution.configuration.outputMultiplier}）；跨位深原始输出不直接混比。`,
+      'SDR 采用 BT.1886 Annex 1 完整 reference EOTF（峰值 300、黑位 0.01 cd/m²）；逆 sRGB 采用所选参考显示模型（80 / 0.2 cd/m²）。HLG 按 BT.2100-2 表 5 及记录的显示参数计算；PQ 输入保留 PQ。RGB 按明确矩阵导出非线性亮度。',
+      '实施解释：有限范围公式由 8-bit 扩展至原位深端点；B.2 的 BT.1886 Appendix 1 引用按 Annex 1 reference EOTF 处理；PQ 输入不重复编码；输出公式中的 b 取输入位深。详见计算依据。',
       'SI：Sobel 梯度幅值的总体标准差，剔除一像素边界；TI：相邻帧差的总体标准差。场景首帧 TI 为 null，不纳入统计；逐帧值保留未舍入结果。',
       ctx.sitiSceneStarts?'按用户确认的场景分别统计，不计算跨场景 TI。':'场景边界未确认，全片结果可能含剪辑点 TI；分场景比较须确认边界。',
       ...(execution.configuration.input.deinterlace?['已选择 BWDIF 每帧输出一帧；按输出逐行画面计算，并核验帧数和时间戳。']:[]),
-      'CPU 串行、并行和 GPU 共用输入解释、显示参数和计算模型。GPU 使用双精度前处理与指标；CPU 并行共用一次软件解码并传递相邻原始帧。报告记录实际设备、执行尝试和耗时。VQEG 参考一致性不等于 ITU 官方认证；比较须保持相同分辨率、帧率和处理条件。'
+      'CPU 串行、并行和 GPU 共用输入解释、显示参数和计算模型。GPU 使用双精度前处理与指标；CPU 并行共用一次软件解码并传递相邻原始帧。显示模型与尺度采用独立公式参考，Sobel/TI 核采用固定 VQEG 参考；这不等于 ITU 官方认证。比较须保持相同显示假设、分辨率、帧率、场景及前处理条件。'
     ]};
   }catch(e){if(ctx.signal?.aborted)throw e;return {available:false,reason:e.message,...(e.sitiPhase?{errorPhase:e.sitiPhase}:{}),...(e.sitiAttempts?{attempts:e.sitiAttempts}:{})}}
 }

@@ -14,7 +14,7 @@ import {legacyFrameSample} from './helpers/basic-properties.mjs';
 import {formatBytes, byteEvidence, quantityScale} from '../public/units.js';
 import {bitrateView} from '../public/bitrate-model.js';
 import {sitiInputFixture} from './helpers/siti-inputs.mjs';
-import {sitiSceneSummary,SITI_PROFILE} from '../public/siti.js';
+import {sitiSceneSummary,SITI_STANDARD_PROFILE} from '../public/siti.js';
 
 const root=path.resolve('test-work/browser');
 let browser,media,sequence=0;
@@ -264,7 +264,7 @@ scenario('[basic-properties] real subtitles attachments chapters and narrow layo
 
 scenario('[analysis] SI/TI reference settings and HLG display survive GUI plans and reports',async({page,app,dir})=>{
   const vectors=JSON.parse(await readFile(new URL('./reference/siti/vqeg-pq.json',import.meta.url),'utf8'));
-  for(const name of ['rgb24-sdr-pc','gray12le-hlg-pc','gray10le-hlg-tv-display']){
+  for(const name of ['rgb24-sdr-pc','gray-sdr-tv','gray16le-srgb-pc','gray12le-hlg-pc','gray10le-hlg-tv-display']){
     const c=vectors.cases.find(c=>c.name===name),fixture=await sitiInputFixture(dir,c);
     await preview(page,fixture.file);await page.locator('#complexity').check();
     if(!await page.locator('#siti-range').isVisible())await page.locator('details.siti-options summary').click();
@@ -273,20 +273,20 @@ scenario('[analysis] SI/TI reference settings and HLG display survive GUI plans 
     if(c.domain==='hlg'){if(name==='gray12le-hlg-pc')assert.equal(await page.locator('#siti-hlg-white').inputValue(),'1000');await page.locator('#siti-hlg-white').fill('2000');if(c.settings.hlg)await page.locator('#siti-hlg-black').fill(String(c.settings.hlg.blackCdM2))}
     await page.locator('#siti-scenes').selectOption('single');
     const {report}=await runTask(page,app,'#analyze');assert.equal(report.content.available,true,report.content.reason);
-    assert.equal(report.content.execution.configuration.configurationVersion,c.domain==='hlg'?6:5);assert.equal(report.content.execution.configuration.outputMultiplier,255);
+    assert.equal(report.content.execution.configuration.configurationVersion,7);assert.equal(report.content.execution.configuration.outputMultiplier,2**c.depth-1);
     if(c.domain==='hlg')assert.equal(report.content.execution.configuration.display.whiteCdM2,2000);
-    assert.match(await page.locator('#inspect-details').innerText(),c.domain==='hlg'?/HLG BT.2100 表 5/:/VQEG 公开参考流程/);
+    assert.match(await page.locator('#inspect-details').innerText(),/P.910（10\/2023）· PQ 域 · 输入位深尺度/);
     const file=path.join(dir,name+'.json'),exported=await download(page,'#inspect-export',file);assert.deepEqual(exported.results[0].report,report);
-    await importReport(page,file);assert.match(await page.locator('#inspect-details').innerText(),/固定尺度 255/);
+    await importReport(page,file);assert.match(await page.locator('#inspect-details').innerText(),new RegExp(`输入位深尺度 ${2**c.depth-1}`));
     const response=page.waitForResponse(r=>r.url().endsWith('/api/jobs')&&r.request().method()==='POST');await page.locator('#enqueue-analyze').click();const submitted=(await response).request().postDataJSON();
     const plans=await app.request('plans');assert.deepEqual(plans.plans.at(-1).input.sitiSettings,submitted.sitiSettings);
     await page.screenshot({path:path.join(dir,name+'.png'),fullPage:true});
-    if(name===vectors.legacyHlg.case){
-      const legacy=structuredClone(exported),old=legacy.results[0].report,e=old.content.execution,cfg=e.configuration,{whiteCdM2:white,blackCdM2:black}=cfg.input.hlg;
-      e.method=SITI_PROFILE;cfg.profile=SITI_PROFILE;cfg.configurationVersion=5;cfg.referenceAgreement='VQEG PQ pipeline; integer storage and RGB luma adapters';cfg.input.hlg={whiteCdM2:white,blackCdM2:black};cfg.display={whiteCdM2:white,blackCdM2:black,gamma:white<=1000?1.2:1.2+.42*Math.log10(white/1000)};
-      old.content.points=old.content.points.map((p,i)=>({...p,...vectors.legacyHlg.expected[i]}));Object.assign(old.content,sitiSceneSummary(old.content.points,[0]));old.content.notes=['历史 HLG 参考公式；保留原值。'];
-      const oldFile=path.join(dir,'historical-hlg.json');await writeFile(oldFile,JSON.stringify(legacy));await importReport(page,oldFile);assert.match(await page.locator('#inspect-details').innerText(),/历史计算口径，保留原值/);
-      const roundTrip=await download(page,'#inspect-export',path.join(dir,'historical-hlg-roundtrip.json'));assert.deepEqual(roundTrip.results.at(-1).report,old);
+    for(const snapshot of vectors.historical.filter(h=>h.case===name)){
+      const legacy=structuredClone(exported),old=legacy.results[0].report,e=old.content.execution,source=e.configuration.input.source;
+      e.configuration=structuredClone(snapshot.configuration);e.configuration.input.source=source;e.method=e.configuration.profile;
+      old.content.points=old.content.points.map((p,i)=>({...p,...snapshot.expected[i]}));Object.assign(old.content,sitiSceneSummary(old.content.points,[0]));old.content.notes=['历史 HLG 参考公式；保留原值。'];
+      const oldFile=path.join(dir,`historical-${snapshot.id}.json`);await writeFile(oldFile,JSON.stringify(legacy));await importReport(page,oldFile);assert.match(await page.locator('#inspect-details').innerText(),/历史计算口径，保留原值/);
+      const roundTrip=await download(page,'#inspect-export',path.join(dir,`historical-${snapshot.id}-roundtrip.json`));assert.deepEqual(roundTrip.results.at(-1).report,old);
     }
   }
 });
@@ -300,7 +300,7 @@ scenario('[analysis] GPU SI/TI selection preserves the P.910 SDR method and disp
   assert.equal(await page.locator('#siti-workers').isDisabled(),capability.available);
   const {report}=await runTask(page,app,'#analyze');
   assert.equal(report.content.execution.device,capability.available?'gpu':'cpu');
-  assert.equal(report.content.execution.method,'VQEG-siti-c537e337-PQ');
+  assert.equal(report.content.execution.method,SITI_STANDARD_PROFILE);
   if(capability.available)assert.equal(report.content.execution.validation.selfTest,'passed');
   assert.equal(report.content.points.length,report.frames.length);
   assert.match(await page.locator('#inspect-details').innerText(),capability.available?/GPU ·/:/CPU ·/);
