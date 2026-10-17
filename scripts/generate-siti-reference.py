@@ -1,4 +1,4 @@
-"""Independent P.910 display/scale reference; pinned VQEG Sobel/TI kernels.
+"""Pinned, unchanged siti-tools 0.6.0 reference; never import production JS/C#.
 
 The adapter supplies integer native layouts / standard RGB luma coefficients.
 For 9/14/16-bit limited range, nominal endpoints extend the 8/10/12-bit table.
@@ -11,7 +11,7 @@ import logging
 import math
 from enum import Enum
 from pathlib import Path
-from typing import Optional, Union, cast
+from typing import Dict, List, Tuple, Callable, Optional, Union, cast
 import numpy as np
 from scipy import ndimage
 
@@ -21,47 +21,33 @@ HASH = "84557e030e302fa14e28a1cd1227f3320986050c4cf5f5f4d590215971329873"
 if hashlib.sha256(SOURCE.read_bytes()).hexdigest() != HASH:
     raise RuntimeError("Pinned VQEG source hash mismatch")
 tree = ast.parse(SOURCE.read_text(encoding="utf-8"))
-cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "SiTiCalculator")
-names = {"normalize_between_0_1", "normalize_to_original_si_range", "apply_display_model", "eotf_1886", "eotf_inv_srgb", "eotf_hlg", "oetf_pq", "si", "ti"}
-cls.body = [n for n in cls.body if isinstance(n, ast.Assign) or isinstance(n, ast.FunctionDef) and n.name in names]
-namespace = {"np": np, "ndimage": ndimage, "Enum": Enum, "Optional": Optional, "Union": Union, "cast": cast, "logger": logging.getLogger("reference")}
+names = ["normalize_between_0_1", "normalize_to_original_si_range", "apply_display_model", "eotf_1886", "eotf_inv_srgb", "eotf_hlg", "oetf_pq", "si", "ti"]
+namespace = {"np": np, "ndimage": ndimage, "Enum": Enum, "Dict": Dict, "List": List, "Tuple": Tuple, "Callable": Callable, "Optional": Optional, "Union": Union, "cast": cast, "logger": logging.getLogger("reference")}
 module = ast.Module(body=[n for n in tree.body if isinstance(n, ast.ClassDef)], type_ignores=[])
 exec(compile(ast.fix_missing_locations(module), str(SOURCE), "exec"), namespace)
 reference = namespace["SiTiCalculator"]
-destination = ROOT / "test/reference/siti/vqeg-pq.json"
-historical = json.loads(destination.read_text(encoding="utf-8"))["historical"]
+historical = json.loads((ROOT / "test/reference/siti/vqeg-pq.json").read_text(encoding="utf-8"))["historical"]
 
 cases = []
 
 def pq_oetf(luminance):
-    m1, m2 = 2610/16384, 2523/32
-    c1, c2, c3 = 3424/4096, 2413/128, 2392/128
-    power = np.power(luminance/10000, m1)
-    return np.power((c1+c2*power)/(1+c3*power), m2)
+    return reference.oetf_pq(luminance)
 
 def sdr_eotf(values, domain):
-    if domain == "srgb":
-        linear = np.where(values <= .04045, values/12.92, ((values+.055)/1.055)**2.4)
-        return .2 + 79.8*linear
-    white, black, gamma = 300., .01, 2.4
-    root = white**(1/gamma)-black**(1/gamma)
-    gain, lift = root**gamma, black**(1/gamma)/root
-    return gain*np.maximum(values+lift, 0)**gamma
+    return reference.apply_display_model(values, eotf_function=namespace["EotfFunction"].INV_SRGB if domain == "srgb" else namespace["EotfFunction"].BT1886)
 
 def hlg_eotf(values, white=1000.0, black=0.01):
-    # Standard equations transcribed independently; never import production JS.
-    a = 0.17883277
-    b, c = 1 - 4*a, 0.5 - a*np.log(4*a)
-    gamma = 1.2 + 0.42*np.log10(white/1000) if 400 <= white <= 2000 else 1.2*1.111**np.log2(white/1000)
-    beta = np.sqrt(3*(black/white)**(1/gamma))
-    signal = np.maximum(0, (1-beta)*values + beta)
-    linear = np.where(signal <= 0.5, signal**2/3, (np.exp((signal-c)/a)+b)/12)
-    return white*linear**gamma
+    return reference.eotf_hlg(values, l_max=white, l_min=black)
 
 def add(fmt, depth, layout, domain="sdr", limited=False, endian="le", alpha=False, order=None, subsample=(1, 1), shift=0, matrix=None, hlg=None, boundary=False):
     w, h = 10, 8
     maximum = 2**depth - 1
     low, high = (16*2**(depth-8), 235*2**(depth-8)) if limited else (0, maximum)
+    calculator = reference(bit_depth=depth if depth in [8, 10, 12] else 8, color_range=namespace["ColorRange"].LIMITED if limited else namespace["ColorRange"].FULL)
+    if depth not in [8, 10, 12]:
+        # Explicit input extension; never label this as an upstream supported depth.
+        calculator.bit_depth = depth
+        calculator.LIMITED_RANGE = {**calculator.LIMITED_RANGE, depth: {"min": low, "max": high}}
     yy, xx = np.indices((h, w))
     dtype = np.dtype("u1" if depth == 8 else "<u2" if endian == "le" else ">u2")
     frames, expected = [], []
@@ -82,7 +68,7 @@ def add(fmt, depth, layout, domain="sdr", limited=False, endian="le", alpha=Fals
                 luma = codes  # Exact neutral endpoints, without coefficient-sum roundoff.
         else:
             luma = codes
-        normalized = (luma-low)/(high-low)
+        normalized = calculator.normalize_between_0_1(luma)
         if domain == "pq":
             prepared = normalized
         elif domain == "hlg":
@@ -90,7 +76,7 @@ def add(fmt, depth, layout, domain="sdr", limited=False, endian="le", alpha=Fals
         else:
             prepared = pq_oetf(sdr_eotf(normalized, domain))
         ti = reference.ti(prepared, previous)
-        expected.append({"si": float(reference.si(prepared)*maximum), "ti": None if ti is None else float(ti*maximum)})
+        expected.append({"si": float(calculator.normalize_to_original_si_range(reference.si(prepared))), "ti": None if ti is None else float(calculator.normalize_to_original_si_range(ti))})
         previous = prepared
         if layout == "gray":
             samples = codes.reshape(-1)
@@ -130,13 +116,13 @@ add("gray10le", 10, "gray", domain="hlg", limited=True, hlg={"whiteCdM2": 2000, 
 add("rgb24", 8, "rgb-packed", order="rgb", matrix="bt2020", domain="hlg")
 for limited in [False, True]:
     add("gray10le", 10, "gray", domain="hlg", limited=limited, boundary=True)
-data = {"reference": {"commit": "c537e33793266187aad87c859fd62a9de9033854", "sourceSha256": HASH, "unmodifiedFunctions": ["si", "ti"]}, "adapter": "BT.601/709/2020nc RGB luma; nominal integer endpoints extended to 9/14/16 bits", "method": "Independent native range, BT.1886 reference EOTF (300/.01), inverse sRGB reference display (80/.2), BT.2100 HLG and PQ OETF; output multiplied by 2^input_bit_depth-1", "historical": historical, "cases": cases}
-data["hlgReference"] = {"standard": "ITU-R BT.2100-2 (07/2018)", "table": 5, "gamma": "note 5f; footnote 2 outside 400–2000 cd/m2", "eotf": "black lift beta, inverse OETF, then white * linear^gamma; corrects pinned VQEG HLG"}
+data = {"reference": {"version": "0.6.0", "commit": "c537e33793266187aad87c859fd62a9de9033854", "sourceSha256": HASH, "unmodifiedFunctions": names}, "adapter": "BT.601/709/2020nc RGB luma; nominal integer endpoints extended to 9/14/16 bits; not upstream file reader coverage", "method": "Unchanged upstream normalization, display/PQ, SI/TI and fixed 255 output", "historical": historical, "cases": cases}
+data["hlgReference"] = {"implementation": "siti-tools 0.6.0 eotf_hlg", "eotf": "Pinned high branch and affine black mapping, including discontinuity"}
 data["hlgCurves"] = [{"whiteCdM2": white, "blackCdM2": black, "points": [{"signal": signal, "pq": float(pq_oetf(hlg_eotf(np.array(signal), white, black)))} for signal in [0, .1, .499999, .5, .500001, .75, 1]]} for white, black in [(200, .001), (400, .005), (600, .01), (1000, 0), (1000, .01), (2000, .02), (4000, .01), (10000, .05)]]
 data["sdrCurves"] = [{"domain": domain, "points": [{"signal": signal, "luminance": float(sdr_eotf(np.array(signal), domain)), "pq": float(pq_oetf(sdr_eotf(np.array(signal), domain)))} for signal in [0, .001, .040449999, .04045, .040450001, .1, .25, .5, .75, 1]]} for domain in ["sdr", "srgb"]]
 legacy = next(c for c in cases if c["name"] == "gray10le-hlg-tv-display")
 prepared = [reference.oetf_pq(reference.eotf_hlg((np.frombuffer(base64.b64decode(f), dtype="<u2").reshape(8, 10)-64)/876, l_max=2000, l_min=.02)) for f in legacy["frames"]]
 data["legacyHlg"] = {"case": legacy["name"], "expected": [{"si": float(reference.si(f)*255), "ti": None if i == 0 else float(reference.ti(f, prepared[i-1])*255)} for i, f in enumerate(prepared)]}
-destination = ROOT / "test/reference/siti/vqeg-pq.json"
+destination = ROOT / "test/reference/siti/vqeg-060.json"
 destination.write_text(json.dumps(data, separators=(",", ":"), allow_nan=False)+"\n", encoding="utf-8")
 print(f"{len(cases)} reference cases: {destination}")

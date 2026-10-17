@@ -9,6 +9,8 @@ using System.Diagnostics;
 namespace MediaScope {
 // fp64 backend. Layout, display parameters and luma LUT come from the shared JS configuration.
 public sealed class SitiOpenCl : IDisposable {
+    // Must agree with public/analysis-limits.js; these are engineering limits.
+    const int MaxFrames=2000000, MaxPixels=8192*4320;
     const string Dll="OpenCL.dll";
     [DllImport(Dll)] static extern int clGetPlatformIDs(uint n,[Out] IntPtr[] p,out uint count);
     [DllImport(Dll)] static extern int clGetDeviceIDs(IntPtr p,ulong type,uint n,[Out] IntPtr[] devices,out uint count);
@@ -32,6 +34,7 @@ public sealed class SitiOpenCl : IDisposable {
     [DllImport(Dll)] static extern int clReleaseContext(IntPtr p);
     static void Check(int e){if(e!=0)throw new Exception("OpenCL error "+e);}
     static string Info(IntPtr d,uint key){UIntPtr len;Check(clGetDeviceInfo(d,key,UIntPtr.Zero,null,out len));byte[] b=new byte[(int)len.ToUInt64()];Check(clGetDeviceInfo(d,key,len,b,out len));return Encoding.UTF8.GetString(b).TrimEnd('\0');}
+    static ulong MemoryInfo(IntPtr d,uint key){UIntPtr len;byte[] b=new byte[8];Check(clGetDeviceInfo(d,key,(UIntPtr)8,b,out len));return BitConverter.ToUInt64(b,0);}
     static IntPtr Device(){
         uint n;Check(clGetPlatformIDs(0,null,out n));IntPtr[] platforms=new IntPtr[n];Check(clGetPlatformIDs(n,platforms,out n));
         foreach(IntPtr p in platforms){uint count;int e=clGetDeviceIDs(p,4,0,null,out count);if(e==-1)continue;Check(e);IntPtr[] devices=new IntPtr[count];Check(clGetDeviceIDs(p,4,count,devices,out count));foreach(IntPtr d in devices)if(Info(d,0x1030).Contains("cl_khr_fp64"))return d;}
@@ -49,9 +52,9 @@ uint code_at(__global const uchar *raw,int i,int bytes,int little,int shift,int 
 }
 double transfer(double v,__global const double *p) {
     if(p[5]==0)return v;double luminance;
-    if(p[5]==3){double x=fmax(0,(1-p[9])*v+p[9]);double linear=x<=.5?x*x/3:(exp((x-p[12])/p[10])+p[11])/12;luminance=p[6]*pow(linear,p[8]);}
+    if(p[5]==3){double linear=v<=.5?v*v/3:exp((v-p[12])/p[10])-p[11];luminance=(p[6]-p[7])*pow(linear,p[8])+p[7];}
     else if(p[5]==2){double linear=v<=.04045?v/12.92:pow((v+.055)/1.055,p[8]);luminance=(p[6]-p[7])*linear+p[7];}
-    else luminance=p[18]*pow(fmax(v+p[19],0),p[8]);
+    else luminance=(p[6]-p[7])*pow(v,p[8])+p[7];
     double y=pow(luminance/10000,p[13]);return pow((p[15]+p[16]*y)/(1+p[17]*y),p[14]);
 }
 __kernel void convert(__global const uchar *raw,__global double *curr,__global const double *lut,__global int *invalid,int n,int bytes,int shift,int little,int alpha,int maxCode,int layout,int stride,int red,int green,int blue) {
@@ -95,9 +98,10 @@ __kernel void finish_stat(__global const double *partial,int groups,int count,__
     int w,h,n,sampleBytes,depth,shift,little,frameBytes,alpha,layout,stride,red,green,blue,planeCapacity,rawCapacity,lutCapacity;double[] table;readonly double[] result=new double[4];
     readonly int[] invalidFlag=new int[1];
     public readonly string Name,Driver;
+    readonly ulong maxAllocation,globalMemory;
     public SitiOpenCl(int width,int height,int storage,int bits,int padding,int endian,int payloadBytes,int alphaOffset,double[] lookup){
         try{
-            IntPtr device=Device();Name=Info(device,0x102B);Driver=Info(device,0x102D);int e;
+            IntPtr device=Device();Name=Info(device,0x102B);Driver=Info(device,0x102D);maxAllocation=MemoryInfo(device,0x1010);globalMemory=MemoryInfo(device,0x101F);int e;
             context=clCreateContext(IntPtr.Zero,1,new[]{device},IntPtr.Zero,IntPtr.Zero,out e);Check(e);queue=clCreateCommandQueue(context,device,0,out e);Check(e);
             program=clCreateProgramWithSource(context,1,new[]{Source},IntPtr.Zero,out e);Check(e);e=clBuildProgram(program,1,new[]{device},"-cl-std=CL1.2",IntPtr.Zero,IntPtr.Zero);
             if(e!=0){UIntPtr len;clGetProgramBuildInfo(program,device,0x1183,UIntPtr.Zero,null,out len);byte[] b=new byte[(int)len.ToUInt64()];clGetProgramBuildInfo(program,device,0x1183,len,b,out len);throw new Exception("OpenCL build: "+Encoding.UTF8.GetString(b));}
@@ -106,7 +110,7 @@ __kernel void finish_stat(__global const double *partial,int groups,int count,__
         }catch{Dispose();throw;}
     }
     bool Configure(int width,int height,int storage,int bits,int padding,int endian,int payloadBytes,int alphaOffset,int family,int pixelStride,int r,int g,int b,double[] lookup){
-        if(width<3||height<3||(long)width*height>33554432)throw new InputException("Invalid SITI GPU dimensions");
+        if(width<3||height<3||(long)width*height>MaxPixels)throw new InputException("Invalid SITI GPU dimensions");
         w=width;h=height;n=checked(w*h);sampleBytes=storage/8;depth=bits;shift=padding;little=endian;frameBytes=payloadBytes;alpha=alphaOffset;table=lookup;layout=family;stride=pixelStride;red=r;green=g;blue=b;
         if(storage!=0&&storage!=8&&storage!=16||Array.IndexOf(new[]{8,9,10,12,14,16},depth)<0||shift!=0&&shift!=16-depth||little!=0&&little!=1||storage==8&&depth!=8||layout<0||layout>2||layout==0&&storage!=0||layout!=0&&storage==0||frameBytes<n*(storage==0?8:sampleBytes)||alpha< -1||stride<0||stride>4||layout!=2&&stride!=0||table.Length!=(layout==2?20:storage==0?1:1<<depth))throw new InputException("Invalid SITI native layout");
         if(layout==2&&(stride==0?(red!=2*n||green!=0||blue!=n):(stride<3||red<0||red>=stride||green<0||green>=stride||blue<0||blue>=stride))||layout==2&&frameBytes!=n*(stride==0?(alpha>=0?4:3):stride)*sampleBytes||alpha>=0&&(layout==2&&stride>0?alpha>=stride:(long)(alpha+n)*sampleBytes>frameBytes))throw new InputException("Invalid SITI RGB layout");
@@ -114,7 +118,9 @@ __kernel void finish_stat(__global const double *partial,int groups,int count,__
         int capacity=Math.Max(n,469),payload=Math.Max(frameBytes,469*8),entries=table.Length;bool reused=planeCapacity>=capacity&&rawCapacity>=payload&&lutCapacity>=entries;
         if(!reused){
             int nextPlane=Math.Max(planeCapacity,capacity),nextRaw=Math.Max(rawCapacity,payload),nextLut=Math.Max(lutCapacity,entries);
-            ReleaseBuffers();raw=Buffer(nextRaw);curr=Buffer(nextPlane*8);prev=Buffer(nextPlane*8);values=Buffer(nextPlane*16);partial=Buffer(((nextPlane+255)/256)*8);stats=Buffer(32);invalid=Buffer(4);lut=Buffer(nextLut*8);planeCapacity=nextPlane;rawCapacity=nextRaw;lutCapacity=nextLut;
+            ulong planeBytes=checked((ulong)nextPlane*16),total=checked((ulong)nextRaw+32UL*(ulong)nextPlane+8UL*(ulong)((nextPlane+255)/256)+8UL*(ulong)nextLut+36);
+            if(Math.Max(planeBytes,(ulong)nextRaw)>maxAllocation||total>globalMemory)throw new Exception("GPU SI/TI buffers exceed device allocation or memory capacity");
+            ReleaseBuffers();raw=Buffer(nextRaw);curr=Buffer(checked(nextPlane*8));prev=Buffer(checked(nextPlane*8));values=Buffer(checked(nextPlane*16));partial=Buffer(checked(((nextPlane+255)/256)*8));stats=Buffer(32);invalid=Buffer(4);lut=Buffer(checked(nextLut*8));planeCapacity=nextPlane;rawCapacity=nextRaw;lutCapacity=nextLut;
         }
         Write(lut,table,table.Length*8);return reused;
     }
@@ -137,7 +143,7 @@ __kernel void finish_stat(__global const double *partial,int groups,int count,__
         Mem(metrics,0,curr);Mem(metrics,1,prev);Mem(metrics,2,values);Int(metrics,3,w);Int(metrics,4,h);Int(metrics,5,first?1:0);Launch(metrics,n);
         Statistics(0,(w-2)*(h-2),0);if(!first)Statistics(n,n,1);Read(stats,result,32);Read(invalid,invalidFlag,4);
         if(invalidFlag[0]!=0)throw new InputException((invalidFlag[0]&2)!=0?"SI/TI 半透明输入缺少参考合成流程":(invalidFlag[0]&4)!=0?"SI/TI 填充位非零或样本超出位深":layout==2?"SI/TI RGB 分量超出声明范围；不裁剪或改判范围":"SI/TI 亮度样本超出声明范围；不裁剪或改判范围");
-        IntPtr swap=prev;prev=curr;curr=swap;double multiplier=(1<<depth)-1;return new[]{result[2]*multiplier,first?0:result[3]*multiplier};
+        IntPtr swap=prev;prev=curr;curr=swap;return new[]{result[2]*255,first?0:result[3]*255};
     }
     static double Std(double[] a){double sum=0,c=0;foreach(double v in a){double y=v-c,t=sum+y;c=(t-sum)-y;sum=t;}double mean=sum/a.Length;sum=0;c=0;foreach(double v in a){double d=v-mean,y=d*d-c,t=sum+y;c=(t-sum)-y;sum=t;}return Math.Sqrt(sum/a.Length);}
     double[] Reference(byte[] data,ref double[] previous){
@@ -148,13 +154,13 @@ __kernel void finish_stat(__global const double *partial,int groups,int count,__
         }
         int[] sx={-1,0,1,-2,0,2,-1,0,1},sy={-1,-2,-1,0,0,0,1,2,1};
         for(int y=1;y<h-1;y++)for(int x=1;x<w-1;x++){double gx=0,gy=0;for(int k=0;k<9;k++){double v=a[(y+k/3-1)*w+x+k%3-1];gx+=v*sx[k];gy+=v*sy[k];}gradient[(y-1)*(w-2)+x-1]=Math.Sqrt(gx*gx+gy*gy);}
-        previous=a;double multiplier=(1<<depth)-1;return new[]{Std(gradient)*multiplier,Std(motion)*multiplier};
+        previous=a;return new[]{Std(gradient)*255,Std(motion)*255};
     }
     double Transfer(double v){
         if(table[5]==0)return v;double luminance;
-        if(table[5]==3){double x=Math.Max(0,(1-table[9])*v+table[9]),linear=x<=.5?x*x/3:(Math.Exp((x-table[12])/table[10])+table[11])/12;luminance=table[6]*Math.Pow(linear,table[8]);}
+        if(table[5]==3){double linear=v<=.5?v*v/3:Math.Exp((v-table[12])/table[10])-table[11];luminance=(table[6]-table[7])*Math.Pow(linear,table[8])+table[7];}
         else if(table[5]==2){double linear=v<=.04045?v/12.92:Math.Pow((v+.055)/1.055,table[8]);luminance=(table[6]-table[7])*linear+table[7];}
-        else luminance=table[18]*Math.Pow(Math.Max(v+table[19],0),table[8]);
+        else luminance=(table[6]-table[7])*Math.Pow(v,table[8])+table[7];
         double y=Math.Pow(luminance/10000,table[13]);return Math.Pow((table[15]+table[16]*y)/(1+table[17]*y),table[14]);
     }
     double SelfTest(){
@@ -186,7 +192,7 @@ __kernel void finish_stat(__global const double *partial,int groups,int count,__
     static string Escape(string s){return s.Replace("\\","\\\\").Replace("\"","\\\"").Replace("\r"," ").Replace("\n"," ");}
     int ReadCode(byte[] data,int i){int word=sampleBytes==1?data[i]:little==1?data[2*i]|data[2*i+1]<<8:data[2*i+1]|data[2*i]<<8;return word>>shift;}
     void WriteCode(byte[] data,int i,int code){int word=code<<shift;if(sampleBytes==1)data[i]=(byte)word;else{data[2*i+(little==1?0:1)]=(byte)word;data[2*i+(little==1?1:0)]=(byte)(word>>8);}}
-    static HashSet<int> Starts(string text){var starts=new HashSet<int>();int last=-1;foreach(string value in text.Split(',')){int start;if(!int.TryParse(value,out start)||start<0||start>=500000||start<=last||last==-1&&start!=0||starts.Count>=2048)throw new InputException("Invalid SITI scene starts");starts.Add(start);last=start;}return starts;}
+    static HashSet<int> Starts(string text){var starts=new HashSet<int>();int last=-1;foreach(string value in text.Split(',')){int start;if(!int.TryParse(value,out start)||start<0||start>=MaxFrames||start<=last||last==-1&&start!=0||starts.Count>=2048)throw new InputException("Invalid SITI scene starts");starts.Add(start);last=start;}return starts;}
     string InfoJson(string prefix,double error){return prefix+"\"device\":\""+Escape(Name)+"\",\"driver\":\""+Escape(Driver)+"\",\"backend\":\"OpenCL 1.2 fp64\",\"metrics\":\"PQ-Sobel-TI-fp64\",\"selfTestMaxError\":"+error.ToString("R")+"}";}
     static string Header(Stream input){var bytes=new List<byte>();for(;;){int b=input.ReadByte();if(b==-1){if(bytes.Count!=0)throw new InputException("Truncated SITI request");return null;}if(b==10)return Encoding.UTF8.GetString(bytes.ToArray());if(bytes.Count>=65536)throw new InputException("SITI request too large");bytes.Add((byte)b);}}
     static int Serve(){
@@ -199,7 +205,7 @@ __kernel void finish_stat(__global const double *partial,int groups,int count,__
                     if(p.Length==2&&p[0]=="P"){Console.WriteLine(gpu.InfoJson("{\"id\":"+id+",\"event\":\"probe\",",selfTest));continue;}
                     if(p.Length!=18||p[0]!="M")throw new InputException("Invalid SITI session request");
                     int width=int.Parse(p[2]),height=int.Parse(p[3]),count=int.Parse(p[4]),entries=int.Parse(p[17]);var starts=Starts(p[5]);
-                    if(count<1||count>500000||entries<1||entries>65536)throw new InputException("Invalid SITI frame or table count");foreach(int start in starts)if(start>=count)throw new InputException("SITI scene start exceeds frame count");
+                    if(count<1||count>MaxFrames||entries<1||entries>65536)throw new InputException("Invalid SITI frame or table count");foreach(int start in starts)if(start>=count)throw new InputException("SITI scene start exceeds frame count");
                     byte[] header=new byte[entries*8];if(!ReadFrame(input,header))throw new InputException("Missing SITI input parameters");double[] table=new double[entries];System.Buffer.BlockCopy(header,0,table,0,header.Length);
                     bool reused=gpu.Configure(width,height,int.Parse(p[6]),int.Parse(p[7]),int.Parse(p[8]),int.Parse(p[9]),int.Parse(p[10]),int.Parse(p[11]),int.Parse(p[12]),int.Parse(p[13]),int.Parse(p[14]),int.Parse(p[15]),int.Parse(p[16]),table);
                     selfTest=gpu.SelfTest();Console.WriteLine(gpu.InfoJson("{\"id\":"+id+",\"event\":\"configured\",\"buffersReused\":"+(reused?"true":"false")+",",selfTest));

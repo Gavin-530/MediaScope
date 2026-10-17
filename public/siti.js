@@ -1,24 +1,30 @@
-// P.910 (10/2023) SI/TI with the documented interpretation of range, EOTF and PQ input.
+import {MAX_ANALYSIS_FRAMES,validateSitiDimensions} from './analysis-limits.js';
+// Fixed siti-tools 0.6.0 PQ calculation; native layouts and RGB are declared adapters.
 // VQEG mathematical functions are ported under MIT; see licenses/VQEG-siti-tools.txt.
 export const SITI_STANDARD_PROFILE='P910-2023-PQ-v1';
-// Historical profiles identify saved values only; new calculations use version 7.
+export const SITI_COMPAT_PROFILE='VQEG-siti-tools-0.6.0-PQ-v1';
+// Historical profiles identify saved values only; new calculations use version 8.
 export const SITI_PROFILE='VQEG-siti-c537e337-PQ';
 export const SITI_HLG_PROFILE='P910-HLG-BT2100-2-PQ-v1';
 export const SITI_REFERENCE=Object.freeze({project:'VQEG/siti-tools',commit:'c537e33793266187aad87c859fd62a9de9033854',sourceSha256:'84557e030e302fa14e28a1cd1227f3320986050c4cf5f5f4d590215971329873'});
 export const SITI_MATRICES=Object.freeze({bt601:[.299,.587,.114],bt709:[.2126,.7152,.0722],bt2020:[.2627,.678,.0593]});
-const HLG_A=.17883277,HLG_B=1-4*HLG_A,HLG_C=.5-HLG_A*Math.log(4*HLG_A);
+const HLG_A=.17883277,HLG_B=.02372241,HLG_C=1.00429347;
 const SDR_WHITE=300,SDR_BLACK=.01,GAMMA=2.4;
 const SDR_ROOT=SDR_WHITE**(1/GAMMA)-SDR_BLACK**(1/GAMMA);
 const SDR_GAIN=SDR_ROOT**GAMMA,SDR_LIFT=SDR_BLACK**(1/GAMMA)/SDR_ROOT;
 const SITI_INTERPRETATIONS=Object.freeze({range:'native integer nominal endpoints; 7.8.1.2 extended from 8-bit',sdr:'BT.1886 Annex 1 reference EOTF; B.2 Appendix 1 locator interpreted',pq:'already in target PQ domain; no repeated encoding',output:'7.8.1.5 b is the input integer bit depth'});
-function sitiDisplay(input){
+function version7Display(input){
   return input.domain==='pq'?null:input.domain==='hlg'?{...input.hlg}:input.domain==='srgb'?{whiteCdM2:80,blackCdM2:.2,gamma:GAMMA,model:'inverse sRGB reference display'}:{whiteCdM2:SDR_WHITE,blackCdM2:SDR_BLACK,gamma:GAMMA,gain:SDR_GAIN,blackLift:SDR_LIFT,model:'BT.1886 Annex 1 reference EOTF'};
 }
-function hlgDisplay({whiteCdM2:white,blackCdM2:black}){
+function version7Hlg({whiteCdM2:white,blackCdM2:black}){
   // Table 5 note 5f; footnote 2 extends gamma outside 400–2000 cd/m².
   const gamma=white>=400&&white<=2000?1.2+.42*Math.log10(white/1000):1.2*1.111**Math.log2(white/1000);
   return {whiteCdM2:white,blackCdM2:black,gamma,beta:Math.sqrt(3*(black/white)**(1/gamma))};
 }
+function hlgDisplay({whiteCdM2:white,blackCdM2:black}){
+  return {whiteCdM2:white,blackCdM2:black,gamma:white<=1000?1.2:1.2+.42*Math.log10(white/1000)};
+}
+function sitiDisplay(input){return input.domain==='pq'?null:input.domain==='hlg'?{...input.hlg}:{whiteCdM2:300,blackCdM2:.1,gamma:2.4,model:input.domain==='srgb'?'siti-tools inverse sRGB and affine display':'siti-tools BT.1886 and affine display'};}
 
 export function validateSitiSettings(settings,{historical=false}={}){
   if(settings===undefined)return;
@@ -26,7 +32,6 @@ export function validateSitiSettings(settings,{historical=false}={}){
   if(![undefined,'auto','tv','pc'].includes(settings.range)||![undefined,'auto','sdr','srgb','pq','hlg'].includes(settings.transfer)||![undefined,'reject','bwdif'].includes(settings.interlaced)||![undefined,'auto',...Object.keys(SITI_MATRICES)].includes(settings.matrix))throw Error('SI/TI 范围、传递函数、矩阵或隔行处理无效');
   const h=settings.hlg;
   if(h!==undefined&&(!h||typeof h!=='object'||Array.isArray(h)||Object.keys(h).some(k=>!['whiteCdM2','blackCdM2'].includes(k))||!Number.isFinite(h.whiteCdM2)||h.whiteCdM2<=0||h.whiteCdM2>10000||!Number.isFinite(h.blackCdM2)||h.blackCdM2<0||h.blackCdM2>=h.whiteCdM2||![undefined,'auto','hlg'].includes(settings.transfer)))throw Error('SI/TI HLG 显示峰值或黑位无效');
-  if(h&&!historical&&hlgDisplay(h).beta>=1)throw Error('SI/TI HLG 黑位抬升超出模型有效范围，不能产生反向或恒定亮度映射');
 }
 export function sitiRgbMatrix(stream,choice){
   if(choice&&choice!=='auto')return {name:choice,source:'user-confirmed'};
@@ -49,16 +54,23 @@ export function sitiInput(stream,settings,options){
     source:{pixelFormat:stream.pix_fmt,range:stream.color_range??null,transfer:stream.color_transfer??null,fieldOrder:stream.field_order??null,matrix:stream.color_space??null,primaries:stream.color_primaries??null}};
 }
 export function sitiConfiguration(input){
+  return {configurationVersion:8,profile:SITI_COMPAT_PROFILE,standard:'ITU-T P.910 (10/2023)',reference:{...SITI_REFERENCE,version:'0.6.0'},referenceAgreement:'Fixed siti-tools 0.6.0 normalization, display/PQ, Sobel/TI and 255 scale; adapters recorded separately',input:structuredClone(input),inputDomain:input.domain,inputBitDepth:input.depth,inputRange:input.range,domain:'PQ',display:sitiDisplay(input),outputMultiplier:255,firstTi:null,preprocessing:input.deinterlace?'bwdif=mode=send_frame:parity=auto:deint=interlaced':'native decoded samples',lumaDerivation:input.matrix?{...input.matrix,coefficients:[...SITI_MATRICES[input.matrix.name]]}:null,inputAdapter:{layout:input.format.layout,extendedBitDepth:![8,10,12].includes(input.depth),rgbLuma:!!input.matrix}};
+}
+function version7Configuration(input){
   return {configurationVersion:7,profile:SITI_STANDARD_PROFILE,standard:'ITU-T P.910 (10/2023)',reference:SITI_REFERENCE,referenceAgreement:'VQEG Sobel/TI kernels; independently specified display models and input-bit-depth output',interpretations:{...SITI_INTERPRETATIONS},input:structuredClone(input),inputDomain:input.domain,inputBitDepth:input.depth,inputRange:input.range,domain:'PQ',
-    display:sitiDisplay(input),
+    display:version7Display(input),
     outputMultiplier:2**input.depth-1,firstTi:null,preprocessing:input.deinterlace?'bwdif=mode=send_frame:parity=auto:deint=interlaced':'native decoded samples',
     lumaDerivation:input.matrix?{...input.matrix,coefficients:[...SITI_MATRICES[input.matrix.name]]}:null};
 }
 export function validateSitiConfiguration(execution,stream){
   const c=execution?.configuration;
   // Historical reports retain their original values and method, without running old algorithms.
-  if(![SITI_PROFILE,SITI_HLG_PROFILE,SITI_STANDARD_PROFILE].some(p=>execution?.method===p||c?.profile===p)&&![5,6,7].includes(c?.configurationVersion))return;
-  const expected=sitiConfiguration(sitiInput(stream,c?.input?.settings??undefined,{historical:c?.configurationVersion!==7}));
+  if(![SITI_PROFILE,SITI_HLG_PROFILE,SITI_STANDARD_PROFILE,SITI_COMPAT_PROFILE].some(p=>execution?.method===p||c?.profile===p)&&![5,6,7,8].includes(c?.configurationVersion))return;
+  if(![5,6,7,8].includes(c?.configurationVersion))throw Error('SI/TI 计算配置版本无效');
+  const input=sitiInput(stream,c?.input?.settings??undefined,{historical:true});
+  if(c.configurationVersion!==8&&input.hlg)input.hlg=version7Hlg(input.hlg);
+  if(c.configurationVersion===7&&input.hlg?.beta>=1)throw Error('SI/TI HLG 黑位抬升超出历史模型有效范围');
+  const expected=c.configurationVersion===8?sitiConfiguration(input):version7Configuration(input);
   if([5,6].includes(c?.configurationVersion)){
     if(c.configurationVersion===6&&expected.inputDomain!=='hlg')throw Error('SI/TI 历史计算配置版本无效');
     expected.configurationVersion=c.configurationVersion;expected.profile=c.configurationVersion===6?SITI_HLG_PROFILE:SITI_PROFILE;
@@ -79,11 +91,13 @@ export function sitiPreprocessedValue(v,input){
   if(input.domain==='pq')return v;
   let luminance;
   if(input.domain==='hlg'){
-    const {whiteCdM2:white,gamma,beta}=input.hlg,x=Math.max(0,(1-beta)*v+beta);
-    const linear=x<=.5?x*x/3:(Math.exp((x-HLG_C)/HLG_A)+HLG_B)/12;
-    luminance=white*linear**gamma;
+    const {whiteCdM2:white,blackCdM2:black,gamma}=input.hlg;
+    // Preserve the pinned upstream high branch, including its discontinuity.
+    const linear=v<=.5?v*v/3:Math.exp((v-HLG_C)/HLG_A)-HLG_B;
+    luminance=(white-black)*linear**gamma+black;
   }else{
-    luminance=input.domain==='srgb' ? .2+79.8*(v<=.04045?v/12.92:((v+.055)/1.055)**GAMMA) : SDR_GAIN*Math.max(v+SDR_LIFT,0)**GAMMA;
+    const linear=input.domain==='srgb'?(v<=.04045?v/12.92:((v+.055)/1.055)**2.4):v**2.4;
+    luminance=(300-.1)*linear+.1;
   }
   const y=(luminance/10000)**(2610/16384);
   return ((3424/4096+(2413/128)*y)/(1+(2392/128)*y))**(2523/32);
@@ -132,8 +146,8 @@ function populationStd(values){
   return Math.sqrt(sum/values.length);
 }
 export function createSitiCalculator(w,h,input){
-  if(!Number.isSafeInteger(w)||!Number.isSafeInteger(h)||w<3||h<3||w*h>33554432)throw Error('SI/TI 帧尺寸无效');
-  const reader=createSitiReader(input,w,h),n=w*h,multiplier=2**input.depth-1;let current,previous,gradient,motion,frame=0;
+  validateSitiDimensions(w,h);
+  const reader=createSitiReader(input,w,h),n=w*h,multiplier=255;let current,previous,gradient,motion,frame=0;
   return {...reader,measure(raw,first=false,previousRaw=null){
     if(!current){current=new Float64Array(n);previous=new Float64Array(n);gradient=new Float64Array((w-2)*(h-2));motion=new Float64Array(n)}
     reader.read(raw,current);const temporal=(frame>0||previousRaw!==null)&&!first;
@@ -177,7 +191,7 @@ export function distribution(values){const a=values.filter(Number.isFinite).sort
 // Undefined means cuts have not been confirmed. [0] explicitly confirms one scene.
 export function validateSitiSceneStarts(starts,count=null){
   if(starts===undefined)return;
-  if(!Array.isArray(starts)||!starts.length||starts.length>2048||starts[0]!==0||starts.some((x,i)=>!Number.isSafeInteger(x)||x<0||x>=500000||i>0&&x<=starts[i-1]||count!==null&&x>=count))throw Error('SI/TI 场景起始帧须从第 1 帧开始、严格递增且位于视频内（最多 2048 个场景）');
+  if(!Array.isArray(starts)||!starts.length||starts.length>2048||starts[0]!==0||starts.some((x,i)=>!Number.isSafeInteger(x)||x<0||x>=MAX_ANALYSIS_FRAMES||i>0&&x<=starts[i-1]||count!==null&&x>=count))throw Error('SI/TI 场景起始帧须从第 1 帧开始、严格递增且位于视频内（最多 2048 个场景）');
 }
 
 export function sitiSceneSummary(points,starts){
@@ -220,7 +234,7 @@ export function sitiTimestamp(pts,timeBase){
 }
 
 export function validateSitiPoints(points,frames=null,{sceneStarts=[]}={}){
-  if(!Array.isArray(points)||!points.length||points.length>500000)throw Error('SI/TI 结果帧数无效');
+  if(!Array.isArray(points)||!points.length||points.length>MAX_ANALYSIS_FRAMES)throw Error('SI/TI 结果帧数无效');
   if(frames!==null&&(!Array.isArray(frames)||points.length!==frames.length))throw Error('SI/TI 结果帧数与预扫描不一致');
   const starts=new Set(sceneStarts);
   for(let i=0;i<points.length;i++){

@@ -1,0 +1,47 @@
+{
+  "source": "VQEG/siti-tools",
+  "commit": "c537e33793266187aad87c859fd62a9de9033854",
+  "purpose": "Unmodified upstream videos and published ground truth; not generated from MediaScope",
+  "files": [
+    {
+      "path": "published/foreman_cif.json",
+      "sha256": "c8ff7ca3f5fc0481a3347f4014b0ad57ceffaff17a403853ada7c56865b442c7"
+    },
+    {
+      "path": "videos/foreman_cif.y4m",
+      "sha256": "f5de1d68f5e4cca0d00ea64740f922afe02febaa25c5663699b2506e1892d5ed"
+    },
+    {
+      "path": "published/noise.json",
+      "sha256": "4cf9e1fdc07c16fb5b208cfc076bef81932c83fc350ae327d7a7c08a62b6c5d5"
+    },
+    {
+      "path": "videos/noise.y4m",
+      "sha256": "cb27602ea24f0fa23a7f137b7051de63296b4c96a1a4f16062e76e56b1337118"
+    },
+    {
+      "path": "published/fall-hlg.json",
+      "sha256": "3823fffe2dd035f97ef01f2f5953f18d80b82df73750e2db948a9b53c18f8f4c"
+    },
+    {
+      "path": "videos/fall-hlg.mov",
+      "sha256": "d105dd53de9119cff6d734c68f644bb0edeef202252724315e1179bc880598a2"
+    },
+    {
+      "path": "published/lights-hlg.json",
+      "sha256": "a05b0e7f220121b46989e7fe03285000e0f235ba5d18cf54e8c92f7837427ace"
+    },
+    {
+      "path": "videos/lights-hlg.mov",
+      "sha256": "e683ef38078f19e89ced64620a0a37cbf5ff29ac54fd51ba39d80f5ab90aa223"
+    },
+    {
+      "path": "published/sunset-hlg.json",
+      "sha256": "0b0c6d916e5c64b4ad0ca891ae0795616effad1bcf3a963cfbdcf74f49e48ab3"
+    },
+    {
+      "path": "videos/sunset-hlg.mov",
+      "sha256": "b8ef8ae0f27bbff917d517feefab74d301d64862fe7bd3ea0f79923e81512a61"
+    }
+  ]
+}

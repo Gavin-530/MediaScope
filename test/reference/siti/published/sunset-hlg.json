@@ -1,0 +1,29 @@
+{
+    "si": [
+        3.9986325451625366,
+        3.945613616354972,
+        4.138035019599985,
+        4.246972345956456,
+        4.48982814719558
+    ],
+    "ti": [
+        5.477032037410652,
+        5.759358031721984,
+        6.133345611005933,
+        6.424600294368263
+    ],
+    "settings": {
+        "calculation_domain": "pq",
+        "hdr_mode": "hlg",
+        "bit_depth": 10,
+        "color_range": "full",
+        "eotf_function": "bt1886",
+        "l_max": 1000.0,
+        "l_min": 0.01,
+        "gamma": 2.4,
+        "pu21_mode": "banding",
+        "legacy": false,
+        "version": "0.1.3"
+    },
+    "input_file": "sunset-hlg.mov"
+}

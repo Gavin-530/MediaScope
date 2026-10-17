@@ -1,0 +1,29 @@
+{
+    "si": [
+        56.859746855102614,
+        55.967538925996365,
+        56.31768629091642,
+        55.72770870085969,
+        56.65520632442709
+    ],
+    "ti": [
+        9.282396642166805,
+        10.913202661020888,
+        9.818995292103207,
+        9.34710188339459
+    ],
+    "settings": {
+        "calculation_domain": "pq",
+        "hdr_mode": "hlg",
+        "bit_depth": 10,
+        "color_range": "full",
+        "eotf_function": "bt1886",
+        "l_max": 1000.0,
+        "l_min": 0.01,
+        "gamma": 2.4,
+        "pu21_mode": "banding",
+        "legacy": false,
+        "version": "0.1.3"
+    },
+    "input_file": "fall-hlg.mov"
+}

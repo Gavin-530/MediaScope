@@ -4,10 +4,11 @@ import {Writable} from 'node:stream';
 import {fileURLToPath} from 'node:url';
 import {once} from 'node:events';
 import {availableParallelism,freemem,tmpdir} from 'node:os';
-import {readFile,access,rename,unlink} from 'node:fs/promises';
+import {readFile,writeFile,access,rename,unlink} from 'node:fs/promises';
 import {createHash,randomUUID} from 'node:crypto';
 import path from 'node:path';
-import {FF,run,decodeThreadCount} from './engine.mjs';
+import {MAX_ANALYSIS_FRAMES,validateSitiDimensions} from './public/analysis-limits.js';
+import {FF,run,decodeThreadCount,checkAnalysisMemory} from './engine.mjs';
 import {sitiInput,sitiConfiguration,createSitiCalculator,createSitiLut,sitiFrameLayout,sitiGpuParameters,sitiTimestamp,validateSitiPoints,validateSitiSceneStarts,sitiFormat,sitiRawBytes} from './public/siti.js';
 
 const workerFile=fileURLToPath(import.meta.url),helper=fileURLToPath(new URL('./gpu/siti-opencl.ps1',import.meta.url));
@@ -21,19 +22,23 @@ async function waitSignal(promise,signal){
   try{return await Promise.race([promise,stopped]);}finally{signal.removeEventListener('abort',abort);}
 }
 async function write(stream,bytes){await new Promise((resolve,reject)=>stream.write(bytes,e=>e?reject(e):resolve()));}
+const closedInput=e=>['EPIPE','EOF','ERR_STREAM_DESTROYED','ERR_STREAM_WRITE_AFTER_END'].includes(e.code);
+async function writeWorker(child,bytes){try{await write(child.stdin,bytes);}catch(e){if(closedInput(e))await child.sitiDone;throw e;}}
 const exists=file=>access(file).then(()=>true,()=>false);
 async function prepareGpu(ctx){
   for(;;){
     if(ctx.signal?.aborted)throw cancelled(ctx.signal);
     gpuBridge??=(async()=>{
       const source=await readFile(new URL('./gpu/SitiOpenCl.cs',import.meta.url)),hash=createHash('sha256').update(source).digest('hex');
-      const exe=path.join(tmpdir(),`mediascope-siti-${hash}.exe`),temporary=exe+'.'+randomUUID()+'.exe';
-      if(await exists(exe))return exe;
+      // Short compiler paths; retain the full source identity beside the executable.
+      const exe=path.join(tmpdir(),`ms-siti-${hash.slice(0,24)}.exe`),temporary=path.join(tmpdir(),`ms-${randomUUID().slice(0,8)}.exe`);
+      const valid=async()=>await exists(exe)&&(await readFile(exe+'.sha256','utf8').catch(()=>''))===hash;
+      if(await valid())return exe;
       let retained=false;
       try{
         await run('powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',helper,'-OutputPath',temporary],ctx);
-        try{await rename(temporary,exe);}catch(e){
-          if(!await exists(exe)){
+        try{await rename(temporary,exe);await writeFile(exe+'.sha256',hash);}catch(e){
+          if(!await valid()){
             // Windows scanners/file brokers may deny publication while the compiled file itself is usable.
             if(!['EPERM','EACCES','EBUSY'].includes(e.code)||!await exists(temporary))throw e;
             retained=true;return temporary;
@@ -55,7 +60,7 @@ class GpuSession{
     const started=performance.now(),command={exe,args:['serve'],cwd:ctx.cwd??process.cwd(),scope:'process',operation:'startup',exitCode:null};ctx.commands?.push(command);
     this.child.stderr.on('data',b=>{this.stderr=(this.stderr+b).slice(-16000);});
     this.child.on('error',e=>this.fail(error(e.message,'gpu-initialization',e)));
-    this.child.stdin.on('error',e=>{if(e.code!=='EPIPE')this.fail(error(e.message,'gpu',e));});
+    this.child.stdin.on('error',e=>{if(!closedInput(e))this.fail(error(e.message,'gpu',e));});
     this.lines=createInterface({input:this.child.stdout});
     this.lines.on('line',line=>{try{
       const p=JSON.parse(line);
@@ -85,7 +90,7 @@ class GpuSession{
     const command={exe:this.exe,args:['serve'],cwd:ctx.cwd??process.cwd(),scope:'request',operation,transport:'stdin-v1',requestId:id,sessionPid:this.child.pid,exitCode:null};ctx.commands?.push(command);
     done.promise.then(()=>{command.exitCode=0;command.elapsedSeconds=(performance.now()-started)/1000;},()=>{command.exitCode=1;command.elapsedSeconds=(performance.now()-started)/1000;});
     try{await write(this.child.stdin,Buffer.from(operation==='probe'?`P\t${id}\n`:`M\t${id}\t${header.join('\t')}\n`));if(payload)await write(this.child.stdin,payload);}
-    catch(e){if(e.code==='EPIPE')await done.promise;throw error(e.message,'gpu',e);}
+    catch(e){if(closedInput(e))await done.promise;throw error(e.message,'gpu',e);}
     return {done:done.promise,stream:this.child.stdin};
   }
   finish(){
@@ -141,7 +146,7 @@ async function measureRun(file,stream,input,ctx,frames,{gpu=false,workers=1,atte
   if(gpu&&(process.platform!=='win32'||!frames?.length))throw error('GPU 需要 Windows OpenCL 和完整帧扫描','gpu-initialization');
   const {width,height,pix_fmt:format}=stream,n=width*height,layout=sitiFrameLayout(input,width,height),rawBytes=layout.bytes;
   const cpuBlockFrames=input.format.family==='rgb'&&workers>1?Math.ceil(frames.length/(workers*Math.ceil(frames.length/(workers*16)))):8;
-  if(!Number.isSafeInteger(width)||!Number.isSafeInteger(height)||width<3||height<3||n>33554432)throw error('SI/TI 帧尺寸不受支持','input');
+  try{validateSitiDimensions(width,height);}catch(e){throw error(e.message,'input',e);}
   const hostBytes=gpu?rawBytes*3+n*8+64*1024*1024:n*36;
   if(hostBytes>freemem()*.25)throw error('SI/TI 主机内存预算不足',gpu?'gpu-initialization':'cpu');
   const sceneStarts=ctx.sitiSceneStarts??[0],starts=new Set(sceneStarts),configuration=sitiConfiguration(input),controller=new AbortController();
@@ -156,13 +161,14 @@ async function measureRun(file,stream,input,ctx,frames,{gpu=false,workers=1,atte
       child.stderr.on('data',b=>{stderr=(stderr+b).slice(-16000);});
       child.on('close',code=>{command.elapsedSeconds=(performance.now()-started)/1000;command.exitCode=code;if(spawnError||code!==0)reject(spawnError??processFailure(stderr,phase));else resolve();});
     });child.sitiDone=completion;pending.push(completion.catch(fail));
-    child.stdin.on('error',e=>{if(e.code!=='EPIPE'&&!signal.aborted)fail(error(e.message,phase,e));});
+      child.stdin.on('error',e=>{if(!closedInput(e)&&!signal.aborted)fail(error(e.message,phase,e));});
     if(onLine)createInterface({input:child.stdout}).on('line',line=>{try{onLine(JSON.parse(line));}catch(e){fail(e.sitiPhase?e:error(e.message,phase,e));}});
     return child;
   }
   function point(p,lane=0){
+    if(received%16384===0)try{checkAnalysisMemory();}catch(e){throw error(e.message,'validation',e);}
     const local=next[lane]++,expected=gpu||workers===1?received:(Math.floor(local/cpuBlockFrames)*workers+lane)*cpuBlockFrames+local%cpuBlockFrames;
-    if(p.frame!==expected||!Number.isFinite(p.si)||p.si<0||(starts.has(p.frame)?p.ti!==null:!Number.isFinite(p.ti)||p.ti<0)||p.frame>=500000||frames&&p.frame>=frames.length)throw error('SI/TI 帧计算结果无效',gpu?'gpu':'cpu');
+    if(p.frame!==expected||!Number.isFinite(p.si)||p.si<0||(starts.has(p.frame)?p.ti!==null:!Number.isFinite(p.ti)||p.ti<0)||p.frame>=MAX_ANALYSIS_FRAMES||frames&&p.frame>=frames.length)throw error('SI/TI 帧计算结果无效',gpu?'gpu':'cpu');
     points[p.frame]=p;received++;attempt.framesComputed=received;attempt.timeToFirstPointSeconds??=(performance.now()-began)/1000;
     ctx.onSitiPoint?.(received);if(received===1||received%30===0||received===frames?.length)ctx.update?.({detail:`P.910 ${gpu?'GPU':`CPU${workers>1?' '+workers+' 路':''}`} 已测量 ${received} 帧`,completed:received,total:frames?.length??null,unit:'帧'});
   }
@@ -175,7 +181,7 @@ async function measureRun(file,stream,input,ctx,frames,{gpu=false,workers=1,atte
         request=await session.request('measure',prepared.header,prepared.payload,{...ctx,signal},{onPoint:p=>{try{point(p);}catch(e){fail(e);}},onInfo:p=>{info=p;clearTimeout(timer);attempt.configurationSeconds=(performance.now()-configured)/1000;}});
         pending.push(request.done.then(p=>{if(p.frames!==received||!Number.isFinite(p.gpuUploadComputeReadSeconds)||!Number.isFinite(p.inputWaitSeconds))throw error('GPU 完成记录无效','gpu');gpuTiming=p;}).catch(fail));
       }else for(let lane=0;lane<workers;lane++)calculators.push(launch(process.execPath,[workerFile,'--worker',String(width),String(height),sceneStarts.join(','),JSON.stringify(input),workers>1?'blocks':'measure',String(lane),String(workers),String(cpuBlockFrames)],'cpu',p=>point(p,lane)));
-      const decoder=launch(FF,['-hide_banner','-nostdin','-v','info','-xerror','-copyts','-noauto_conversion_filters','-noautorotate','-threads:v',String(decodeThreadCount(ctx.decodeThreads)),'-i',file,'-map',`0:${stream.index}`,'-vf',(input.deinterlace?'bwdif=mode=send_frame:parity=auto:deint=interlaced,':'')+'showinfo=checksum=0','-an','-fps_mode','passthrough','-c:v','rawvideo','-threads:v','1','-f','rawvideo','pipe:1'],'decode');
+      const decoder=launch(FF,['-hide_banner','-nostdin','-nostats','-v','info','-xerror','-copyts','-noauto_conversion_filters','-noautorotate','-threads:v',String(decodeThreadCount(ctx.decodeThreads)),'-i',file,'-map',`0:${stream.index}`,'-vf',(input.deinterlace?'bwdif=mode=send_frame:parity=auto:deint=interlaced,':'')+'showinfo=checksum=0','-an','-fps_mode','passthrough','-c:v','rawvideo','-threads:v','1','-f','rawvideo','pipe:1'],'decode');
       createInterface({input:decoder.stderr}).on('line',line=>{try{
         if(!line.includes('showinfo'))return;
         const base=/config in time_base:\s*(\d+\/\d+)/.exec(line);if(base){if(timeBase!==undefined&&timeBase!==base[1])throw error('SI/TI 输入时间基改变','validation');timeBase=base[1];return;}
@@ -183,7 +189,7 @@ async function measureRun(file,stream,input,ctx,frames,{gpu=false,workers=1,atte
         if(m){if(Number(m[1])!==timestamps.length||m[3]!==format||Number(m[4])!==width||Number(m[5])!==height||m[6]!=='P')throw error('SI/TI 输入帧序号、格式或逐行声明改变','validation');timestamps.push(sitiTimestamp(m[2],timeBase));attempt.timeToFirstDecodedFrameSeconds??=(performance.now()-began)/1000;}
         const range=/color_range:(\S+)/.exec(line),transfer=/color_trc:(\S+)/.exec(line);
         if(range&&stream.color_range&&range[1]!==stream.color_range||transfer&&stream.color_transfer&&transfer[1]!==stream.color_transfer)throw error('SI/TI 输入范围或传递函数与轨道声明不一致','input');
-        if(range&&transfer){if(observedRange!==undefined&&(range[1]!==observedRange||transfer[1]!==observedTransfer))throw error('SI/TI 输入范围或传递函数在帧间改变','input');observedRange=range[1];observedTransfer=transfer[1];metadataCount++;}
+        if(range&&transfer){if(observedRange!==undefined&&(range[1]!==observedRange||transfer[1]!==observedTransfer))throw error(`SI/TI 输入范围或传递函数在帧间改变（第 ${timestamps.length} 帧：${observedRange}/${observedTransfer} → ${range[1]}/${transfer[1]}）`,'input');observedRange=range[1];observedTransfer=transfer[1];metadataCount++;}
         if(input.matrix&&range&&transfer){const space=/color_space:(\S+)/.exec(line),prim=/color_primaries:(\S+)/.exec(line);if(!space||!prim||stream.color_space&&space[1]!==stream.color_space||stream.color_primaries&&prim[1]!==stream.color_primaries||observedMatrix!==undefined&&(space[1]!==observedMatrix||prim[1]!==observedPrimaries))throw error('SI/TI RGB 矩阵或色原色与轨道声明不一致、缺失或在帧间改变','input');observedMatrix=space[1];observedPrimaries=prim[1];}
       }catch(e){fail(e.sitiPhase?e:error(e.message,'validation',e));}});
       // A bounded queue feeds small contiguous blocks, reusing preprocessed predecessors within each block.
@@ -192,17 +198,16 @@ async function measureRun(file,stream,input,ctx,frames,{gpu=false,workers=1,atte
         let position=0;while(position<chunk.length){
           if(signal.aborted)throw cancelled(signal);const count=Math.min(rawBytes-offset,chunk.length-position);chunk.copy(current,offset,position,position+count);offset+=count;position+=count;
           if(offset===rawBytes){
-            if(frame>=500000||frames&&frame>=frames.length)throw error('SI/TI 解码帧数超出预扫描','validation');
-            if(gpu)try{await write(request.stream,current);}catch(e){if(e.code==='EPIPE')await request.done;throw e;}
+            if(frame>=MAX_ANALYSIS_FRAMES||frames&&frame>=frames.length)throw error('SI/TI 解码帧数超出预扫描','validation');
+            if(gpu)try{await write(request.stream,current);}catch(e){if(closedInput(e))await request.done;throw e;}
             else{
               const lane=workers>1?Math.floor(frame/cpuBlockFrames)%workers:0,calculator=calculators[lane];
-              if(workers===1)try{await write(calculator.stdin,current);}catch(e){if(e.code==='EPIPE')await calculator.sitiDone;throw e;}
+              if(workers===1)await writeWorker(calculator,current);
               else{
                 const raw=Buffer.from(current),predecessor=frame%cpuBlockFrames===0?Buffer.from(frame===0?current:previous):null;
                 let queuedWrite;queuedWrite=laneWrites[lane].then(async()=>{
                   if(signal.aborted)throw cancelled(signal);
-                  try{if(predecessor)await write(calculator.stdin,predecessor);await write(calculator.stdin,raw);}
-                  catch(e){if(e.code==='EPIPE')await calculator.sitiDone;throw e;}
+                  if(predecessor)await writeWorker(calculator,predecessor);await writeWorker(calculator,raw);
                 }).catch(fail).finally(()=>queued.delete(queuedWrite));
                 laneWrites[lane]=queuedWrite;queued.add(queuedWrite);
                 if(queued.size>=workers*cpuBlockFrames)await Promise.race(queued);
@@ -216,9 +221,11 @@ async function measureRun(file,stream,input,ctx,frames,{gpu=false,workers=1,atte
       }});
       pending.push(new Promise(resolve=>{receiver.on('finish',resolve);receiver.on('error',e=>{fail(e);resolve();});receiver.on('close',resolve);}));
       const stop=()=>receiver.destroy(cancelled(signal));signal.addEventListener('abort',stop,{once:true});receiver.on('close',()=>signal.removeEventListener('abort',stop));
+      // A rejected frame unpipes the receiver; keep draining so child 'close' can settle.
+      receiver.on('close',()=>decoder.stdout.resume());
       decoder.stdout.pipe(receiver);await Promise.all(pending);if(failure)throw failure;
       if(gpu&&!info||timestamps.length!==received||metadataCount!==received)throw error('SI/TI 解码、计算帧数或逐帧色彩记录不一致','validation');
-      const result=points.map((p,i)=>({...p,t:timestamps[i]}));
+      const result=points;for(let i=0;i<result.length;i++)result[i].t=timestamps[i];
       try{validateSitiSceneStarts(sceneStarts,result.length);validateSitiPoints(result,frames,{sceneStarts});}catch(e){throw error(e.message,'validation',e);}
       return {points:result,execution:{mode:gpu?'gpu':workers>1?'frame-parallel':'serial',device:gpu?'gpu':'cpu',requestedDevice:ctx.sitiDevice??'cpu',workers,implementation:`MediaScope P.910 ${input.domain.toUpperCase()} ${gpu?'GPU':'CPU'}`,method:configuration.profile,configuration,decode:'FFmpeg software',decodePasses:1,decodeThreads:decodeThreadCount(ctx.decodeThreads),inputBytesPerFrame:rawBytes,preprocessingDevice:gpu?'gpu':'cpu',metricsDevice:gpu?'gpu':'cpu',
         ...(workers>1?{frameDispatch:'round-robin blocks with exact predecessor',blockFrames:cpuBlockFrames,overlapFrames:1}:{}),...(gpu?{gpuName:info.device,driver:info.driver,backend:info.backend,selfTestMaxError:info.selfTestMaxError,precision:input.format.family==='rgb'?'fp64 GPU RGB preprocessing and metrics':'fp64 shared LUT preprocessing and GPU metrics',sessionPid:session.child.pid,buffersReused:info.buffersReused,validation:{selfTest:'passed',absoluteTolerance:1e-8,relativeTolerance:1e-10,toleranceSource:'MediaScope engineering threshold, not an ITU guarantee'},timing:{gpuUploadComputeReadSeconds:gpuTiming.gpuUploadComputeReadSeconds,inputWaitSeconds:gpuTiming.inputWaitSeconds,scope:'GPU upload, preprocessing, metrics and readback; input wait overlaps decoder'}}:{})}};
@@ -231,6 +238,7 @@ async function measureRun(file,stream,input,ctx,frames,{gpu=false,workers=1,atte
 
 export async function measureSiti(file,stream,ctx={},frames=null){
   if(ctx.signal?.aborted)throw cancelled(ctx.signal);
+  if(frames&&(!Array.isArray(frames)||!frames.length||frames.length>MAX_ANALYSIS_FRAMES))throw error('SI/TI 单轨支持 1–2,000,000 帧','input');
   validateSitiSceneStarts(ctx.sitiSceneStarts,frames?.length??null);
   if(!['cpu','gpu',undefined].includes(ctx.sitiDevice))throw error('SI/TI 计算设备无效','input');
   let input;try{input=sitiInput(stream,ctx.sitiSettings);}catch(e){throw error(e.message,'input',e);}
