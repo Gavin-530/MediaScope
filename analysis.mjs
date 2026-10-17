@@ -4,6 +4,7 @@ export {distribution} from './public/siti.js';
 import {createBitrateAccumulator} from './public/bitrate-model.js';
 import {createAudioPacketDistribution} from './public/distribution-model.js';
 import {byteLimit} from './public/units.js';
+import {checkAnalysisMemory} from './engine.mjs';
 import {vmafInputReason,vmafModel,unknownColorValue} from './public/vmaf.js';
 import {mkdir,unlink,access} from 'node:fs/promises';
 import path from 'node:path';
@@ -42,13 +43,15 @@ export function av1ShortRefs(last,gold,order,bits,hints){
   let earliest=0;for(let i=1;i<8;i++)if(shift[i]<shift[earliest])earliest=i;return refs.map(x=>x<0?earliest:x);
 }
 
-export function createTraceParser(codec){
+export function createTraceParser(codec,{maxPackets=500000,maxEvents=750000}={}){
+  if(!Number.isSafeInteger(maxPackets)||maxPackets<1||maxPackets>500000||!Number.isSafeInteger(maxEvents)||maxEvents<1||maxEvents>750000)throw Error('码流头解析资源上限无效');
+  const limit=message=>Object.assign(Error(message),{code:'TRACE_RECORD_LIMIT'});
   const packets=[],events=[],sequences=[],warnings=new Set(),slots=Array(8).fill(null);let packet=null,obu=null,seq={},header=false;
   const flushObu=()=>{
     if(!obu)return;
     if(obu.obu_type===1){seq={...obu};if(!sequences.some(s=>JSON.stringify(s)===JSON.stringify(seq)))sequences.push(seq);}
     if(header&&packet&&[3,6,7].includes(obu.obu_type)){
-      if(events.length>=750000)throw Error('编码帧事件超过 750,000 上限');
+      if(events.length>=maxEvents)throw limit('AV1 编码帧事件超过详细解析记录上限');
       const redundant=obu.obu_type===7,existing=obu.show_existing_frame===1;
       const shownSlot=existing?slots[obu.frame_to_show_map_idx]:null;
       const ft=obu.frame_type??(seq.reduced_still_picture_header?0:existing?shownSlot?.frameType:null);
@@ -65,14 +68,14 @@ export function createTraceParser(codec){
         // Shown key frames (including show-existing of a stored key) reset all eight slots.
         if(existing){if(ft===0&&shownSlot)slots.fill(shownSlot)}else if(refresh!=null){for(let i=0;i<8;i++)if(refresh&(1<<i))slots[i]=e}
       }
-      events.push(e);packet.eventIds.push(e.id);
+      if(events.length%16384===0)checkAnalysisMemory();events.push(e);packet.eventIds.push(e.id);
     }
     obu=null;header=false;
   };
-  const flushPacket=()=>{flushObu();if(packet){packet.nalTypes=[...new Set(packet.nalTypes)];packets.push(packet);packet=null}};
+  const flushPacket=()=>{flushObu();if(packet){if(packets.length%16384===0)checkAnalysisMemory();packet.nalTypes=[...new Set(packet.nalTypes)];packets.push(packet);packet=null}};
   const line=s=>{
     if(!s.includes('trace_headers'))return;const text=s.replace(/^.*?\]\s*/, '');
-    if(text.startsWith('Packet:')){flushPacket();const pts=text.match(/\bpts (-?\d+)/)?.[1]??null;packet={index:packets.length,pts,bytes:Number(text.match(/Packet: (\d+)/)?.[1]),nalTypes:[],eventIds:[],firstSlices:0,recovery:null};if(packets.length>=500000)throw Error('压缩包超过 500,000 上限');return}
+    if(text.startsWith('Packet:')){flushPacket();if(packets.length>=maxPackets)throw limit('视频压缩包超过详细解析记录上限');const pts=text.match(/\bpts (-?\d+)/)?.[1]??null;packet={index:packets.length,pts,bytes:Number(text.match(/Packet: (\d+)/)?.[1]),nalTypes:[],eventIds:[],firstSlices:0,recovery:null};return}
     if(codec==='av1'&&text==='OBU header'){flushObu();obu={};return}
     if(codec==='av1'&&text==='Frame Header'){header=true;return}
     const m=text.match(/^\d+\s+([\w\[\]]+)\s+.*?=\s*(-?\d+)\s*$/);if(!m)return;const k=m[1],v=Number(m[2]);
@@ -93,9 +96,14 @@ export function createTraceParser(codec){
 
 export async function traceStructure(file,stream,ctx){
   if(!['h264','hevc','av1'].includes(stream.codec_name))return {supported:false,warnings:['该编码暂不支持码流头解析，保留解码器帧型与关键帧区间。']};
-  const parser=createTraceParser(stream.codec_name);let packets=0;
+  const parser=createTraceParser(stream.codec_name,ctx.traceLimits);let packets=0;
+  try{
   await run(FF,['-hide_banner','-nostdin','-loglevel','info','-xerror','-copyts','-i',file,'-map',`0:${stream.index}`,'-c','copy','-bsf:v','trace_headers','-f','null','-'],{...ctx,stderrLine:line=>{parser.line(line);if(line.includes('trace_headers')&&line.replace(/^.*?\]\s*/, '').startsWith('Packet:')){packets++;if(packets===1||packets%250===0)ctx.update?.({detail:`已解析 ${packets.toLocaleString()} 个视频包头`,completed:packets,total:null,unit:'个视频包头'})}}});
-  const result=parser.finish();ctx.update?.({detail:`已解析 ${packets.toLocaleString()} 个视频包头`,completed:packets,total:packets,unit:'个视频包头'});return result;
+    const result=parser.finish();ctx.update?.({detail:`已解析 ${packets.toLocaleString()} 个视频包头`,completed:packets,total:packets,unit:'个视频包头'});return result;
+  }catch(e){
+    if(ctx.signal?.aborted||e.code!=='TRACE_RECORD_LIMIT')throw e;
+    return {supported:false,status:'resource-limited',reason:e.message,scope:'详细码流头解析未完成；未保留截断的头记录或推断全流依赖',warnings:[`${e.message}，详细码流头解析未完成；仅保留解码器帧型与关键帧区间。显示帧扫描、包统计及 SI/TI 独立继续。`]};
+  }
 }
 
 export function mapStructure(result,stream,frames){
@@ -144,13 +152,13 @@ export async function complexity(file,stream,ctx={},frames=null){
   try{
     const {points,execution}=await measureSiti(file,stream,ctx,frames);
     return {available:true,points,execution,...sitiSceneSummary(points,ctx.sitiSceneStarts),notes:[
-      `依据 ITU-T P.910（10/2023）SI/TI 条款及报告列明的实施解释计算。范围按原位深标称端点归一化，PQ 域指标乘以 2^输入位深−1（本次 ${execution.configuration.outputMultiplier}）；跨位深原始输出不直接混比。`,
-      'SDR 采用 BT.1886 Annex 1 完整 reference EOTF（峰值 300、黑位 0.01 cd/m²）；逆 sRGB 采用所选参考显示模型（80 / 0.2 cd/m²）。HLG 按 BT.2100-2 表 5 及记录的显示参数计算；PQ 输入保留 PQ。RGB 按明确矩阵导出非线性亮度。',
-      '实施解释：有限范围公式由 8-bit 扩展至原位深端点；B.2 的 BT.1886 Appendix 1 引用按 Annex 1 reference EOTF 处理；PQ 输入不重复编码；输出公式中的 b 取输入位深。详见计算依据。',
+      '采用固定 siti-tools 0.6.0（c537e337）PQ 计算流程，所有输入位深均乘以 255；与原版比较须使用相同输入解释、显示参数和场景。',
+      'SDR／逆 sRGB 按上游归一化 EOTF 后仿射映射至 300 / 0.1 cd/m²。HLG 保留固定上游公式及其分段跳变，使用记录的峰值／黑位；PQ 输入保持 PQ。此为指定版本兼容，不构成严格 P.910 符合性证明。',
+      '原版共同位深为 8/10/12-bit；9/14/16-bit 端点扩展、原生布局、灰度和 RGB 亮度提取属于本软件适配，不能称为原版文件读取支持。',
       'SI：Sobel 梯度幅值的总体标准差，剔除一像素边界；TI：相邻帧差的总体标准差。场景首帧 TI 为 null，不纳入统计；逐帧值保留未舍入结果。',
       ctx.sitiSceneStarts?'按用户确认的场景分别统计，不计算跨场景 TI。':'场景边界未确认，全片结果可能含剪辑点 TI；分场景比较须确认边界。',
       ...(execution.configuration.input.deinterlace?['已选择 BWDIF 每帧输出一帧；按输出逐行画面计算，并核验帧数和时间戳。']:[]),
-      'CPU 串行、并行和 GPU 共用输入解释、显示参数和计算模型。GPU 使用双精度前处理与指标；CPU 并行共用一次软件解码并传递相邻原始帧。显示模型与尺度采用独立公式参考，Sobel/TI 核采用固定 VQEG 参考；这不等于 ITU 官方认证。比较须保持相同显示假设、分辨率、帧率、场景及前处理条件。'
+      'CPU 串行、并行和 GPU 共用输入解释及固定上游计算模型。GPU 使用双精度前处理与指标；CPU 并行共用一次软件解码并传递相邻原始帧。验证保留未修改上游函数及发布文件结果；这不等于 ITU 官方认证。比较须保持相同显示假设、分辨率、帧率、场景及前处理条件。'
     ]};
   }catch(e){if(ctx.signal?.aborted)throw e;return {available:false,reason:e.message,...(e.sitiPhase?{errorPhase:e.sitiPhase}:{}),...(e.sitiAttempts?{attempts:e.sitiAttempts}:{})}}
 }

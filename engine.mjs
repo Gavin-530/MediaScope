@@ -4,7 +4,9 @@ import { stat, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import {availableParallelism} from 'node:os';
+import {availableParallelism,freemem} from 'node:os';
+import {getHeapStatistics} from 'node:v8';
+import {MAX_ANALYSIS_FRAMES} from './public/analysis-limits.js';
 import {vmafInputReason,vmafModel,vmafConfiguration,parseVmafLog,unknownColorValue} from './public/vmaf.js';
 import {parseMetricSummary} from './public/metric-summary.js';
 
@@ -13,6 +15,11 @@ const bundled=name=>existsSync(path.join(home,'runtime',name+'.exe'))?path.join(
 export const FF = process.env.FFMPEG_PATH || bundled('ffmpeg');
 export const FP = process.env.FFPROBE_PATH || bundled('ffprobe');
 export function decodeThreadCount(requested){const fallback=Math.max(1,Math.min(12,availableParallelism()));return Number.isInteger(requested)&&requested>=1&&requested<=32?requested:fallback}
+// Stop before the next batch grows the heap into V8's fatal OOM path.
+export function checkAnalysisMemory(){
+  if(process.memoryUsage().heapUsed>getHeapStatistics().heap_size_limit*.85||freemem()<64*1024*1024)
+    throw Object.assign(Error('分析记录内存预算不足；本次未完成，不生成完整分析结论'),{code:'ANALYSIS_MEMORY_LIMIT'});
+}
 export async function run(exe,args,ctx={},line) {
   if(ctx.signal?.aborted) throw Error('任务已取消');
   const command={exe,args,cwd:ctx.cwd??process.cwd()},started=performance.now();
@@ -78,7 +85,8 @@ export async function scan(file,index,ctx={}){
         observedColor.set(k,o[k]);
       }
     }
-    if(frames.length>=500000)throw Error('首版单轨支持最多 500,000 帧；本次未完成，不生成完整分析结论');
+    if(frames.length>=MAX_ANALYSIS_FRAMES)throw Error('单轨支持最多 2,000,000 帧；本次未完成，不生成完整分析结论');
+    if(frames.length%16384===0)checkAnalysisMemory();
     const num=k=>o[k]!==undefined&&o[k]!=='N/A'?Number(o[k]):null;
     frames.push({pts:o.pts??o.best_effort_timestamp??null,t:num('best_effort_timestamp_time'),duration:num('duration_time')??num('pkt_duration_time'),bytes:num('pkt_size'),type:o.pict_type||'?',key:o.key_frame==='1',interlaced:o.interlaced_frame==='1'});
     if(frames.length===1||frames.length%100===0)ctx.update?.({detail:`已读取 ${frames.length.toLocaleString()} 帧`,completed:frames.length,total:ctx.expectedFrames??null,unit:'帧'});
@@ -124,7 +132,7 @@ export async function scanSegment(info,index,start,duration,ctx={}){
       const t=Number(n[2])*timeBase,d=field('duration');
       if(t<0||!Number.isFinite(t)||(frames.length&&t<=frames.at(-1).t))throw Error('源片段时间戳缺失或非递增');
       frames.push({pts:n[2],t,duration:d!==undefined&&Number.isFinite(Number(d))?Number(d)*timeBase:null,bytes:null,type:field('type')??'?',key:field('iskey')==='1'});
-      if(frames.length>500000)throw Error('实验片段帧数超过支持上限');
+      if(frames.length>MAX_ANALYSIS_FRAMES)throw Error('实验片段帧数超过支持上限');
       ctx.update?.({detail:`已核验源片段 ${frames.length.toLocaleString()} 帧`,completed:frames.length,total:null,unit:'帧'});
     }else if(/\bcolor_range:/.test(line)){
       if(!frames.length||colorFrames!==frames.length-1)throw Error('源片段色彩逐帧日志无效');
