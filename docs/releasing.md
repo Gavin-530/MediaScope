@@ -23,7 +23,7 @@
    powershell -NoProfile -ExecutionPolicy Bypass -File scripts/record-test.ps1 -Kind OnlineDeployment -Archive <zip> -RequireClean
    ```
 
-5. 完成人工验收和兼容性核对，保存实际结果和未验证范围。
+5. 完成人工验收和兼容性核对，保存实际结果和未验证范围。按[源码、软件和对外资料边界](data-and-archives.md#源码软件和对外资料边界)核对提交范围及实际附件；私有研究记录不得直接当作公开附件上传。
 6. 使用[Release 模板](../.github/RELEASE_TEMPLATE.md)创建草稿并审查正文；核对最新目标分支、冲突、必需检查与审批，以及确切发布 SHA 的通用回归和 GPU 记录。同一 SHA 的已完成合格通用记录可供 Tag 复用，不要求标签再次跑全套；没有记录则对该 Tag 手动触发 Actions。PR 合并测试 SHA 与发布 SHA 不同则不能替代。等待所有已触发的相关检查结束并解释已有失败，不能通过停用触发器、移走用例或只选绿色记录放行。分别说明通用、GPU、附件部署与人工验收的覆盖及限制。
 7. 上传附件、再次核对摘要，再发布 Release。说明如实注明推荐环境首次安装需要联网。发布后显式同步平台资料，云端限期产物及时下载并校验；方法见[数据与归档](data-and-archives.md)。
 

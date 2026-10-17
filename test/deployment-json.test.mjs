@@ -12,3 +12,11 @@ test('[desktop-startup] actual Windows JSON replacement waits for a reader and p
   assert.ok(evidence.temporaryRetries>=1);
   assert.equal(evidence.persistentRetries,7);
 });
+
+test('[release-privacy] valid packages pass and private notes or saved media are rejected',()=>{
+  const result=execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',path.resolve('test/helpers/release-boundary.ps1'),'-Scripts',path.resolve('scripts')],{encoding:'utf8',windowsHide:true,timeout:60000});
+  const evidence=JSON.parse(result.trim());
+  assert.equal(evidence.validPackage,'passed');
+  assert.equal(evidence.privatePathsRejected,3);
+  assert.equal(evidence.syntheticInputsOnly,true);
+});

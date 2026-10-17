@@ -88,3 +88,5 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/recover-test-evidenc
 归档工具变更先运行 `npm run test:github` 和受影响的存储协议检查；测试入口、导出器等影响产品验证的改动还须完成本次完整回归。
 
 构建目录或清理策略可通过以下命令检查： `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/local-data.test.ps1`，在独立测试工作区验证预览、历史资料及目录链接保护、未完成运行保护、清理不影响回执和发布包，以及删除 `.build` 后重新打包的应用文件摘要一致。该检查需要读取 Windows 进程信息，无需联网。
+
+本机长期资料使用 `npm run notes:check` 直接核查 Git 忽略的实际目录。`scripts/test.mjs` 在分配测试记录及建立源码快照前执行该检查；缺失本机目录的克隆通过，已有目录缺少保留清单时失败。`npm run test:notes` 独立验证准入校验器的新增文件、冻结摘要、索引、历史命名基线、目录链接和只读行为，无需媒体工具；这些用例也属于通用回归。保留字段与整理流程见[文档管理](README.md#本机资料的准入与核查)。

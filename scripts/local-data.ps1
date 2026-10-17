@@ -118,6 +118,11 @@ function Verify-Acceptance {
 }
 
 function Verify-ProtectedData {
+  if(Test-Path -LiteralPath (Join-Path $project 'local-notes')){
+    $notesNode=if($env:MEDIASCOPE_NODE_PATH){$env:MEDIASCOPE_NODE_PATH}else{(Get-Command node -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source}
+    & $notesNode (Join-Path $PSScriptRoot 'local-notes.mjs') check
+    if($LASTEXITCODE -ne 0){throw 'Local notes validation failed; inspect naming, inventory, index and retained bytes'}
+  }
   Verify-Evidence
   Verify-Acceptance
 }

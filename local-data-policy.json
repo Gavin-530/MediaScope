@@ -66,5 +66,18 @@
       "class": "protected",
       "reason": "Legacy location protected until verified migration; do not create new records here"
     }
-  ]
+  ],
+  "localNotes": {
+    "schema": 1,
+    "legacyNamingPathSha256": [
+      "014ede3c5283ccc752103d2c6ae922fd91011c724e9c66126fe0ae55e6680b76",
+      "2dd0ed07eeb2928668ab1be751c2f67bf8679dcdfc73acd4c2779cbd57bcd703",
+      "3f3833d87f09c009826ee0fa2895ff355ad6a8c43639618eba821a852e998177",
+      "478b10a8f8cdad1472df05d08cd07f5442082aba1d621cee418757ccb9fc3e50",
+      "8fb34eb492fa1886d731671d536d067327accb82a3b0698f765c974b34fcf39b",
+      "b5a3ec112b82662f5d66278c655b0fbb8e2ac8df18f0f484d518bb56499faff2",
+      "d104c3b0e1b50c7893e90850b4a6bed597e01a32f4248edfe76b23fb268374e6",
+      "f15665205ddf03e9b90bdac2d146db37d922ccc87aeb6306a1452298403c6735"
+    ]
+  }
 }

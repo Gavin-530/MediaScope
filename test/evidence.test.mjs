@@ -61,7 +61,15 @@ test('[test-system] successful critical checks require retained measurement data
   await fs.writeFile(path.join(p910,'parallel-equivalence.json'),JSON.stringify({outcome:'passed'}));
   await assert.rejects(saveMeasurements(work,work,{requiredMeasurements:criticalMeasurements}),/Missing critical measurement evidence/);
   await fs.writeFile(path.join(p910,'deinterlace-equivalence.json'),JSON.stringify({outcome:'passed'}));
-  assert.equal((await saveMeasurements(work,work,{requiredMeasurements:criticalMeasurements})).measurements,5);
+  for(const [folder,name] of [[p910,'8k-boundary.json'],[p910,'two-million-boundary.json'],[gpu,'8k-boundary.json']]){
+    await assert.rejects(saveMeasurements(work,work,{requiredMeasurements:criticalMeasurements}),/Missing critical measurement evidence/);
+    await fs.writeFile(path.join(folder,name),JSON.stringify({fixture:'evidence protocol only',outcome:'passed'}));
+  }
+  for(const name of ['independent-layout-cpu.json','fixture-rejections.json']){
+    await assert.rejects(saveMeasurements(work,work,{requiredMeasurements:criticalMeasurements}),/Missing critical measurement evidence/);
+    await fs.writeFile(path.join(p910,name),JSON.stringify({fixture:'evidence protocol only',outcome:'passed'}));
+  }
+  assert.equal((await saveMeasurements(work,work,{requiredMeasurements:criticalMeasurements})).measurements,10);
  } finally {assert.ok(work.startsWith(path.resolve('test-work')+path.sep));await fs.rm(work,{recursive:true,force:true})}
 });
 

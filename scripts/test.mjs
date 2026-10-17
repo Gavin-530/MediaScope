@@ -19,6 +19,8 @@ const now=()=>new Date().toISOString().replace(/\.\d{3}Z$/,'Z');
 let id=now().replace(/[-:]/g,'')+'-'+randomUUID().slice(0,4);
 let work=path.join(project,'evidence-archive','pending','test-runs',id),source=path.join(work,'source'),evidence=path.join(work,'evidence');
 const sha=b=>createHash('sha256').update(b).digest('hex');
+// Audit the real ignored directory before allocating evidence or taking a source snapshot.
+execFileSync(process.execPath,[path.join(project,'scripts','local-notes.mjs'),'check'],{cwd:project,stdio:'inherit',windowsHide:true});
 const git=(...a)=>execFileSync('git',['-C',project,...a],{encoding:'utf8',windowsHide:true}).trim();
 const psFile=path.join(project,'scripts','test-storage.ps1');
 const psArgs=(action,...extra)=>['-NoProfile','-ExecutionPolicy','Bypass','-File',psFile,'-Action',action,...extra];
@@ -76,7 +78,7 @@ try {
   await copy(path.join(project,'test'),path.join(source,'test'));
   await copy(path.join(project,'scripts','check-environment.mjs'),path.join(source,'scripts','check-environment.mjs'));
   for(const name of ['desktop.mjs','runtime-data.mjs','time.mjs','deployment.ps1','validate-launch.ps1','manage.ps1','install-location.ps1','start-source.ps1'])await copy(path.join(project,'scripts',name),path.join(source,'scripts',name));
-  const harnessScripts=['test.mjs','test-evidence.mjs','test-storage.ps1','evidence-lib.ps1','local-data.ps1','github-evidence-lib.ps1','import-github-test-evidence.ps1','run-ci-tests.ps1','export-github-test-evidence.ps1','sync-github-test-evidence.mjs','migrate-test-evidence.ps1','organize-test-evidence.ps1','rename-evidence-records.ps1','list-test-evidence.ps1','verify-test-evidence.ps1','verify-source-tests.mjs'];
+  const harnessScripts=['test.mjs','test-evidence.mjs','verify-release.ps1','test-storage.ps1','evidence-lib.ps1','local-data.ps1','local-notes.mjs','github-evidence-lib.ps1','import-github-test-evidence.ps1','run-ci-tests.ps1','export-github-test-evidence.ps1','sync-github-test-evidence.mjs','migrate-test-evidence.ps1','organize-test-evidence.ps1','rename-evidence-records.ps1','list-test-evidence.ps1','verify-test-evidence.ps1','verify-source-tests.mjs'];
   for(const name of harnessScripts)await copy(path.join(project,'scripts',name),path.join(source,'scripts',name));
   for(const name of (await fs.readdir(path.join(project,'scripts'))).filter(name=>name.startsWith('github-archive')&&/\.(mjs|ps1)$/.test(name)))await copy(path.join(project,'scripts',name),path.join(source,'scripts',name));
   const importerPath='evidence-archive/tools/import-local-test-evidence.ps1';

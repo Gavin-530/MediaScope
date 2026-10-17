@@ -16,6 +16,11 @@ export function measurementFile(relative) {
 }
 
 export const criticalMeasurements = [
+  {testName:'[analysis-limits] SI/TI really decodes the 8192x4320 boundary and matches analytic PQ edge statistics',pathPattern:/^siti-p910-[A-Za-z0-9]{6}\/8k-boundary\.json$/},
+  {testName:'[analysis-limits] SI/TI processes two million real frames and saves every result without one giant JSON string',pathPattern:/^siti-p910-[A-Za-z0-9]{6}\/two-million-boundary\.json$/},
+  {testName:'GPU SI/TI hardware measures real 8192x4320 frames against analytic values and CPU',pathPattern:/^siti-gpu-[A-Za-z0-9]{6}\/8k-boundary\.json$/},
+  {testName:'SI/TI independent byte oracle validates 150 layouts and 900 CPU input cases',pathPattern:/^siti-p910-[A-Za-z0-9]{6}\/independent-layout-cpu\.json$/},
+  {testName:'SI/TI invalid NUT layout fixtures are rejected before CPU or GPU calculation',pathPattern:/^siti-p910-[A-Za-z0-9]{6}\/fixture-rejections\.json$/},
   {testName:'real video and two audio tracks: 100 ms aggregation matches direct 1 s without changing legacy accounting',pathPattern:/^bitrate-equivalence-[A-Za-z0-9]{6}\/measured-equivalence\.json$/},
   {testName:'GPU SI/TI hardware validates real frames against CPU without accepting CPU fallback',pathPattern:/^siti-gpu-[A-Za-z0-9]{6}\/hardware-equivalence\.json$/},
   {testName:'P.910 SI/TI CPU decodes lossless native SDR frames and preserves source time and reference values',pathPattern:/^siti-p910-[A-Za-z0-9]{6}\/normative-cpu\.json$/},
