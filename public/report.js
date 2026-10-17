@@ -3,6 +3,7 @@ import {validateAudioPacketDistribution} from './distribution-model.js';
 import {vmafModel,parseVmafLog,vmafConfiguration,vmafInputReason} from './vmaf.js';
 import {parseMetricSummary} from './metric-summary.js';
 import {validateSitiSceneResult,validateSitiConfiguration,validateSitiAttempts} from './siti.js';
+import {MAX_ANALYSIS_FRAMES} from './analysis-limits.js';
 // Validate the saved data without normalizing, rounding or discarding evidence.
 export function parseReport(text) {
   let r;
@@ -88,8 +89,11 @@ export function validateReport(r) {
     }
   };
   obj(r, "报告");
-  if (!["MediaScope/0.1", "MediaScope/0.2"].includes(r.schema))
-    throw Error("不支持的报告版本：" + String(r.schema ?? "未报告"));
+  if (Object.hasOwn(r,'schema') || Object.hasOwn(r,'formatVersion'))
+    throw Error('0.4 报告不使用嵌套格式版本');
+  if (!r.producer || typeof r.producer.applicationVersion!=='string' || !r.producer.applicationVersion.length)
+    fail('producer.applicationVersion');
+  if(typeof r.createdAt!=='string'||!Number.isFinite(Date.parse(r.createdAt)))fail('createdAt');
   if (!["inspect", "analyze", "compare", "trial"].includes(r.type))
     fail("type");
   if (r.warnings !== undefined) arr(r.warnings, "warnings");
@@ -142,10 +146,18 @@ export function validateReport(r) {
     }
     if (r.type === "analyze" || r.frames !== undefined) {
       objects(r.frames, "frames");
+      if(!r.frames.length||r.frames.length>MAX_ANALYSIS_FRAMES)fail('frames.length');
+      const required=(value,keys,p)=>{for(const key of keys)if(!Object.hasOwn(value,key))fail(p+'.'+key);};
+      const nullableNumber=value=>value===null||typeof value==='number'&&Number.isFinite(value);
+      for(const f of r.frames){
+        required(f,['pts','t','duration','bytes','type','key','interlaced'],'frames');
+        if(!(f.pts===null||typeof f.pts==='string')||!['t','duration','bytes'].every(k=>nullableNumber(f[k]))||typeof f.type!=='string'||!f.type.length||typeof f.key!=='boolean'||typeof f.interlaced!=='boolean')fail('frames.values');
+      }
       obj(r.packets, "packets");
       objects(r.packets.bins, "packets.bins");
       if (r.packets.bitrateCurve) validateBitrateCurve(r.packets.bitrateCurve);
       obj(r.summary, "summary");
+      if(r.summary.count!==r.frames.length)fail('summary.count');
       if (r.tracks) {
         objects(r.tracks, "tracks");
         r.tracks.forEach((x) => {
@@ -183,13 +195,40 @@ export function validateReport(r) {
         }
         if (next !== r.frames.length) fail("coding.gops");
       }
+      if(r.coding?.packets){
+        objects(r.coding.packets,'coding.packets');
+        const packets=r.coding.packets,events=r.coding.events??[];
+        const reference=(v,length,p)=>{index(v,p);if(v>=length)fail(p);};
+        for(const [i,p]of packets.entries()){
+          if(p.index!==i)fail('coding.packets.index');
+          required(p,['pts','bytes','nalTypes','eventIds','firstSlices','recovery'],'coding.packets');
+          if(!(p.pts===null||typeof p.pts==='string')||!nullableNumber(p.bytes))fail('coding.packets.values');
+          arr(p.nalTypes,'coding.packets.nalTypes');
+          arr(p.eventIds,'coding.packets.eventIds');
+          for(const id of p.eventIds)reference(id,events.length,'coding.packets.eventIds');
+        }
+        for(const f of r.frames){
+          if(f.packetIndex!==undefined)reference(f.packetIndex,packets.length,'frames.packetIndex');
+          if(f.eventId!==undefined)reference(f.eventId,events.length,'frames.eventId');
+        }
+        for(const e of events){
+          reference(e.packet,packets.length,'coding.events.packet');
+          if(e.displayIndex!==undefined)reference(e.displayIndex,r.frames.length,'coding.events.displayIndex');
+          if(e.sourceEvent!==null&&e.sourceEvent!==undefined)reference(e.sourceEvent,events.length,'coding.events.sourceEvent');
+          for(const id of e.referenceEvents??[])if(id!==null)reference(id,events.length,'coding.events.referenceEvents');
+        }
+      }
       if (r.coding?.codec === "av1") {
         obj(r.coding.counts, "coding.counts");
         for (const k of ["encoded", "hidden", "showExisting", "shown"])
           index(r.coding.counts[k], "coding.counts." + k);
         objects(r.coding.events, "coding.events");
+        objects(r.coding.sequences,'coding.sequences');
         r.coding.events.forEach((e, i) => {
           if (e.id !== i) fail("coding.events.id");
+          required(e,['packet','pts','kind','frameType','hidden','showExisting','showable','orderHint','temporalId','spatialId','refreshFlags','showSlot','sourceEvent','obuType','obuPayloadBytes','fields'],'coding.events');
+          obj(e.fields,'coding.events.fields');
+          if(typeof e.kind!=='string'||typeof e.hidden!=='boolean'||typeof e.showExisting!=='boolean')fail('coding.events.values');
         });
       }
     }

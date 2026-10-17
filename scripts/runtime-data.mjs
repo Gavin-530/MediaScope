@@ -4,6 +4,7 @@ import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {compareTimes} from './time.mjs';
 import {byteLimit} from '../public/units.js';
+import {reportFromPortable,portableFormat,portableVersion} from '../public/portable.js';
 
 export const recentLimit=10, recentBytes=100*1000**2;
 const jobId=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
@@ -30,10 +31,11 @@ export async function removeOwned(root,name){
   if(path.dirname(target)!==path.resolve(root))throw Error('运行数据超出目录边界');
   await safeTree(target);await rm(target,{recursive:true,force:true,maxRetries:3,retryDelay:100});
 }
-async function json(file,value){
+async function json(file,value,{compact=false,signal}={}){
   const temp=file+'.'+randomUUID()+'.tmp';
-  try{await writeFile(temp,JSON.stringify(value,null,2));await rename(temp,file)}finally{await unlink(temp).catch(()=>{})}
+  try{signal?.throwIfAborted();await writeFile(temp,JSON.stringify(value,null,compact?undefined:2),{signal});signal?.throwIfAborted();await rename(temp,file)}finally{await unlink(temp).catch(()=>{})}
 }
+export const writeReportFile=(file,value,signal)=>json(file,value,{compact:true,signal});
 const windowRect=value=>value&&['left','top','width','height'].every(key=>Number.isInteger(value[key])&&Math.abs(value[key])<=2147483647)&&value.width>0&&value.height>0;
 const rectValues=value=>Object.fromEntries(['left','top','width','height'].map(key=>[key,value[key]]));
 export function desktopWindowBounds(area,saved){
@@ -108,45 +110,56 @@ export class RuntimeData {
   async init(){
     await safeTree(this.root);await mkdir(this.root,{recursive:true});
     try{const saved=JSON.parse(await readFile(path.join(this.root,'settings.json'),'utf8'));if(['system','light','dark'].includes(saved.theme))this.settings.theme=saved.theme;if(typeof saved.clearOnExit==='boolean')this.settings.clearOnExit=saved.clearOnExit}catch(e){if(e.code!=='ENOENT')this.warnings.push('本地设置损坏，已使用默认设置')}
-    await removeOwned(this.root,'.session');
+    await this.clearSession();
     const records=[];
     for(const entry of await readdir(this.root,{withFileTypes:true})){
       if(!entry.isDirectory()||!jobId.test(entry.name))continue;
-      const folder=path.join(this.root,entry.name);await safeTree(folder);let keepMedia=false;
+      const folder=path.join(this.root,entry.name);await safeTree(folder);let keepMedia=false,hasReport=false;
       try{
+        const report=await lstat(path.join(folder,'report.json')).catch(e=>{if(e.code==='ENOENT')return null;throw e});
+        hasReport=!!report;
+        const saved=report?JSON.parse(await readFile(path.join(folder,'report.json'),'utf8')):null;
+        if(report&&(saved.format!==portableFormat||saved.formatVersion!==portableVersion)){
+          this.warnings.push('旧版或不支持的报告未载入，原目录保留：'+entry.name);continue;
+        }
+        const value=report?reportFromPortable(saved):null;
         const input=JSON.parse(await readFile(path.join(folder,'job-input.json'),'utf8'));
         keepMedia=input.keepFiles===true;
         let job;
         try{job=JSON.parse(await readFile(path.join(folder,'job.json'),'utf8'))}catch(e){if(e.code!=='ENOENT')throw e}
-        const report=await lstat(path.join(folder,'report.json')).catch(e=>{if(e.code==='ENOENT')return null;throw e});
         const failure=report?null:JSON.parse(await readFile(path.join(folder,'failure.json'),'utf8').catch(e=>{if(e.code==='ENOENT')return '{"status":"cancelled","error":"上次运行意外结束"}';throw e}));
         const stat=report||await lstat(folder);
         job={id:entry.name,type:input.type,status:report?'done':failure.status==='error'?'error':'cancelled',message:report?'完成':failure.error||'任务未完成',file:input.file,reference:input.reference,candidate:input.candidate,description:job?.description||'近期任务',queuedAt:job?.queuedAt||stat.mtime.toISOString(),startedAt:job?.startedAt,finishedAt:job?.finishedAt||stat.mtime.toISOString(),timing:job?.timing,restored:true};
-        if(report&&!job.timing)job.timing=JSON.parse(await readFile(path.join(folder,'report.json'),'utf8')).timing;
+        if(report&&!job.timing)job.timing=value.timing;
         if(!['inspect','analyze','compare','trial'].includes(job.type))throw Error('未知任务类型');
-        if(report&&input.keepFiles){
-          const media=(await readdir(folder)).filter(name=>name.endsWith('.mkv')).map(name=>path.join(folder,name));
-          if(media.length){
-            const destination=path.join(path.dirname(this.root),path.basename(this.root)+'-saved-media');
-            const value=JSON.parse(await readFile(path.join(folder,'report.json'),'utf8'));
-            const saved=await saveTrialVideos(this.root,entry.name,media,destination);
-            if(value.experiment)value.experiment.retainedFiles=saved;
-            await json(path.join(folder,'report.json'),value);
-            this.warnings.push('旧版保留的实验视频已移至：'+path.join(destination,entry.name));
-          }
-        }
         if(job.status==='cancelled'){await removeOwned(this.root,entry.name);continue}
         if(!report)await json(path.join(folder,'failure.json'),failure);
         await this.trimWork(entry.name);
         if(report)job.reportPath=path.join(folder,'report.json');
         await json(path.join(folder,'job.json'),job);records.push({job,input});
       }catch(e){
+        if(hasReport){this.warnings.push('报告未能恢复，原目录保留：'+entry.name+'；'+e.message);continue;}
         // A failed migration must never discard explicitly retained videos.
         if(keepMedia&&(await readdir(folder)).some(name=>name.endsWith('.mkv')))throw Error('旧实验视频迁移未完成，请另存后重试：'+e.message);
         this.warnings.push('已移除无法恢复的运行记录：'+entry.name);await removeOwned(this.root,entry.name);
       }
     }
     return records.sort((a,b)=>compareTimes(a.job.finishedAt,b.job.finishedAt));
+  }
+  async clearSession(){
+    const session=path.join(this.root,'.session');await safeTree(session);
+    for(const entry of await readdir(session,{withFileTypes:true}).catch(e=>{if(e.code==='ENOENT')return [];throw e})){
+      const folder=path.join(session,entry.name);
+      if(entry.isDirectory()){
+        if(!jobId.test(entry.name)){this.warnings.push('未清理未知会话目录：'+entry.name);continue;}
+        try{
+          const saved=JSON.parse(await readFile(path.join(folder,'report.json'),'utf8'));
+          if(saved.format!==portableFormat||saved.formatVersion!==portableVersion){this.warnings.push('旧版会话报告原目录保留：'+entry.name);continue;}
+        }catch(e){if(e.code!=='ENOENT'){this.warnings.push('无法核查的会话报告原目录保留：'+entry.name);continue;}}
+        await removeOwned(session,entry.name);
+      }else await unlink(folder);
+    }
+    if(!(await readdir(session).catch(e=>{if(e.code==='ENOENT')return [];throw e})).length)await removeOwned(this.root,'.session');
   }
   async trimWork(id){
     const folder=path.join(this.root,id);

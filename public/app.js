@@ -2,7 +2,7 @@ import {bitrateView} from "./bitrate-model.js";
 import {timingSummary, formatElapsedSeconds, recordedSeconds} from "./timing.js";
 import {audioPacketPoints, packetSeconds, frameTimePoints, frameTimeRange} from "./distribution-model.js";
 import {formatBytes, formatBitrate, byteEvidence, byteLimit, quantityScale, quantityNumber, scalePlotData} from "./units.js";
-import { parsePortable, makePortable, maxPortableBytes, utcFilename } from "./portable.js";
+import {parsePortable,makePortable,maxPortableBytes,portableFilename,reportFromPortable} from './portable.js';
 import { plot, gopOverview } from "./charts.js";
 import { basicInfoHTML, initBasicInfo } from "./basic-info.js";
 import {vmafModels} from "./vmaf.js";
@@ -30,7 +30,8 @@ const $ = (s) =>
         ? "#" + (renderingMode || activeMode) + "-" + s.slice(1)
         : s,
     ),
-  token = $("meta[name=token]").content;
+  token = $("meta[name=token]").content,
+  applicationVersion = $("meta[name=app-version]").content;
 let current = null,
   environmentReady = false,
   desktopSession = false,
@@ -69,7 +70,7 @@ async function api(url, options = {}) {
     }),
     d = await r.json();
   if (!r.ok) throw Error(d.error || "请求失败");
-  return d;
+  return url==='probe'||/^jobs\/[^/]+\/report$/.test(url)?reportFromPortable(d):d;
 }
 function showStartup(s) {
   environmentReady = !s.startup || s.startup.state === "ready";
@@ -772,31 +773,11 @@ $("#trial").onclick = () => {
     message(e.message, true);
   }
 };
-function timestamp() {
-  return utcFilename();
-}
-function safeName(value) {
-  return (
-    String(value || "media")
-      .replace(/\.[^.\\/]+$/, "")
-      .replace(/[<>:"/\\|?*\x00-\x1f]/g, "_")
-      .replace(/[. ]+$/, "")
-      .slice(0, 64) || "media"
-  );
-}
-function reportName(r) {
-  const first = r.file || r.source?.file || r.reference?.file,
-    second = r.candidate?.file,
-    media =
-      safeName(fileName(first)) +
-      (second ? "_vs_" + safeName(fileName(second)) : "");
-  return `MediaScope-${r.type}-${media.slice(0, 100)}-${timestamp()}.json`;
-}
-function downloadPortable(results, plans, name) {
-  const json = JSON.stringify(makePortable({ results, plans }), null, 2);
+function downloadPortable(results, plans) {
+  const json = JSON.stringify(makePortable({results,plans,applicationVersion}));
   if (new Blob([json]).size > maxPortableBytes)
     throw Error(`导出文件超过 ${byteLimit(maxPortableBytes)}；请勾选较少的结果，确保文件能够重新导入`);
-  download(json, name, "application/json");
+  download(json, portableFilename(results,plans), "application/json");
 }
 for (const mode of modes)
   document.querySelector("#" + mode + "-export").onclick = () => {
@@ -806,7 +787,6 @@ for (const mode of modes)
         downloadPortable(
           [{ entryId: "current-report", report: saved }],
           [],
-          reportName(saved),
         );
       } catch (e) {
         message(e.message, true);
@@ -861,11 +841,7 @@ async function portableExport() {
   }
   if (!results.length && !plans.length)
     throw Error("当前选择没有可导出的结果或计划");
-  const name =
-    resultScope === "current" && !plans.length
-      ? reportName(report)
-      : `MediaScope-${results.length && plans.length ? "bundle" : results.length ? "queue" : "plan"}-${timestamp()}.json`;
-  downloadPortable(results, plans, name);
+  downloadPortable(results, plans);
 }
 $("#export-portable").onclick = async () => {
   const button = $("#export-portable");
@@ -957,8 +933,8 @@ $("#import-report").onchange = async (e) => {
 
 
 function download(text, name, type) {
-  const count = downloadNames.get(name) || 0;
-  downloadNames.set(name, count + 1);
+  const count = type==='application/json'?0:downloadNames.get(name)||0;
+  if(type!=='application/json')downloadNames.set(name, count + 1);
   const unique = count
     ? name.replace(/(\.[^.]+)$/, (extension) => `-${count + 1}${extension}`)
     : name;
@@ -1070,7 +1046,7 @@ function renderMedia(r) {
           : "";
       html += section(
         "SI/TI 内容复杂度",
-        execution + (e?.configuration?`<p class="hint">计算流程：${esc(e.configuration.profile)}；${e.configuration.configurationVersion===7?`P.910（10/2023）· PQ 域 · 输入位深尺度 ${e.configuration.outputMultiplier}`:'历史计算口径，保留原值'}。输入 ${esc(e.configuration.input?.source?.pixelFormat??'')} · ${esc(e.configuration.inputDomain??'SDR')} · ${e.configuration.inputBitDepth}-bit · ${e.configuration.inputRange==='tv'?'有限范围':'全范围'}。</p>`:'') +
+        execution + (e?.configuration?`<p class="hint">计算流程：${esc(e.configuration.profile)}；${e.configuration.configurationVersion===8?`siti-tools 0.6.0 · PQ 域 · 固定尺度 ${e.configuration.outputMultiplier}`:'历史计算口径，保留原值'}。输入 ${esc(e.configuration.input?.source?.pixelFormat??'')} · ${esc(e.configuration.inputDomain??'SDR')} · ${e.configuration.inputBitDepth}-bit · ${e.configuration.inputRange==='tv'?'有限范围':'全范围'}。</p>`:'') +
           (e?.configuration?.display?`<p class="hint">参考显示模型：峰值 ${fmt(e.configuration.display.whiteCdM2)}、黑位 ${fmt(e.configuration.display.blackCdM2,4)} cd/m²；gamma ${fmt(e.configuration.display.gamma,6)}。</p>`:'') +
           (r.content.scenes?.length>1?table(
             ["场景", "显示帧（从 1 计）", "SI 均值", "SI P95", "SI 最大值", "TI 均值", "TI P95", "TI 最大值"],

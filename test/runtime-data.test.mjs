@@ -7,6 +7,7 @@ import {RuntimeData,acquireDataLease,removeOwned,recentBytes} from '../scripts/r
 import {FF,run} from '../engine.mjs';
 import {startServer,waitForJob} from './helpers/server.mjs';
 import {parseReport} from '../public/report.js';
+import {makePortable} from '../public/portable.js';
 import {trial} from '../analysis.mjs';
 const work=path.resolve('test-work/runtime-data');let source;
 before(async()=>{await mkdir(work,{recursive:true});source=path.join(work,'source.mp4');await run(FF,['-v','error','-nostdin','-y','-f','lavfi','-i','testsrc2=size=96x64:rate=4:duration=1','-c:v','libx264','-color_range','tv','-colorspace','bt709','-color_primaries','bt709','-color_trc','bt709','-chroma_sample_location','left',source])});
@@ -62,7 +63,7 @@ test('[runtime-data] explicit saved trial media survive manual clearing and clea
     // Re-create a measured report as the on-disk state left by an interrupted exit.
     const stranded=path.join(dir,job.id);await mkdir(stranded);
     await writeFile(path.join(stranded,'job-input.json'),JSON.stringify({type:'trial',file:source,stream:0,start:0,duration:1,encoder:'libx264',presets:['ultrafast'],crfs:[28],metrics:['psnr'],keepFiles:true,exportDirectory:saved}));
-    await writeFile(path.join(stranded,'report.json'),JSON.stringify(report));
+    await writeFile(path.join(stranded,'report.json'),JSON.stringify(makePortable({results:[{entryId:job.id,report}],applicationVersion:report.producer.applicationVersion})));
     app=await startServer(dir);assert.deepEqual((await app.request('status')).settings,{theme:'light',clearOnExit:true});assert.deepEqual((await app.request('status')).jobs,[]);
     assert.equal(await exists(stranded),false);
     for(const file of files)assert.equal(await exists(file),true);
@@ -99,27 +100,32 @@ test('[runtime-data] active ownership and links block cleanup; stale session dat
   assert.equal(await readFile(path.join(external,'original'),'utf8'),'keep');await unlink(path.join(dir,'desktop-profile'));
 });
 
-test('[runtime-data] legacy explicitly retained real trial videos migrate outside the disposable directory',async()=>{
+test('[runtime-data] legacy reports and explicitly retained real trial videos stay byte-identical without automatic migration or deletion',async()=>{
   const dir=await temp(),id=randomUUID(),folder=path.join(dir,id);await mkdir(folder);
   const input={type:'trial',file:source,stream:0,start:0,duration:1,encoder:'libx264',presets:['ultrafast'],crfs:[28],metrics:['psnr'],keepFiles:true};
   const result=await trial(input,{cwd:folder,commands:[],update:()=>{}});
   const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
   const originals=new Map(await Promise.all(result.experiment.retainedFiles.map(async file=>[path.basename(file),digest(await readFile(file))])));
   await writeFile(path.join(folder,'job-input.json'),JSON.stringify(input));await writeFile(path.join(folder,'report.json'),JSON.stringify(result));
-  const store=new RuntimeData(dir),records=await store.init(),report=JSON.parse(await readFile(records[0].job.reportPath,'utf8'));
-  assert.ok(store.warnings.some(w=>w.includes('旧版保留的实验视频')));
-  assert.equal(report.experiment.retainedFiles.length,originals.size);
-  for(const file of report.experiment.retainedFiles)assert.equal(digest(await readFile(file)),originals.get(path.basename(file)));
+  const originalReport=await readFile(path.join(folder,'report.json'));
+  const session=path.join(dir,'.session',randomUUID());await mkdir(session,{recursive:true});await writeFile(path.join(session,'report.json'),originalReport);
+  const store=new RuntimeData(dir),records=await store.init();assert.deepEqual(records,[]);
+  assert.ok(store.warnings.some(w=>w.includes('原目录保留')));
   const jobs=new Map(records.map(r=>[r.job.id,r.job]));await store.prune(jobs,new Map(),{clear:true});
-  for(const file of report.experiment.retainedFiles)assert.equal(await exists(file),true);
+  await store.clearSession();
+  assert.deepEqual(await readFile(path.join(folder,'report.json')),originalReport);
+  assert.deepEqual(await readFile(path.join(session,'report.json')),originalReport);
+  for(const file of result.experiment.retainedFiles)assert.equal(digest(await readFile(file)),originals.get(path.basename(file)));
 });
 
 
 test('[runtime-data] mixed precision restoration and retention preserve the actual newest ten',async()=>{
   const dir=await temp(),store=new RuntimeData(dir);await store.init();const jobs=new Map(),inputs=new Map();
+  const app=await startServer(dir);let measured;
+  try{measured=await app.request('probe','POST',{file:source});}finally{await app.stop();}
   const times=['2026-10-05T03:04:05Z','2026-10-05T03:04:05.123Z','2026-10-05T03:04:05.1230001Z',...Array.from({length:8},(_,i)=>'2026-10-05T03:04:'+String(6+i).padStart(2,'0')+'Z')];
   for(const finishedAt of times){
-    const id=randomUUID(),folder=path.join(dir,id);await mkdir(folder);await writeFile(path.join(folder,'report.json'),'{}');
+    const id=randomUUID(),folder=path.join(dir,id);await mkdir(folder);await writeFile(path.join(folder,'report.json'),JSON.stringify(makePortable({results:[{entryId:id,report:measured}],applicationVersion:measured.producer.applicationVersion})));
     const job={id,type:'inspect',status:'done',finishedAt,reportPath:path.join(folder,'report.json')},input={type:'inspect',file:source};
     jobs.set(id,job);inputs.set(id,input);await store.save(job,input);
   }

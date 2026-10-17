@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <meta name="token" content="__TOKEN__" />
+    <meta name="app-version" content="__APP_VERSION__" />
     <title>MediaScope · 媒体分析</title>
     <link rel="stylesheet" href="style.css" />
     <script src="/app.js" type="module"></script>
@@ -134,7 +135,7 @@
         <p class="hint">场景起始帧从 1 计数，须包含 1；填写全部已确认边界。各场景分别统计，场景首帧没有 TI；未确认时全片统计可能包含剪辑点影响。</p>
         <details class="siti-options">
           <summary>SI/TI 输入设置</summary>
-          <p class="hint">采用 P.910（10/2023）及 VQEG PQ 参考流程。默认读取文件声明；声明缺失时，请核实后确认输入。浮点亮度和半透明输入缺少参考依据时不计算 SI/TI。</p>
+          <p class="hint">采用固定 siti-tools 0.6.0 的 PQ 计算流程及 255 输出尺度；扩展布局／位深单独验证。默认读取文件声明；声明缺失时，请核实后确认输入。浮点亮度和半透明输入缺少参考依据时不计算 SI/TI。</p>
           <div class="row">
             <label>亮度范围<select id="siti-range" disabled><option value="auto">按文件声明</option><option value="tv">用户确认：有限范围</option><option value="pc">用户确认：全范围</option></select></label>
             <label>传递函数<select id="siti-transfer" disabled><option value="auto">按文件声明</option><option value="sdr">SDR（BT.1886）</option><option value="srgb">SDR（逆 sRGB）</option><option value="pq">PQ</option><option value="hlg">HLG</option></select></label>
@@ -148,6 +149,7 @@
         </details>
         <p class="hint">
           <span id="siti-device-status" aria-live="polite">GPU 按完整分辨率逐帧计算 SI/TI，视频仍由软件解码；设备执行失败时回退 CPU 并记录原因。</span>
+          <span class="hint">单轨最多 2,000,000 个显示帧；SI/TI 总像素最多 35,389,440（8192×4320）。实际执行仍需满足格式和资源条件。</span>
           <button id="siti-gpu-recheck" type="button" class="secondary" disabled>重新检查 GPU</button>并行上限只影响 CPU SI/TI；自动或手动上限均会按
           CPU、可用内存和帧数降低，异常时回退串行。直接加入队列时，未读取信息的文件自动选择第一个视频轨道；需选择其他轨道时请先读取信息。完整分析还包含全流
           H.264 / HEVC / AV1

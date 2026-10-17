@@ -2,6 +2,7 @@ import {spawn} from 'node:child_process';
 import {writeFile,mkdir} from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {reportFromPortable} from '../../public/portable.js';
 export async function startServer(dataDirectory,{port=0,attempt=1,env={}}={}) {
   await mkdir(dataDirectory,{recursive:true});
   const app=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../..');
@@ -32,7 +33,7 @@ export async function startServer(dataDirectory,{port=0,attempt=1,env={}}={}) {
   }
   const request=async(url,method='GET',input)=>{
     const response=await fetch(base+'/api/'+url,{method,headers:{'x-mediascope-token':token,'content-type':'application/json'},body:input===undefined?undefined:JSON.stringify(input)});
-    const data=await response.json();if(!response.ok)throw Error(`API ${method} ${url}: ${response.status} ${JSON.stringify(data)}`);return data;
+    const data=await response.json();if(!response.ok)throw Error(`API ${method} ${url}: ${response.status} ${JSON.stringify(data)}`);return url==='probe'||/^jobs\/[^/]+\/report$/.test(url)?reportFromPortable(data):data;
   };
   return {base,token,request,stop};
 }

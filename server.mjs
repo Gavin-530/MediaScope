@@ -13,7 +13,7 @@ import {validateSitiSceneStarts,validateSitiSettings} from './public/siti.js';
 import {makePortable,maxPortableBytes,utcNow} from './public/portable.js';
 import {byteLimit} from './public/units.js';
 import {vmafModel} from './public/vmaf.js';
-import {RuntimeData,acquireDataLease,verifyDataLease,removeOwned,ended,trialDestination,saveTrialVideos,recentBytes} from './scripts/runtime-data.mjs';
+import {RuntimeData,acquireDataLease,verifyDataLease,removeOwned,ended,trialDestination,saveTrialVideos,recentBytes,writeReportFile} from './scripts/runtime-data.mjs';
 const root=path.dirname(fileURLToPath(import.meta.url)),token=randomBytes(24).toString('hex'),jobs=new Map();
 const dataRoot=path.resolve(process.env.MEDIASCOPE_DATA_DIR||path.join(root,'.mediascope'));
 const dataLease=process.env.MEDIASCOPE_DATA_LEASE?null:await acquireDataLease(dataRoot);
@@ -197,7 +197,7 @@ async function execute(job,input){
       }
       const packetStats=tracks.find(t=>t.index===stream.index);
       let content=null;if(input.complexity===true)content=await stage('测量 SI/TI 内容复杂度',c=>complexity(input.file,stream,c,frames),{phaseIndex:4,phaseCount});
-      result={...info,metadata:metadataSummary(info),stream:Number(input.stream),summary:summarize(frames),frames,packets:packetStats,tracks,coding,content,overheadBytes:info.size-tracks.reduce((s,t)=>s+t.bytes,0),warnings:['码率曲线按绝对 PTS 的所选窗口统计包负载，首尾除以实际区间时长；缺失 PTS 或持续时间时明确不可计算。100 ms 可聚合显示为 1 秒。全程平均值沿用原有独立口径。','GOP 视图按显示顺序的随机访问/关键帧边界分组；不将 CRA 自动标为闭合 GOP，也不声称已验证所有跨组引用。','帧大小取解码器报告的 pkt_size；AV1 多编码帧可能共用一个包，不重复相加估计编码帧体积。','附加数据来自轨道报告，本次未执行帧级附加数据读取；码流头解析覆盖全流，但不等同于完整解释所有私有 SEI。',...coding.warnings]};
+      result={...info,metadata:metadataSummary(info),stream:Number(input.stream),summary:summarize(frames),frames,packets:packetStats,tracks,coding,content,overheadBytes:info.size-tracks.reduce((s,t)=>s+t.bytes,0),warnings:['码率曲线按绝对 PTS 的所选窗口统计包负载，首尾除以实际区间时长；缺失 PTS 或持续时间时明确不可计算。100 ms 可聚合显示为 1 秒。全程平均值沿用原有独立口径。','GOP 视图按显示顺序的随机访问/关键帧边界分组；不将 CRA 自动标为闭合 GOP，也不声称已验证所有跨组引用。','帧大小取解码器报告的 pkt_size；AV1 多编码帧可能共用一个包，不重复相加估计编码帧体积。',coding.status==='resource-limited'?'详细码流头解析达到独立资源上限，未完成全流头解析；显示帧、码率及 SI/TI 按各自状态解释。': '附加数据来自轨道报告，本次未执行帧级附加数据读取；码流头解析范围见 coding，不等同于完整解释所有私有 SEI。',...coding.warnings]};
     }else if(job.type==='compare'){
       if(input.confirm!==true)throw Error('请确认两个视频包含同一剪辑与画面顺序');
       if(input.chromaAssumptions!==undefined&&input.chromaConfirmed!==true)throw Error('请明确确认未声明视频的色度位置；结果将依赖此假设');
@@ -215,12 +215,12 @@ async function execute(job,input){
       if(input.keepFiles)result.experiment.retainedFiles=await saveTrialVideos(dataRoot,job.id,result.experiment.retainedFiles,input.exportDirectory);
     }else throw Error('未知任务');
     if(job.controller.signal.aborted)throw Error('任务已取消');
-    job.result={schema:'MediaScope/0.2',createdAt:utcNow(),type:job.type,tools:versions,commands:ctx.commands,timing:{computeSeconds:(performance.now()-started)/1000,decodeThreads:ctx.decodeThreads,stages,scope:'计算阶段，不含报告序列化、保存、传输及浏览器渲染；同一 concurrentGroup 的阶段时间相互重叠，不能相加；子进程耗时见 commands[].elapsedSeconds'},...result};
+    job.result={createdAt:utcNow(),producer:{applicationVersion:appVersion},type:job.type,tools:versions,commands:ctx.commands,timing:{computeSeconds:(performance.now()-started)/1000,decodeThreads:ctx.decodeThreads,stages,scope:'计算阶段，不含报告序列化、保存、传输及浏览器渲染；同一 concurrentGroup 的阶段时间相互重叠，不能相加；子进程耗时见 commands[].elapsedSeconds'},...result};
     job.timing=job.result.timing;
-    await writeFile(path.join(cwd,'report.json'),JSON.stringify(job.result,null,2));
+    await writeReportFile(path.join(cwd,'report.json'),makePortable({results:[{entryId:job.id,report:job.result}],applicationVersion:appVersion}),job.controller.signal);
     job.reportPath=path.join(cwd,'report.json');delete job.result;
     job.status='done';job.message='完成';job.progress={...(job.progress||{}),stage:'完成',detail:'报告已保存',completed:1,total:1,unit:'份报告',updatedAt:utcNow()};
-  }catch(e){const status=job.controller.signal.aborted?'cancelled':'error';job.message=e.message;job.progress={...(job.progress||{}),stage:status==='cancelled'?'已取消':'任务未完成',detail:e.message,updatedAt:utcNow()};await writeFile(path.join(cwd,'failure.json'),JSON.stringify({status,error:e.message,commands:ctx.commands},null,2)).catch(()=>{});job.status=status;}
+   }catch(e){delete job.result;const status=job.controller.signal.aborted?'cancelled':'error';job.message=e.message;job.progress={...(job.progress||{}),stage:status==='cancelled'?'已取消':'任务未完成',detail:e.message,updatedAt:utcNow()};await writeFile(path.join(cwd,'failure.json'),JSON.stringify({status,error:e.message,commands:ctx.commands},null,2)).catch(()=>{});job.status=status;}
   finally{job.finishedAt=new Date().toISOString();await localData.enqueue(async()=>{
     if(job.status==='cancelled')await localData.remove(job,jobs,inputs);
     else await localData.save(job,input);
@@ -263,12 +263,12 @@ const server=http.createServer(async(req,res)=>{
       }
       if(req.method==='GET'&&url.pathname==='/api/plans'){
         const plans=[...jobs.values()].filter(j=>j.status==='queued').map(j=>{try{return {entryId:j.id,input:validatePlanInput(portableInput(inputs.get(j.id)))}}catch(e){throw Error(`待运行任务 ${j.id} 无法安全导出：${e.message}`)}});
-        send(res,200,makePortable({plans}));return;
+        send(res,200,makePortable({plans,applicationVersion:appVersion}));return;
       }
       if(req.method==='POST'&&url.pathname==='/api/plans/import'){
         const request=await body(req,maxPortableBytes);
         if(!['append','replace'].includes(request.mode)||typeof request.start!=='boolean'||!Array.isArray(request.plans)||request.plans.length>10000)throw Error('计划导入选项无效');
-        makePortable({plans:request.plans});
+        makePortable({plans:request.plans,applicationVersion:appVersion});
         const imported=request.plans.map((entry,i)=>{if(!entry||typeof entry!=='object'||typeof entry.entryId!=='string')throw Error(`计划第 ${i+1} 项格式错误`);try{return validatePlanInput(entry.input)}catch(e){throw Error(`计划第 ${i+1} 项：${e.message}`)}});
         queueRunning=false;
         if(request.mode==='replace')for(const [id,j]of jobs)if(j.status==='queued'){jobs.delete(id);inputs.delete(id)}
@@ -298,7 +298,8 @@ const server=http.createServer(async(req,res)=>{
         const controller=new AbortController();probes.add(controller);
         try{
           const commands=[],result=await probe(file,{signal:AbortSignal.any([controller.signal,AbortSignal.timeout(30000)]),commands,update:()=>{}});
-          send(res,200,{schema:'MediaScope/0.2',createdAt:utcNow(),type:'inspect',tools:versions,commands,...result,metadata:metadataSummary(result)});
+          const report={createdAt:utcNow(),producer:{applicationVersion:appVersion},type:'inspect',tools:versions,commands,...result,metadata:metadataSummary(result)};
+          send(res,200,makePortable({results:[{entryId:'preview',report}],applicationVersion:appVersion}));
         }finally{probes.delete(controller)}
         return;
       }
@@ -329,7 +330,7 @@ const server=http.createServer(async(req,res)=>{
         }else{const {controller,result,...meta}=j;send(res,200,meta)}return}
       }
       if(req.method==='POST'&&url.pathname==='/api/jobs'){
-        const input=await body(req);if(!['inspect','analyze','compare','trial'].includes(input.type))throw Error('无效任务类型');normalizeInputPaths(input);
+        const input=await body(req,65536);if(!['inspect','analyze','compare','trial'].includes(input.type))throw Error('无效任务类型');normalizeInputPaths(input);
         if(input.enqueue!==true)queueRunning=true;
         const job=createJob(input);send(res,202,{id:job.id});return;
       }
@@ -337,8 +338,10 @@ const server=http.createServer(async(req,res)=>{
     }
     const files={'/':'index.html','/app.js':'app.js','/report.js':'report.js','/vmaf.js':'vmaf.js','/metric-summary.js':'metric-summary.js','/properties.js':'properties.js','/basic-info.js':'basic-info.js','/portable.js':'portable.js','/bitrate-model.js':'bitrate-model.js','/distribution-model.js':'distribution-model.js','/siti.js':'siti.js','/charts.js':'charts.js','/trial-model.js':'trial-model.js','/units.js':'units.js','/style.css':'style.css'};
     files['/timing.js']='timing.js';
+    files['/analysis-limits.js']='analysis-limits.js';
+    files['/report-codec.js']='report-codec.js';
     if(req.method!=='GET'||!files[url.pathname]){res.writeHead(404);res.end();return}
-    const name=files[url.pathname];let data=await readFile(path.join(root,'public',name));if(name==='index.html')data=Buffer.from(data.toString().replace('__TOKEN__',token).replace('__APP_VERSION__',appVersion).replace('__LOCAL_THEME__',localData.settings.theme).replace('__PORTABLE_LIMIT__',byteLimit(maxPortableBytes)).replace('__RECENT_LIMIT__',byteLimit(recentBytes)));
+    const name=files[url.pathname];let data=await readFile(path.join(root,'public',name));if(name==='index.html')data=Buffer.from(data.toString().replace('__TOKEN__',token).replaceAll('__APP_VERSION__',appVersion).replace('__LOCAL_THEME__',localData.settings.theme).replace('__PORTABLE_LIMIT__',byteLimit(maxPortableBytes)).replace('__RECENT_LIMIT__',byteLimit(recentBytes)));
     res.writeHead(200,{'Content-Type':name.endsWith('.html')?'text/html; charset=utf-8':name.endsWith('.js')?'text/javascript; charset=utf-8':'text/css; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' blob:; object-src 'none'; frame-ancestors 'none'"});res.end(data);
   }catch(e){send(res,400,{error:e.message})}
 });
@@ -358,7 +361,7 @@ async function shutdown(){
   while((active||!drained)&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,50));
   if(!drained){server.closeAllConnections();await new Promise(resolve=>setImmediate(resolve))}
   await localData.pending;
-  if(!active){await localData.enqueue(async()=>{if(localData.settings.clearOnExit){localData.holds.clear();await localData.prune(jobs,inputs,{clear:true})}await removeOwned(dataRoot,'.session')}).catch(e=>console.error('退出清理未完成：'+e.message));}
+  if(!active){await localData.enqueue(async()=>{if(localData.settings.clearOnExit){localData.holds.clear();await localData.prune(jobs,inputs,{clear:true})}await localData.clearSession()}).catch(e=>console.error('退出清理未完成：'+e.message));}
   await dataLease?.release();
   process.exit(0);
 }

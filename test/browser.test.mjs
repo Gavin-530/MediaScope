@@ -5,7 +5,7 @@ import path from 'node:path';
 import {chromium} from 'playwright-core';
 import {makeMedia} from './helpers/real-media.mjs';
 import {startServer,waitForJob} from './helpers/server.mjs';
-import {parsePortable} from '../public/portable.js';
+import {parsePortable,makePortable,reportFromPortable,portableFilename} from '../public/portable.js';
 import {requireFeature,supportedThemeModes} from './helpers/feature-policy.mjs';
 import {propertyValue} from '../public/properties.js';
 import {probe,FF,run} from '../engine.mjs';
@@ -14,7 +14,7 @@ import {legacyFrameSample} from './helpers/basic-properties.mjs';
 import {formatBytes, byteEvidence, quantityScale} from '../public/units.js';
 import {bitrateView} from '../public/bitrate-model.js';
 import {sitiInputFixture} from './helpers/siti-inputs.mjs';
-import {sitiSceneSummary,SITI_STANDARD_PROFILE} from '../public/siti.js';
+import {sitiSceneSummary,SITI_COMPAT_PROFILE} from '../public/siti.js';
 
 const root=path.resolve('test-work/browser');
 let browser,media,sequence=0;
@@ -45,6 +45,10 @@ function scenario(name,body){
     }finally{try{await context?.close()}finally{await app?.stop()}}
   });
 }
+async function saveImportFixture(file,value){
+  const content=value.format?{createdAt:value.createdAt,results:value.results,plans:value.plans,applicationVersion:value.producer.applicationVersion}:{results:[{entryId:'fixture',report:value}],applicationVersion:value.producer.applicationVersion};
+  await writeFile(file,JSON.stringify(makePortable(content)));
+}
 async function importReport(page,file){
   await page.locator('#import-report').setInputFiles(file);
   // The async import handler clears the input only after rendering and polling finish.
@@ -54,7 +58,7 @@ async function preview(page,file=media.source){
   await page.locator('#file').fill(file);
   const response=page.waitForResponse(r=>r.url().endsWith('/api/probe')&&r.request().method()==='POST');
   await page.locator('#inspect').click();
-  const report=await(await response).json();
+  const report=reportFromPortable(await(await response).json());
   await page.locator('#inspect-details').getByRole('heading',{name:'文件基本信息',exact:true}).waitFor();
   assert.equal(report.type,'inspect');return report;
 }
@@ -73,7 +77,8 @@ async function download(page,button,file){
   const stamp=downloaded.suggestedFilename().match(/(\d{8}T\d{6}Z)(?:-\d+)?\.json$/)[1];
   const instant=Date.parse(stamp.replace(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/,'$1-$2-$3T$4:$5:$6Z'));
   assert.ok(Math.abs(Date.now()-instant)<60000,'download filename must represent UTC regardless of the browser timezone');
-  await downloaded.saveAs(file);return JSON.parse(await readFile(file,'utf8'));
+  await downloaded.saveAs(file);const text=await readFile(file,'utf8');assert.equal(text.includes('\n'),false);
+  const decoded=parsePortable(text);assert.equal(downloaded.suggestedFilename(),portableFilename(decoded.results,decoded.plans,stamp));return decoded;
 }
 async function analyze(page,app){await preview(page);return runTask(page,app,'#analyze')}
 scenario('[bitrate-window] [units] calculation selection and display aggregation survive report import',async({page,app,dir})=>{
@@ -107,7 +112,7 @@ scenario('[bitrate-window] [units] calculation selection and display aggregation
   await page.locator('#bitrate [data-op="in"]').click();
   assert.equal(await page.locator('#bitrate .plot-axis-y').textContent(),'纵轴：'+rateUnit,'zoom does not change units');
   await page.locator('#bitrate-display').selectOption('100');
-  const file=path.join(dir,'bitrate.json');await writeFile(file,JSON.stringify(report));
+  const file=path.join(dir,'bitrate.json');await saveImportFixture(file,report);
   await importReport(page,file);
   assert.equal(await page.locator('#bitrate-optional').evaluate(el=>el.open),false);
   await page.locator('#bitrate-optional > summary').click();
@@ -149,7 +154,7 @@ scenario('[queue-removal] GUI removes waiting tasks and completed/imported resul
   await page.waitForFunction(()=>document.querySelectorAll('#result-list .queue-item').length===0);
   await assert.rejects(app.request('jobs/'+completed.id+'/report'),/404/);
   const inspected=await preview(page);
-  const file=path.join(dir,'import-removal.json');await writeFile(file,JSON.stringify(inspected));
+  const file=path.join(dir,'import-removal.json');await saveImportFixture(file,inspected);
   await importReport(page,file);
   await page.locator('#result-list [data-result-remove]').waitFor();await page.locator('#result-list [data-result-remove]').click();
   assert.equal(await page.locator('#result-list .queue-item').count(),0);
@@ -209,7 +214,7 @@ scenario('[basic-properties] actual preview omits automatic sampling and preserv
   assert.deepEqual(restored.results[0].report,report);
   const timeoutCommands=[],timed=await probe(report.file,{probeSupplementTimeoutMs:1,commands:timeoutCommands});
   const failed={...report,...timed,commands:timeoutCommands,metadata:metadataSummary(timed)},failedFile=path.join(dir,'properties-failed.json');
-  await writeFile(failedFile,JSON.stringify(failed));await importReport(page,failedFile);
+  await saveImportFixture(failedFile,failed);await importReport(page,failedFile);
   await page.waitForFunction(()=>document.querySelector('#inspect-details').textContent.includes('读取失败'));
   assert.equal(await details.locator('.notice').filter({hasText:'读取失败'}).count(),1,'pixel descriptor failure stays visible outside folded evidence');
   await details.locator('.basic-info-evidence > summary').click();
@@ -219,7 +224,7 @@ scenario('[basic-properties] actual preview omits automatic sampling and preserv
   assert.deepEqual(failedSaved.results[0].report,failed);
   const legacyCommands=[],sample=await legacyFrameSample(report.file,report.raw.streams,{commands:legacyCommands});
   const legacy={...report,...sample,commands:[...report.commands,...legacyCommands]};legacy.metadata=metadataSummary(legacy);
-  const legacyFile=path.join(dir,'properties-with-samples.json');await writeFile(legacyFile,JSON.stringify(legacy));
+  const legacyFile=path.join(dir,'properties-with-samples.json');await saveImportFixture(legacyFile,legacy);
   await importReport(page,legacyFile);
   await page.waitForFunction(()=>document.querySelector('#inspect-details').textContent.includes('个实际样本'));
   await details.locator('.basic-info-evidence > summary').click();
@@ -227,9 +232,9 @@ scenario('[basic-properties] actual preview omits automatic sampling and preserv
   assert.deepEqual((await download(page,'#inspect-export',path.join(dir,'legacy-samples-restored.json'))).results[0].report,legacy);
   const old=structuredClone(report);old.schema='MediaScope/0.1';delete old.pixelFormats;delete old.frameSampleRead;delete old.frameSample;delete old.frameSampleScope;
   const oldFile=path.join(dir,'properties-old.json');await writeFile(oldFile,JSON.stringify(old));await importReport(page,oldFile);
-  await page.waitForFunction(()=>document.querySelector('#inspect-details').textContent.includes('旧报告未保存抽样结果'));
+  // A legacy file is rejected; the last valid 0.4 report remains visible.
   const oldSaved=await download(page,'#inspect-export',path.join(dir,'properties-old-restored.json'));
-  assert.deepEqual(oldSaved.results[0].report,old);
+  assert.deepEqual(oldSaved.results[0].report,legacy);
 });
 
 scenario('[basic-properties] real subtitles attachments chapters and narrow layout remain accessible without losing export data',async({page,dir})=>{
@@ -263,7 +268,7 @@ scenario('[basic-properties] real subtitles attachments chapters and narrow layo
 });
 
 scenario('[analysis] SI/TI reference settings and HLG display survive GUI plans and reports',async({page,app,dir})=>{
-  const vectors=JSON.parse(await readFile(new URL('./reference/siti/vqeg-pq.json',import.meta.url),'utf8'));
+  const vectors=JSON.parse(await readFile(new URL('./reference/siti/vqeg-060.json',import.meta.url),'utf8'));
   for(const name of ['rgb24-sdr-pc','gray-sdr-tv','gray16le-srgb-pc','gray12le-hlg-pc','gray10le-hlg-tv-display']){
     const c=vectors.cases.find(c=>c.name===name),fixture=await sitiInputFixture(dir,c);
     await preview(page,fixture.file);await page.locator('#complexity').check();
@@ -273,12 +278,12 @@ scenario('[analysis] SI/TI reference settings and HLG display survive GUI plans 
     if(c.domain==='hlg'){if(name==='gray12le-hlg-pc')assert.equal(await page.locator('#siti-hlg-white').inputValue(),'1000');await page.locator('#siti-hlg-white').fill('2000');if(c.settings.hlg)await page.locator('#siti-hlg-black').fill(String(c.settings.hlg.blackCdM2))}
     await page.locator('#siti-scenes').selectOption('single');
     const {report}=await runTask(page,app,'#analyze');assert.equal(report.content.available,true,report.content.reason);
-    assert.equal(report.content.execution.configuration.configurationVersion,7);assert.equal(report.content.execution.configuration.outputMultiplier,2**c.depth-1);
+    assert.equal(report.content.execution.configuration.configurationVersion,8);assert.equal(report.content.execution.configuration.outputMultiplier,255);
     if(c.domain==='hlg')assert.equal(report.content.execution.configuration.display.whiteCdM2,2000);
     await page.locator('#inspect-details').getByRole('heading',{name:'SI/TI 内容复杂度',exact:true}).waitFor();
-    assert.match(await page.locator('#inspect-details').innerText(),/P.910（10\/2023）· PQ 域 · 输入位深尺度/);
+    assert.match(await page.locator('#inspect-details').innerText(),/siti-tools 0\.6\.0 · PQ 域 · 固定尺度 255/);
     const file=path.join(dir,name+'.json'),exported=await download(page,'#inspect-export',file);assert.deepEqual(exported.results[0].report,report);
-    await importReport(page,file);assert.match(await page.locator('#inspect-details').innerText(),new RegExp(`输入位深尺度 ${2**c.depth-1}`));
+    await importReport(page,file);assert.match(await page.locator('#inspect-details').innerText(),/固定尺度 255/);
     const response=page.waitForResponse(r=>r.url().endsWith('/api/jobs')&&r.request().method()==='POST');await page.locator('#enqueue-analyze').click();const submitted=(await response).request().postDataJSON();
     const plans=await app.request('plans');assert.deepEqual(plans.plans.at(-1).input.sitiSettings,submitted.sitiSettings);
     await page.screenshot({path:path.join(dir,name+'.png'),fullPage:true});
@@ -286,7 +291,7 @@ scenario('[analysis] SI/TI reference settings and HLG display survive GUI plans 
       const legacy=structuredClone(exported),old=legacy.results[0].report,e=old.content.execution,source=e.configuration.input.source;
       e.configuration=structuredClone(snapshot.configuration);e.configuration.input.source=source;e.method=e.configuration.profile;
       old.content.points=old.content.points.map((p,i)=>({...p,...snapshot.expected[i]}));Object.assign(old.content,sitiSceneSummary(old.content.points,[0]));old.content.notes=['历史 HLG 参考公式；保留原值。'];
-      const oldFile=path.join(dir,`historical-${snapshot.id}.json`);await writeFile(oldFile,JSON.stringify(legacy));await importReport(page,oldFile);assert.match(await page.locator('#inspect-details').innerText(),/历史计算口径，保留原值/);
+      const oldFile=path.join(dir,`historical-${snapshot.id}.json`);await saveImportFixture(oldFile,legacy);await importReport(page,oldFile);assert.match(await page.locator('#inspect-details').innerText(),/历史计算口径，保留原值/);
       const roundTrip=await download(page,'#inspect-export',path.join(dir,`historical-${snapshot.id}-roundtrip.json`));assert.deepEqual(roundTrip.results.at(-1).report,old);
     }
   }
@@ -301,11 +306,11 @@ scenario('[analysis] GPU SI/TI selection preserves the P.910 SDR method and disp
   assert.equal(await page.locator('#siti-workers').isDisabled(),capability.available);
   const {report}=await runTask(page,app,'#analyze');
   assert.equal(report.content.execution.device,capability.available?'gpu':'cpu');
-  assert.equal(report.content.execution.method,SITI_STANDARD_PROFILE);
+  assert.equal(report.content.execution.method,SITI_COMPAT_PROFILE);
   if(capability.available)assert.equal(report.content.execution.validation.selfTest,'passed');
   assert.equal(report.content.points.length,report.frames.length);
   assert.match(await page.locator('#inspect-details').innerText(),capability.available?/GPU ·/:/CPU ·/);
-  assert.match(await page.locator('#inspect-details').innerText(),/P.910（10\/2023）/);
+  assert.match(await page.locator('#inspect-details').innerText(),/siti-tools 0\.6\.0/);
 });
 
 scenario('[analysis] a temporary GPU capability failure can be rechecked without disabling GPU selection',async({page})=>{
@@ -381,7 +386,7 @@ scenario('[analysis] [units] actual multi-audio file, frame scan, GOP, SI/TI and
   await resultRow.locator('.result-timing-stages > summary').click();
   assert.match(await resultRow.innerText(),/完整扫描视频帧/);
   assert.match(await resultRow.innerText(),/测量 SI\/TI 内容复杂度/);
-  assert.deepEqual(parsePortable(JSON.stringify(exported)),exported);
+  assert.deepEqual(parsePortable(JSON.stringify(makePortable({...exported,applicationVersion:exported.producer.applicationVersion}))),exported);
 });
 
 scenario('[comparison] user confirmation gates actual lossless identity and lossy candidate measurement',async({page,app,dir})=>{
@@ -439,7 +444,7 @@ scenario('[comparison] VMAF official model selection survives real computation, 
   assert.deepEqual((await app.request('plans')).plans.map(p=>p.input),plans.plans.map(p=>p.input));
   const broken=structuredClone(plans.plans);broken[0].input.vmafModel='vmaf_v0.6.1:enable_transform=true';
   await assert.rejects(()=>app.request('plans/import','POST',{mode:'replace',start:false,plans:broken}),/模型无效/);
-  await writeFile(path.join(dir,'report.json'),JSON.stringify(report));
+  await saveImportFixture(path.join(dir,'report.json'),report);
 });
 
 scenario('[comparison] VMAF undeclared signal computes, displays unknown range, and survives report import and native trial controls',async({page,app,dir})=>{
@@ -474,7 +479,7 @@ scenario('[comparison] VMAF undeclared signal computes, displays unknown range, 
   await page.locator('#trial-crfs').fill('18,23,28');await page.locator('#trial-vmaf-model').selectOption('vmaf_4k_v0.6.1');
   const trial=await runTask(page,app,'#trial');assert.equal(trial.report.rows.length,3);
   assert.ok(trial.report.rows.every(row=>row.metrics.vmaf.model==='vmaf_4k_v0.6.1'));
-  await writeFile(path.join(dir,'report.json'),JSON.stringify(trial.report));
+  await saveImportFixture(path.join(dir,'report.json'),trial.report);
 });
 
 scenario('[trial] [units] real x264 trial encodes both CRFs, preserves frame metrics and cleans generated video',async({page,app,dir})=>{
@@ -541,7 +546,7 @@ scenario('[packet-distribution] actual audio packets, optional rates and frame a
   assert.equal(await page.locator('#bitrate-optional').evaluate(el=>el.open),false);
   await page.screenshot({path:path.join(dir,'packet-distribution.png'),fullPage:true});
   const legacy=structuredClone(report);for(const track of legacy.tracks)delete track.packetDistribution;
-  const legacyFile=path.join(dir,'legacy-packets.json');await writeFile(legacyFile,JSON.stringify(legacy));
+  const legacyFile=path.join(dir,'legacy-packets.json');await saveImportFixture(legacyFile,legacy);
   await importReport(page,legacyFile);
   await page.locator('#audio-packets-optional > summary').click();
   assert.equal(await page.locator('[id^="audio-packets-"] canvas').count(),0);
