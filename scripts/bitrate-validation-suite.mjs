@@ -4,7 +4,7 @@ import {gzipSync} from 'node:zlib';
 import {FF,FP,run,probe} from '../engine.mjs';
 import {allPackets} from '../analysis.mjs';
 import {createBitrateAccumulator} from '../public/bitrate-model.js';
-import {saveBitrateEvidence} from '../test/helpers/bitrate-evidence.mjs';
+import {saveBitrateEvidence} from '../testing-tools/helpers/bitrate-evidence.mjs';
 export async function measureSuite(directory,ctx) {
   const definitions=[
     {name:'long-high-fps',args:['-f','lavfi','-i','testsrc2=size=96x64:rate=120:duration=60'],description:'60 s, 120 fps, small resolution; encoded fixture, not camera footage'},

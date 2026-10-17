@@ -3,7 +3,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {execFileSync} from 'node:child_process';
 import {gunzipSync} from 'node:zlib';
-import {sourceTestReadiness} from '../test/helpers/test-results.mjs';
+import {sourceTestReadiness} from '../testing-tools/helpers/test-results.mjs';
 
 const project=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const [generalPath,gpuPath,commit]=process.argv.slice(2);

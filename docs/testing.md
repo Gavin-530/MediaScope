@@ -2,6 +2,14 @@
 
 在项目根执行。要求 Windows x64、`runtime-lock.json` 支持的 Node.js 和具备完整能力的稳定 FFmpeg/FFprobe，浏览器测试使用已安装的 Microsoft Edge。开发依赖不随安装包分发。
 
+## 工具、素材与运行目录
+
+`testing-tools/` 只保存长期维护的测试程序、辅助工具、功能映射和输入锁定清单，具体入口见[测试工具说明](../testing-tools/README.md)。禁止向其中放入媒体、固定参考数据正文、缓存、日志或一次性实验。测试入口在建立源码快照前直接检查目录边界。
+
+固定素材与参考数据由 `testing-tools/fixtures.lock.json` 记录不可变来源、字节数和 SHA-256，自动准备到 Git 忽略的 `.build/testing-fixtures/<清单摘要>/`。首次运行或清理缓存后需要联网；可提前执行 `npm run test:prepare`，已有缓存每次使用前仍校验摘要。准备失败不能跳过相应用例或降低通过条件。
+
+用例的新生成媒体、临时报告及配置统一写入当前工作区的 `.build/testing-work/`。标准入口在 `evidence-archive/pending/test-runs/<编号>/source/` 的隔离源码中执行，工作文件因此也位于该隔离目录内；提取并校验正式记录后回收本次沙箱，中断时保留以便恢复。根目录旧 `test-work/` 仅按兼容策略保留原有资料，其中历史验收资料继续受保护。
+
 ## 入口与通过条件
 
 ```powershell
@@ -29,7 +37,7 @@ npm run test:gpu:release
 
 | 统一项目 | 本地与 Actions 的共同要求 |
 | --- | --- |
-| 测试范围与断言 | 使用同一 `scripts/test.mjs`、测试实现和 `test/coverage.json`；通用与 GPU 范围分别完整通过，开发部分套件不能替代验收范围 |
+| 测试范围与断言 | 使用同一 `scripts/test.mjs`、测试实现和 `testing-tools/coverage.json`；通用与 GPU 范围分别完整通过，开发部分套件不能替代验收范围 |
 | 通过条件 | 非零实际检查，零失败、取消、跳过和 TODO，全部必需功能映射通过；环境或归档阻塞如实记录 |
 | 新测试证据 | 正常完成的运行使用 `evidenceRevision: 2` 独立记录，共用发布和校验函数，保留逐项结果、功能状态、采集规则涵盖的完整测量报告、无损压缩日志及必要失败诊断 |
 | 可重建内容 | 正式记录不保存临时源码、运行时、浏览器配置、生成媒体或模拟协议档案；成功封存后回收本次沙箱 |
@@ -49,7 +57,7 @@ npm run test:gpu:release
 
 ## 覆盖和结果解释
 
-[`test/coverage.json`](../test/coverage.json) 是功能与用例的唯一映射；新增功能同时更新用例和映射。素材由真实 FFmpeg 编码，测量来自生产代码及真实后端，浏览器执行实际操作。不伪造工具返回、指标、任务状态或 DOM，不改写应用源码制造通过。数学边界、损坏输入和协议用例可以使用明确标记的约定数据。
+[`testing-tools/coverage.json`](../testing-tools/coverage.json) 是功能与用例的唯一映射；新增功能同时更新用例和映射。素材由真实 FFmpeg 编码，测量来自生产代码及真实后端，浏览器执行实际操作。不伪造工具返回、指标、任务状态或 DOM，不改写应用源码制造通过。数学边界、损坏输入和协议用例可以使用明确标记的约定数据。
 
 `features.json` 保存实际功能事件和缺少证据的文件；映射不是代码覆盖率，不证明所有平台或素材组合均已验证。当前源码的必需功能不能通过自动跳过放行；只有显式历史对比允许不适用。主题检查验证文字与实际背景的对比度，不代表完整 WCAG 认证；性能观察不代表目标机器吞吐率。
 
@@ -87,6 +95,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/recover-test-evidenc
 
 归档工具变更先运行 `npm run test:github` 和受影响的存储协议检查；测试入口、导出器等影响产品验证的改动还须完成本次完整回归。
 
-构建目录或清理策略可通过以下命令检查： `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/local-data.test.ps1`，在独立测试工作区验证预览、历史资料及目录链接保护、未完成运行保护、清理不影响回执和发布包，以及删除 `.build` 后重新打包的应用文件摘要一致。该检查需要读取 Windows 进程信息，无需联网。
+构建目录或清理策略可通过以下命令检查： `powershell -NoProfile -ExecutionPolicy Bypass -File testing-tools/tools/local-data.test.ps1`，在独立测试工作区验证预览、历史资料及目录链接保护、未完成运行保护、清理不影响回执和发布包，以及删除 `.build` 后重新打包的应用文件摘要一致。该检查需要读取 Windows 进程信息，无需联网。
 
 本机长期资料使用 `npm run notes:check` 直接核查 Git 忽略的实际目录。`scripts/test.mjs` 在分配测试记录及建立源码快照前执行该检查；缺失本机目录的克隆通过，已有目录缺少保留清单时失败。`npm run test:notes` 独立验证准入校验器的新增文件、冻结摘要、索引、历史命名基线、目录链接和只读行为，无需媒体工具；这些用例也属于通用回归。保留字段与整理流程见[文档管理](README.md#本机资料的准入与核查)。

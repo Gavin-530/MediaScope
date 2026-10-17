@@ -6,7 +6,7 @@ import {execFileSync,spawn} from 'node:child_process';
 import {randomUUID,createHash} from 'node:crypto';
 import {FF,FP,probe,run} from '../engine.mjs';
 import {allPackets} from '../analysis.mjs';
-import {saveBitrateEvidence} from '../test/helpers/bitrate-evidence.mjs';
+import {saveBitrateEvidence} from '../testing-tools/helpers/bitrate-evidence.mjs';
 import {measureSuite} from './bitrate-validation-suite.mjs';
 const suite=process.argv[2]==='--suite';
 const file=path.resolve(suite?'test-work/参考 多音轨.mp4':process.argv[2]??'test-work/参考 多音轨.mp4');

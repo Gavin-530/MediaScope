@@ -10,7 +10,7 @@ param(
 $ErrorActionPreference='Stop'
 if(!$Project){$Project=Join-Path $PSScriptRoot '..'}
 $project=[IO.Path]::GetFullPath($Project)
-if($project -notmatch '[\\/]test-work[\\/](github-evidence|independent-evidence)-[A-Za-z0-9]{6}([\\/]|$)'){
+if($project -notmatch '[\\/](?:test-work|\.build[\\/]testing-work)[\\/](github-evidence|independent-evidence)-[A-Za-z0-9]{6}([\\/]|$)'){
   $realProject=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
   if($project -ne $realProject){throw 'Permanent import target is fixed to this project; isolated legacy import only supports owned protocol fixtures'}
   $node=Get-Command node -CommandType Application -ErrorAction Stop | Select-Object -First 1

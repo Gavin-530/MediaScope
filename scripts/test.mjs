@@ -5,7 +5,9 @@ import {spawn,execFileSync} from 'node:child_process';
 import {createHash,randomUUID} from 'node:crypto';
 import {gzipSync} from 'node:zlib';
 import os from 'node:os';
-import {featureResults,releaseReadiness,regressionAssessment,testSuiteFiles} from '../test/helpers/test-results.mjs';
+import {featureResults,releaseReadiness,regressionAssessment,testSuiteFiles} from '../testing-tools/helpers/test-results.mjs';
+import {fixtures,fixtureCache} from '../testing-tools/helpers/fixtures.mjs';
+import {checkToolSources} from '../testing-tools/helpers/source-layout.mjs';
 import {saveMeasurements,compactResults,criticalMeasurements} from './test-evidence.mjs';
 
 // Application bytes and harness bytes are captured independently. No source rewriting.
@@ -19,6 +21,7 @@ const now=()=>new Date().toISOString().replace(/\.\d{3}Z$/,'Z');
 let id=now().replace(/[-:]/g,'')+'-'+randomUUID().slice(0,4);
 let work=path.join(project,'evidence-archive','pending','test-runs',id),source=path.join(work,'source'),evidence=path.join(work,'evidence');
 const sha=b=>createHash('sha256').update(b).digest('hex');
+await checkToolSources(path.join(project,'testing-tools'));
 // Audit the real ignored directory before allocating evidence or taking a source snapshot.
 execFileSync(process.execPath,[path.join(project,'scripts','local-notes.mjs'),'check'],{cwd:project,stdio:'inherit',windowsHide:true});
 const git=(...a)=>execFileSync('git',['-C',project,...a],{encoding:'utf8',windowsHide:true}).trim();
@@ -69,13 +72,13 @@ try {
     for(const file of git('ls-files','--cached','--others','--exclude-standard').split('\n').filter(Boolean)){
       if(/^(local-notes|github-archive|\.mediascope|releases|local-test-archive)\//i.test(file)||file.toLowerCase()==='docs/github-archive-plan.md')throw Error('TEST_INFRA: protected local data is tracked by Git: '+file);
       if(file.startsWith('evidence-archive/'))continue;
-      if(file.startsWith('test/')||file.startsWith('scripts/'))continue;
+      if(file.startsWith('testing-tools/')||file.startsWith('scripts/'))continue;
       const from=path.join(project,file);try{await copy(from,path.join(source,file))}catch(e){if(e.code!=='ENOENT')throw e}
     }
   }
   // Remove the historical harness from a ref snapshot before installing the current harness.
-  if(ref)execFileSync('powershell.exe',['-NoProfile','-Command',"$p=$env:MEDIASCOPE_HARNESS_TARGET; $root=$env:MEDIASCOPE_SANDBOX; if([IO.Path]::GetFullPath($p).StartsWith([IO.Path]::GetFullPath($root)+'\\')){if(Test-Path -LiteralPath $p){Remove-Item -LiteralPath $p -Recurse -Force}}else{throw 'Invalid harness target'}"],{env:{...process.env,MEDIASCOPE_HARNESS_TARGET:path.join(source,'test'),MEDIASCOPE_SANDBOX:work},windowsHide:true});
-  await copy(path.join(project,'test'),path.join(source,'test'));
+  if(ref)for(const name of ['test','testing-tools']){const target=path.join(source,name);if(!target.startsWith(work+path.sep))throw Error('Invalid harness target');await fs.rm(target,{recursive:true,force:true})}
+  await copy(path.join(project,'testing-tools'),path.join(source,'testing-tools'));
   await copy(path.join(project,'scripts','check-environment.mjs'),path.join(source,'scripts','check-environment.mjs'));
   for(const name of ['desktop.mjs','runtime-data.mjs','time.mjs','deployment.ps1','validate-launch.ps1','manage.ps1','install-location.ps1','start-source.ps1'])await copy(path.join(project,'scripts',name),path.join(source,'scripts',name));
   const harnessScripts=['test.mjs','test-evidence.mjs','verify-release.ps1','test-storage.ps1','evidence-lib.ps1','local-data.ps1','local-notes.mjs','github-evidence-lib.ps1','import-github-test-evidence.ps1','run-ci-tests.ps1','export-github-test-evidence.ps1','sync-github-test-evidence.mjs','migrate-test-evidence.ps1','organize-test-evidence.ps1','rename-evidence-records.ps1','list-test-evidence.ps1','verify-test-evidence.ps1','verify-source-tests.mjs'];
@@ -88,7 +91,7 @@ try {
   const sourceFiles=[];for(const file of await files(source)){const b=await fs.readFile(file);sourceFiles.push({path:path.relative(source,file).replaceAll('\\','/'),bytes:b.length,sha256:sha(b)})}
   // Identity is retained; the isolated execution checkout is temporary, not an archive.
   manifest.source.sha256=sha(JSON.stringify(sourceFiles));
-  manifest.harness.sha256=sha(JSON.stringify(sourceFiles.filter(x=>x.path.startsWith('test/')||[...harnessScripts.map(x=>'scripts/'+x),importerPath,'scripts/check-environment.mjs','harness-package-lock.json'].includes(x.path))));
+  manifest.harness.sha256=sha(JSON.stringify(sourceFiles.filter(x=>x.path.startsWith('testing-tools/')||[...harnessScripts.map(x=>'scripts/'+x),importerPath,'scripts/check-environment.mjs','harness-package-lock.json'].includes(x.path))));
   version=JSON.parse(await fs.readFile(path.join(source,'package.json'),'utf8')).version;
   if(!/^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-(?:alpha|beta|rc)(?:\.(?:0|[1-9][0-9]*))?)?$/.test(version))throw Error('Invalid application version');
   const runtime=JSON.parse(await fs.readFile(path.join(source,'runtime-lock.json'),'utf8'));
@@ -96,7 +99,8 @@ try {
   const privateRoot=path.join(process.env.MEDIASCOPE_HOME||path.join(process.env.LOCALAPPDATA,'MediaScope'),'runtimes',component.sha256);
   const locate=async(name)=>{const override=process.env[name==='ffmpeg'?'FFMPEG_PATH':'FFPROBE_PATH'];if(override)return override;const pinned=path.join(privateRoot,component.executables[name]);try{await fs.access(pinned);return pinned}catch{return execFileSync('where.exe',[name],{encoding:'utf8',windowsHide:true}).trim().split('\r\n')[0]}};
   const ffmpeg=await locate('ffmpeg'),ffprobe=await locate('ffprobe');
-  const env={...process.env,FFMPEG_PATH:ffmpeg,FFPROBE_PATH:ffprobe,MEDIASCOPE_TEST_SOURCE_KIND:ref?'git':'working-tree'};
+  manifest.fixtures=await fixtures.prepareAll();
+  const env={...process.env,MEDIASCOPE_TEST_FIXTURES:fixtureCache,FFMPEG_PATH:ffmpeg,FFPROBE_PATH:ffprobe,MEDIASCOPE_TEST_SOURCE_KIND:ref?'git':'working-tree'};
   preflight.executables=[];for(const [name,exe] of [['node',process.execPath],['ffmpeg',ffmpeg],['ffprobe',ffprobe]])preflight.executables.push({name,path:exe,sha256:sha(await fs.readFile(exe))});
   console.log('Checking real encoders, metrics, HTTP startup and browser prerequisites…');
   const check=await run(process.execPath,[path.join(source,'scripts','check-environment.mjs'),source,ffmpeg,ffprobe,path.join(evidence,'compatibility.json')],{cwd:source,env});
@@ -108,9 +112,9 @@ try {
     try{preflight.browser={version:browser.version(),driver:JSON.parse(await fs.readFile(path.join(project,'node_modules','playwright-core','package.json'),'utf8')).version}}finally{await browser.close()}
   }
   await json(path.join(evidence,'manifest.json'),{...manifest,version,environment:preflight,blockedReason:'Execution has not completed'});
-  const testFiles=testSuiteFiles(await fs.readdir(path.join(source,'test')),suite).map(x=>path.join(source,'test',x));
+  const testFiles=testSuiteFiles(await fs.readdir(path.join(source,'testing-tools')),suite).map(x=>path.join(source,'testing-tools',x));
   if(!testFiles.length)throw Error('TEST_INFRA: empty suite');
-  command={executable:process.execPath,args:['--test','--test-concurrency=1','--test-reporter=spec','--test-reporter-destination='+path.join(evidence,'output.log'),'--test-reporter='+pathToFileURL(path.join(source,'test','helpers','reporter.mjs')).href,'--test-reporter-destination='+path.join(evidence,'events.jsonl'),...testFiles],cwd:source};
+  command={executable:process.execPath,args:['--test','--test-concurrency=1','--test-reporter=spec','--test-reporter-destination='+path.join(evidence,'output.log'),'--test-reporter='+pathToFileURL(path.join(source,'testing-tools','helpers','reporter.mjs')).href,'--test-reporter-destination='+path.join(evidence,'events.jsonl'),...testFiles],cwd:source};
   console.log(`Running ${suite} suite against ${ref||'the captured working tree'}…`);
   const result=await run(command.executable,command.args,{cwd:source,env});output+=result.stdout+result.stderr;
   events=(await fs.readFile(path.join(evidence,'events.jsonl'),'utf8')).split('\n').filter(Boolean).map(x=>JSON.parse(x));
@@ -123,7 +127,7 @@ try {
   const failures=cases.filter(x=>x.event==='test:fail').map(x=>({...x,classification:cause(x.details?.error)?.code==='ERR_ASSERTION'?'assertion':/TEST_INFRA|hookFailed/.test(JSON.stringify(x.details?.error))?'infrastructure':'runtime-needs-review'}));
   const classified=cases.map(item=>({...item,classification:failures.find(f=>f.file===item.file&&f.name===item.name)?.classification}));
   await json(path.join(evidence,'results.json'),compactResults(counts,classified));
-  const coverage=JSON.parse(await fs.readFile(path.join(source,'test','coverage.json'),'utf8'));
+  const coverage=JSON.parse(await fs.readFile(path.join(source,'testing-tools','coverage.json'),'utf8'));
   const features=featureResults(coverage,cases,suite);
   await json(path.join(evidence,'features.json'),{schema:3,scope:suite,features:features.map(({id,status,missingFiles})=>({id,status,missingFiles}))});
   manifest.releaseCheck={requested:release,...releaseReadiness(counts,features)};
@@ -145,7 +149,7 @@ finally {
     Object.assign(manifest,{version,endedAt:now(),exitCode,command});
     await json(path.join(evidence,'manifest.json'),manifest);
     const passedNames=events.filter(e=>e.type==='test:pass'&&!e.data.skip&&!e.data.todo).map(e=>e.data.name);
-    manifest.data=await saveMeasurements(path.join(source,'test-work'),evidence,{failed:exitCode!==0,requiredMeasurements:exitCode===0?criticalMeasurements.filter(r=>passedNames.includes(r.testName)):[]});
+    manifest.data=await saveMeasurements(path.join(source,'.build','testing-work'),evidence,{failed:exitCode!==0,requiredMeasurements:exitCode===0?criticalMeasurements.filter(r=>passedNames.includes(r.testName)):[]});
     let human='';try{human=await fs.readFile(path.join(evidence,'output.log'),'utf8')}catch{}
     const log=gzipSync(Buffer.from(output+human));await fs.mkdir(evidence,{recursive:true});await fs.writeFile(path.join(evidence,'output.log.gz'),log);
     if(log.length>maxLogMiB*1024*1024)throw Error('Compressed log exceeds size limit; full log retained in sandbox');

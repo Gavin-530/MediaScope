@@ -568,7 +568,7 @@ function Publish-EvidenceRecord($Project,$Source,$OriginalRelative,[string]$Tran
   # Hosted CI and explicitly isolated protocol/transport receivers remain temporary workspaces.
   $permanentProject=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..')).TrimEnd('\')
   $sourceManifest=Join-Path $Source 'manifest.json'
-  if([IO.Path]::GetFullPath($Project).TrimEnd('\') -eq $permanentProject -and $permanentProject -notmatch '[\\/]test-work[\\/](github-evidence|independent-evidence|archive-layout)-[A-Za-z0-9]{6}([\\/]|$)' -and (Test-Path -LiteralPath $sourceManifest)){
+  if([IO.Path]::GetFullPath($Project).TrimEnd('\') -eq $permanentProject -and $permanentProject -notmatch '[\\/](?:test-work|\.build[\\/]testing-work)[\\/](github-evidence|independent-evidence|archive-layout)-[A-Za-z0-9]{6}([\\/]|$)' -and (Test-Path -LiteralPath $sourceManifest)){
     $incoming=Get-Content -LiteralPath $sourceManifest -Raw -Encoding UTF8|ConvertFrom-EvidenceJson
     if($incoming.github -and !($env:GITHUB_ACTIONS -eq 'true' -and $env:RUNNER_ENVIRONMENT -eq 'github-hosted')){throw 'Cloud evidence must use github:import; old permanent evidence destination refused'}
   }
