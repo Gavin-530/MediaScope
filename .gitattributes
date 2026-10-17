@@ -1,2 +1,6 @@
-# Preserve the exact upstream bytes used by the SI/TI reference SHA-256 check.
+# Deterministic source bytes across Windows and CI checkouts.
+* text=auto eol=lf
+# Upstream fixtures are frozen originals, including JSON and license text.
 test/reference/siti/vqeg-reference.py -text
+test/reference/siti/published/** -text
+test/reference/siti/videos/** -text
