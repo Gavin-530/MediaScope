@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {readFile,mkdir,mkdtemp,writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import path from 'node:path';
-import {sitiInput,sitiConfiguration,sitiPreprocessedValue,createSitiLut,createSitiReader,createSitiCalculator,validateSitiConfiguration,sitiTimestamp,validateSitiPoints,sitiSceneSummary,validateSitiSceneResult,SITI_REFERENCE,SITI_COMPAT_PROFILE} from '../public/siti.js';
+import {sitiInput,sitiConfiguration,sitiPreprocessedValue,createSitiLut,createSitiReader,createSitiCalculator,validateSitiConfiguration,sitiTimestamp,validateSitiPoints,sitiSceneSummary,validateSitiSceneResult,SITI_REFERENCE,SITI_COMPAT_PROFILE,SITI_NUMERIC_TOLERANCE,sitiValuesClose} from '../public/siti.js';
 import {measureSiti,sitiWorkerCount} from '../siti.mjs';
 import {complexity} from '../analysis.mjs';
 import {FF,run,probe,scan} from '../engine.mjs';
@@ -13,10 +13,17 @@ import {publishedSitiCases} from './helpers/siti-published.mjs';
 import {independentSitiLayouts,SITI_LAYOUT_ORACLE_SHA256} from './helpers/siti-layouts.mjs';
 const vectors=JSON.parse(await readFixture('vqeg-060.json'));
 const version7=JSON.parse(await readFixture('historical-v7.json'));
-const close=(actual,expected,label)=>assert.ok(Math.abs(actual-expected)<=1e-8+Math.abs(expected)*1e-10,`${label}: ${actual} vs ${expected}`);
+const close=(actual,expected,label)=>assert.ok(sitiValuesClose(actual,expected),`${label}: ${actual} vs ${expected}`);
+// Local formula/input checks are distinct from the final SI/TI comparison rule.
+const closePreprocessing=(actual,expected,label)=>assert.ok(Math.abs(actual-expected)<=1e-8+Math.abs(expected)*1e-10,`${label}: ${actual} vs ${expected}`);
 const context=c=>({pix_fmt:c.format,color_range:c.range,color_transfer:{sdr:'bt709',srgb:'iec61966-2-1',pq:'smpte2084',hlg:'arib-std-b67'}[c.domain],field_order:'progressive'});
 async function directory(){await mkdir('.build/testing-work',{recursive:true});return mkdtemp(path.resolve('.build/testing-work/siti-p910-'))}
 function equivalent(actual,expected,starts=[0]){assert.equal(actual.length,expected.length);for(let i=0;i<actual.length;i++){close(actual[i].si,expected[i].si,'SI '+i);if(starts.includes(i))assert.equal(actual[i].ti,null);else close(actual[i].ti,expected[i].ti,'TI '+i)}}
+
+test('SI/TI numeric acceptance uses pinned upstream absolute OR relative tolerance with actual as the relative base',()=>{
+  assert.equal(SITI_NUMERIC_TOLERANCE.absoluteTolerance,.01);assert.equal(SITI_NUMERIC_TOLERANCE.relativeTolerance,.005);
+  for(const [actual,reference,accepted] of [[0,.01,true],[0,.010001,false],[100,100.5,true],[100,100.505,false],[100,100.501,false],[100.501,100,true],[NaN,0,false],[Infinity,Infinity,false],[0,null,false]])assert.equal(sitiValuesClose(actual,reference),accepted,`${actual} vs ${reference}`);
+});
 
 test('SI/TI independent byte oracle validates 150 layouts and 900 CPU input cases',async()=>{
   const data=await independentSitiLayouts(),cases=[];let maxSampleError=0,maxError=0;
@@ -77,7 +84,7 @@ test('SI/TI matches pinned unmodified siti-tools 0.6.0 functions across integer 
 test('HLG preserves the pinned upstream transfer and discontinuity without substituting a display model',()=>{
   for(const hlg of vectors.hlgCurves){
     const settings={transfer:'hlg',hlg:{whiteCdM2:hlg.whiteCdM2,blackCdM2:hlg.blackCdM2}},input=sitiInput({pix_fmt:'gray10le',color_range:'pc',color_transfer:'arib-std-b67'},settings);
-    for(const p of hlg.points)close(sitiPreprocessedValue(p.signal,input),p.pq,'pinned HLG '+hlg.whiteCdM2+' / '+p.signal);
+    for(const p of hlg.points)closePreprocessing(sitiPreprocessedValue(p.signal,input),p.pq,'pinned HLG '+hlg.whiteCdM2+' / '+p.signal);
     assert.equal(sitiConfiguration(input).configurationVersion,8);assert.equal(sitiConfiguration(input).profile,SITI_COMPAT_PROFILE);
     assert.ok(sitiPreprocessedValue(.5,input)>sitiPreprocessedValue(.500000001,input),'reproduce upstream join');
     if(hlg.whiteCdM2===600)assert.equal(input.hlg.gamma,1.2);
@@ -91,13 +98,13 @@ test('HLG preserves the pinned upstream transfer and discontinuity without subst
 test('SI/TI pinned display endpoints, fixed 255 scale and analytic population statistics',()=>{
   for(const curve of vectors.sdrCurves){
     const input=sitiInput({pix_fmt:'gray',color_range:'pc',color_transfer:'bt709'},{transfer:curve.domain});
-    for(const p of curve.points)close(sitiPreprocessedValue(p.signal,input),p.pq,curve.domain+' '+p.signal);
-    close(curve.points[0].luminance,.1,'display black');
-    close(curve.points.at(-1).luminance,300,'display white');
+    for(const p of curve.points)closePreprocessing(sitiPreprocessedValue(p.signal,input),p.pq,curve.domain+' '+p.signal);
+    closePreprocessing(curve.points[0].luminance,.1,'display black');
+    closePreprocessing(curve.points.at(-1).luminance,300,'display white');
   }
   for(const depth of [8,9,10,12,14,16])for(const range of ['pc','tv']){
     const input=sitiInput({pix_fmt:depth===8?'gray':`gray${depth}le`,color_range:range,color_transfer:'smpte2084'}),maximum=2**depth-1,factor=2**(depth-8),lo=range==='tv'?16*factor:0,hi=range==='tv'?235*factor:maximum,table=createSitiLut(input);
-    const middle=Math.floor((lo+hi)/2);assert.equal(table[lo],0);assert.equal(table[hi],1);close(table[middle],(middle-lo)/(hi-lo),'native midpoint');
+    const middle=Math.floor((lo+hi)/2);assert.equal(table[lo],0);assert.equal(table[hi],1);closePreprocessing(table[middle],(middle-lo)/(hi-lo),'native midpoint');
     assert.equal(sitiConfiguration(input).outputMultiplier,255);
     const raw=samples=>{const b=Buffer.alloc(samples.length*(depth===8?1:2));samples.forEach((v,i)=>depth===8?b[i]=v:b.writeUInt16LE(v,i*2));return b};
     const black=raw(Array(16).fill(lo)),edge=raw(Array.from({length:16},(_,i)=>i%4===3?hi:lo)),calculator=createSitiCalculator(4,4,input);

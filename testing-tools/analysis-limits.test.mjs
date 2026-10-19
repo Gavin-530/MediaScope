@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdir,mkdtemp,readFile,writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {MAX_ANALYSIS_FRAMES,MAX_SITI_PIXELS,validateSitiDimensions} from '../public/analysis-limits.js';
-import {sitiInput,validateSitiSceneStarts,validateSitiPoints} from '../public/siti.js';
+import {sitiInput,validateSitiSceneStarts,validateSitiPoints,sitiValuesClose} from '../public/siti.js';
 import {measureSiti} from '../siti.mjs';
 import {FF,run,probe,scan} from '../engine.mjs';
 import {traceStructure,mapStructure,createTraceParser} from '../analysis.mjs';
@@ -43,8 +43,8 @@ test('[analysis-limits] SI/TI really decodes the 8192x4320 boundary and matches 
   assert.equal(stream.width*stream.height,MAX_SITI_PIXELS);assert.equal(stream.pix_fmt,'gray');
   const result=await measureSiti(file,stream,{...ctx,sitiSettings:{range:'tv',transfer:'pq'},sitiWorkers:1},frames);
   const p=2/(8192-2),si=4*Math.sqrt(p*(1-p))*255,q=1/8192,ti=Math.sqrt(q*(1-q))*255;
-  for(const point of result.points)assert.ok(Math.abs(point.si-si)<1e-8);
-  assert.equal(result.points[0].ti,null);assert.ok(Math.abs(result.points[1].ti-ti)<1e-8);
+  for(const point of result.points)assert.ok(sitiValuesClose(point.si,si));
+  assert.equal(result.points[0].ti,null);assert.ok(sitiValuesClose(result.points[1].ti,ti));
   await writeFile(path.join(folder,'8k-boundary.json'),JSON.stringify({outcome:'passed',commands,stream,result,analytic:{si,ti}}));
 });
 

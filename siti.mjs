@@ -9,7 +9,7 @@ import {createHash,randomUUID} from 'node:crypto';
 import path from 'node:path';
 import {MAX_ANALYSIS_FRAMES,validateSitiDimensions} from './public/analysis-limits.js';
 import {FF,run,decodeThreadCount,checkAnalysisMemory} from './engine.mjs';
-import {sitiInput,sitiConfiguration,createSitiCalculator,createSitiLut,sitiFrameLayout,sitiGpuParameters,sitiTimestamp,validateSitiPoints,validateSitiSceneStarts,sitiFormat,sitiRawBytes} from './public/siti.js';
+import {sitiInput,sitiConfiguration,createSitiCalculator,createSitiLut,sitiFrameLayout,sitiGpuParameters,sitiTimestamp,validateSitiPoints,validateSitiSceneStarts,sitiFormat,sitiRawBytes,SITI_NUMERIC_TOLERANCE} from './public/siti.js';
 
 const workerFile=fileURLToPath(import.meta.url),helper=fileURLToPath(new URL('./gpu/siti-opencl.ps1',import.meta.url));
 let gpuBridge,gpuPool,gpuQueue=Promise.resolve();
@@ -51,7 +51,7 @@ async function prepareGpu(ctx){
     if(gpuBridge===prepared)gpuBridge=undefined;
   }
 }
-function validGpuInfo(p){if(!p?.device||p.metrics!=='PQ-Sobel-TI-fp64'||!Number.isFinite(p.selfTestMaxError)||p.selfTestMaxError<0)throw error('GPU 自检结果无效','gpu-initialization');return p;}
+function validGpuInfo(p){if(!p?.device||p.metrics!=='PQ-Sobel-TI-fp32'||typeof p.rgbHlgFp64!=='boolean'||!Number.isFinite(p.selfTestMaxError)||p.selfTestMaxError<0)throw error('GPU 自检结果无效','gpu-initialization');return p;}
 
 class GpuSession{
   constructor(exe,ctx){
@@ -65,7 +65,7 @@ class GpuSession{
     this.lines.on('line',line=>{try{
       const p=JSON.parse(line);
       if(p.event==='ready'){
-        if(p.protocol!==1)throw error('GPU 会话协议不一致','gpu-initialization');
+        if(p.protocol!==2)throw error('GPU 会话协议不一致','gpu-initialization');
         this.info=validGpuInfo(p);command.elapsedSeconds=(performance.now()-started)/1000;this.ready.resolve(p);return;
       }
       const request=this.current;
@@ -87,7 +87,7 @@ class GpuSession{
   async request(operation,header,payload,ctx,callbacks={}){
     this.reference(true);clearTimeout(this.idle);
     const id=++this.sequence,done=deferred(),started=performance.now();this.current={id,done,...callbacks};
-    const command={exe:this.exe,args:['serve'],cwd:ctx.cwd??process.cwd(),scope:'request',operation,transport:'stdin-v1',requestId:id,sessionPid:this.child.pid,exitCode:null};ctx.commands?.push(command);
+    const command={exe:this.exe,args:['serve'],cwd:ctx.cwd??process.cwd(),scope:'request',operation,transport:'stdin-v2',requestId:id,sessionPid:this.child.pid,exitCode:null};ctx.commands?.push(command);
     done.promise.then(()=>{command.exitCode=0;command.elapsedSeconds=(performance.now()-started)/1000;},()=>{command.exitCode=1;command.elapsedSeconds=(performance.now()-started)/1000;});
     try{await write(this.child.stdin,Buffer.from(operation==='probe'?`P\t${id}\n`:`M\t${id}\t${header.join('\t')}\n`));if(payload)await write(this.child.stdin,payload);}
     catch(e){if(closedInput(e))await done.promise;throw error(e.message,'gpu',e);}
@@ -134,7 +134,16 @@ export async function sitiGpuCapability(ctx={}){
 }
 export function sitiGpuRequest(input,w,h,count,sceneStarts=[0]){
   const f=input.format,l=sitiFrameLayout(input,w,h),rgb=f.family==='rgb',table=rgb?sitiGpuParameters(input,w,h):createSitiLut(input);
-  return {header:[w,h,count,sceneStarts.join(','),f.storage,input.depth,f.shift,f.endian==='be'?0:1,l.bytes,f.alpha?l.alpha:-1,rgb?2:1,l.stride,l.red,l.green,l.blue,table.length],payload:Buffer.from(table.buffer),bytes:l.bytes};
+  // PQ luma is affine in the exact integer code. Move its positive scale past
+  // Sobel/std and TI/std so FP32 never rounds the normalized sample first.
+  // Keep invalid entries invalid; this does not permit clipping or rescaling input.
+  let metricScale=1;
+  if(!rgb&&input.domain==='pq'){
+    const lo=input.range==='tv'?16*2**(input.depth-8):0,hi=input.range==='tv'?235*2**(input.depth-8):2**input.depth-1;
+    metricScale=1/(hi-lo);
+    for(let code=lo;code<=hi;code++)table[code]=code-lo;
+  }
+  return {header:[w,h,count,sceneStarts.join(','),f.storage,input.depth,f.shift,f.endian==='be'?0:1,l.bytes,f.alpha?l.alpha:-1,rgb?2:1,l.stride,l.red,l.green,l.blue,table.length,metricScale],payload:Buffer.from(table.buffer),bytes:l.bytes};
 }
 
 function processFailure(stderr,fallbackPhase){
@@ -177,6 +186,10 @@ async function measureRun(file,stream,input,ctx,frames,{gpu=false,workers=1,atte
     try{
       if(gpu){
         const prepared=sitiGpuRequest(input,width,height,frames.length,sceneStarts),configured=performance.now();
+        // On an integrated GPU both allocations consume host RAM. Include the
+        // actual FP32 device buffers in the existing conservative host budget.
+        const deviceBytes=rawBytes+16*n+4*Math.ceil(n/256)+4*(input.format.family==='rgb'?20:2**input.depth)+20+(session.info.rgbHlgFp64?160:0);
+        if(session.info.hostUnifiedMemory&&hostBytes+deviceBytes>freemem()*.25)throw error('SI/TI 共享GPU主机内存预算不足','gpu-initialization');
         timer=setTimeout(()=>fail(error('GPU 配置或自检超过 30 秒','gpu-initialization')),30000);
         request=await session.request('measure',prepared.header,prepared.payload,{...ctx,signal},{onPoint:p=>{try{point(p);}catch(e){fail(e);}},onInfo:p=>{info=p;clearTimeout(timer);attempt.configurationSeconds=(performance.now()-configured)/1000;}});
         pending.push(request.done.then(p=>{if(p.frames!==received||!Number.isFinite(p.gpuUploadComputeReadSeconds)||!Number.isFinite(p.inputWaitSeconds))throw error('GPU 完成记录无效','gpu');gpuTiming=p;}).catch(fail));
@@ -228,7 +241,7 @@ async function measureRun(file,stream,input,ctx,frames,{gpu=false,workers=1,atte
       const result=points;for(let i=0;i<result.length;i++)result[i].t=timestamps[i];
       try{validateSitiSceneStarts(sceneStarts,result.length);validateSitiPoints(result,frames,{sceneStarts});}catch(e){throw error(e.message,'validation',e);}
       return {points:result,execution:{mode:gpu?'gpu':workers>1?'frame-parallel':'serial',device:gpu?'gpu':'cpu',requestedDevice:ctx.sitiDevice??'cpu',workers,implementation:`MediaScope P.910 ${input.domain.toUpperCase()} ${gpu?'GPU':'CPU'}`,method:configuration.profile,configuration,decode:'FFmpeg software',decodePasses:1,decodeThreads:decodeThreadCount(ctx.decodeThreads),inputBytesPerFrame:rawBytes,preprocessingDevice:gpu?'gpu':'cpu',metricsDevice:gpu?'gpu':'cpu',
-        ...(workers>1?{frameDispatch:'round-robin blocks with exact predecessor',blockFrames:cpuBlockFrames,overlapFrames:1}:{}),...(gpu?{gpuName:info.device,driver:info.driver,backend:info.backend,selfTestMaxError:info.selfTestMaxError,precision:input.format.family==='rgb'?'fp64 GPU RGB preprocessing and metrics':'fp64 shared LUT preprocessing and GPU metrics',sessionPid:session.child.pid,buffersReused:info.buffersReused,validation:{selfTest:'passed',absoluteTolerance:1e-8,relativeTolerance:1e-10,toleranceSource:'MediaScope engineering threshold, not an ITU guarantee'},timing:{gpuUploadComputeReadSeconds:gpuTiming.gpuUploadComputeReadSeconds,inputWaitSeconds:gpuTiming.inputWaitSeconds,scope:'GPU upload, preprocessing, metrics and readback; input wait overlaps decoder'}}:{})}};
+        ...(workers>1?{frameDispatch:'round-robin blocks with exact predecessor',blockFrames:cpuBlockFrames,overlapFrames:1}:{}),...(gpu?{gpuName:info.device,driver:info.driver,backend:info.backend,selfTestMaxError:info.selfTestMaxError,precision:input.format.family==='rgb'?(input.domain==='hlg'?'fp64 GPU HLG RGB preprocessing; fp32 GPU metrics':'fp32 GPU RGB preprocessing and metrics'):input.domain==='pq'?'exact integer PQ luma in fp32; fp32 metrics; fp64 host output scale':'fp64 host LUT rounded to fp32; fp32 GPU metrics',hostUnifiedMemory:info.hostUnifiedMemory,sessionPid:session.child.pid,buffersReused:info.buffersReused,validation:{selfTest:'passed',...SITI_NUMERIC_TOLERANCE},timing:{gpuUploadComputeReadSeconds:gpuTiming.gpuUploadComputeReadSeconds,inputWaitSeconds:gpuTiming.inputWaitSeconds,scope:'GPU upload, preprocessing (fp64 for HLG RGB), fp32 metrics and readback; input wait overlaps decoder'}}:{})}};
     }catch(e){fail(e.sitiPhase?e:session?.failure??error(e.message,gpu?'gpu':'cpu',e));throw failure;}
     finally{clearTimeout(timer);receiver?.destroy();controller.abort(failure);if(failure&&session&&(!session.current?.complete||failure.sitiPhase?.startsWith('gpu')))session.fail(failure);await Promise.all([...pending,...laneWrites]);}
   }
@@ -245,7 +258,7 @@ export async function measureSiti(file,stream,ctx={},frames=null){
   const configured=ctx.sitiWorkers??Number(process.env.MEDIASCOPE_SITI_WORKERS??4),requestedWorkers=Number.isInteger(configured)&&configured>0?Math.min(8,configured):4,setting=ctx.sitiWorkers==null?'auto':'manual',attempts=[];
   async function attempt(gpu,workers=1){
     const record={device:gpu?'gpu':'cpu',workers,outcome:'running',framesComputed:0},started=performance.now();attempts.push(record);
-    ctx.update?.({detail:gpu?'准备 GPU SI/TI；软件解码，双精度计算':`测量 SI/TI（CPU ${workers} 路；共用一次解码）`,completed:0,total:frames?.length??null,unit:'帧'});
+    ctx.update?.({detail:gpu?'准备 GPU SI/TI（软件解码）':`测量 SI/TI（CPU ${workers} 路；共用一次解码）`,completed:0,total:frames?.length??null,unit:'帧'});
     try{const value=await measureRun(file,stream,input,ctx,frames,{gpu,workers,attempt:record});record.outcome='passed';return value;}
     catch(e){record.outcome=ctx.signal?.aborted?'cancelled':'failed';record.phase=e.sitiPhase??(gpu?'gpu':'cpu');record.reason=e.message;e.sitiAttempts=attempts;throw e;}
     finally{record.elapsedSeconds=(performance.now()-started)/1000;}

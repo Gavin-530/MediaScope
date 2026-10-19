@@ -7,6 +7,9 @@ export const SITI_COMPAT_PROFILE='VQEG-siti-tools-0.6.0-PQ-v1';
 export const SITI_PROFILE='VQEG-siti-c537e337-PQ';
 export const SITI_HLG_PROFILE='P910-HLG-BT2100-2-PQ-v1';
 export const SITI_REFERENCE=Object.freeze({project:'VQEG/siti-tools',commit:'c537e33793266187aad87c859fd62a9de9033854',sourceSha256:'84557e030e302fa14e28a1cd1227f3320986050c4cf5f5f4d590215971329873'});
+// Pinned test/test.py: pytest.approx(actual, rel=0.005, abs=0.01) == reference.
+export const SITI_NUMERIC_TOLERANCE=Object.freeze({absoluteTolerance:.01,relativeTolerance:.005,toleranceRule:'max',relativeTo:'actual',toleranceSource:'siti-tools 0.6.0 test/test.py (c537e33793266187aad87c859fd62a9de9033854); upstream regression criterion, not an ITU guarantee'});
+export function sitiValuesClose(actual,reference){return Number.isFinite(actual)&&Number.isFinite(reference)&&Math.abs(actual-reference)<=Math.max(SITI_NUMERIC_TOLERANCE.absoluteTolerance,SITI_NUMERIC_TOLERANCE.relativeTolerance*Math.abs(actual));}
 export const SITI_MATRICES=Object.freeze({bt601:[.299,.587,.114],bt709:[.2126,.7152,.0722],bt2020:[.2627,.678,.0593]});
 const HLG_A=.17883277,HLG_B=.02372241,HLG_C=1.00429347;
 const SDR_WHITE=300,SDR_BLACK=.01,GAMMA=2.4;

@@ -71,7 +71,8 @@ test('[test-system] general and GPU scopes require their own coverage and exact 
   const environment={executables:['node','ffmpeg','ffprobe'].map(name=>({name,sha256:'e'.repeat(64)}))};
   const general={scope:'full',version,outcome:'passed',exitCode:0,testSummary:counts,validation:{...validation,mode:'full-regression'},source:{...identity,kind:'working-tree'},harness:identity,environment,releaseCheck:{requested:true,ready:true}};
   const gpu={...general,scope:'gpu',validation,releaseCheck:{requested:false,ready:false}};
-  const measurement={outcome:'passed',capability:{available:true,device:'protocol-only',selfTestMaxError:0},cases:[{maxError:0,cpu:{execution:{device:'cpu'}},gpu:{execution:{device:'gpu'}}}]};
+  const points=[{frame:0,t:0,si:100,ti:null},{frame:1,t:1,si:100,ti:2}];
+  const measurement={outcome:'passed',capability:{available:true,device:'protocol-only',selfTestMaxError:0},cases:[{maxError:0,cpu:{execution:{device:'cpu'},points},gpu:{execution:{device:'gpu'},points}}]};
   const check=(g=general,h=gpu,m=measurement)=>sourceTestReadiness(g,h,m,{commit,version}).ready;
   assert.equal(check(),true);
   assert.equal(check(general,null),false);
@@ -83,6 +84,14 @@ test('[test-system] general and GPU scopes require their own coverage and exact 
   assert.equal(check(general,gpu,{...measurement,capability:{available:false}}),false);
   assert.equal(check(general,gpu,{...measurement,cases:[{...measurement.cases[0],gpu:{execution:{device:'cpu'}}}]}),false);
   assert.equal(check(general,gpu,{...measurement,cases:[{...measurement.cases[0],maxError:0.02}]}),false);
+  for(const [si,accepted] of [[100.4,true],[100.6,false]]){
+    const m=structuredClone(measurement);m.cases[0].gpu.points=m.cases[0].gpu.points.map(p=>({...p,si}));m.cases[0].maxError=Math.abs(si-100);
+    assert.equal(check(general,gpu,m),accepted,'relative tolerance must use actual per-frame values');
+    m.cases[0].maxError=0;assert.equal(check(general,gpu,m),false,'summary cannot conceal a changed measurement');
+  }
+  for(const damage of [c=>delete c.gpu.points,c=>c.gpu.points.pop(),c=>c.gpu.points[0].ti=0,c=>c.gpu.points[1].si=NaN,c=>c.gpu.points[1].t+=.001]){
+    const m=structuredClone(measurement);m.cases[0].gpu.points=structuredClone(m.cases[0].gpu.points);damage(m.cases[0]);assert.equal(check(general,gpu,m),false);
+  }
 });
 test('[test-system] missing current UI features fail; only explicit historical sources may skip',()=>{
   const reasons=[],context={skip:reason=>reasons.push(reason)};

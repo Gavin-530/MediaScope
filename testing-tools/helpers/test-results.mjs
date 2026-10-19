@@ -40,6 +40,23 @@ export function regressionAssessment(counts,features,{suite='full',historical=fa
   return {schema:1,mode,status,accepted,reasons,processExitCode};
 }
 
+function gpuCaseMatches(c){
+  const cpu=c?.cpu?.points,gpu=c?.gpu?.points;
+  if(c?.cpu?.execution?.device!=='cpu'||c?.gpu?.execution?.device!=='gpu'||!Array.isArray(cpu)||!cpu.length||!Array.isArray(gpu)||gpu.length!==cpu.length||!Number.isFinite(c.maxError)||c.maxError<0)return false;
+  let maxError=0;
+  for(let i=0;i<cpu.length;i++){
+    const reference=cpu[i],actual=gpu[i];
+    if(reference?.frame!==i||actual?.frame!==i||!Number.isFinite(reference.t)||actual.t!==reference.t)return false;
+    for(const metric of ['si','ti']){
+      if(metric==='ti'&&reference[metric]===null){if(actual[metric]!==null)return false;continue;}
+      // Keep this standalone verifier independent of product modules; match pinned approx(actual).
+      if(!Number.isFinite(reference[metric])||!Number.isFinite(actual[metric])||reference[metric]<0||actual[metric]<0||Math.abs(actual[metric]-reference[metric])>Math.max(.01,.005*Math.abs(actual[metric])))return false;
+      maxError=Math.max(maxError,Math.abs(actual[metric]-reference[metric]));
+    }
+  }
+  return maxError===c.maxError;
+}
+
 export function sourceTestReadiness(general,gpu,measurement,{commit,version}={}){
   const reasons=[];
   if(!/^[a-f0-9]{40}$/.test(commit||''))reasons.push('Exact release commit is required');
@@ -55,6 +72,6 @@ export function sourceTestReadiness(general,gpu,measurement,{commit,version}={})
     if(!/^[a-f0-9]{64}$/.test(digest||'')||digest!==gpu?.environment?.executables?.find(e=>e.name===name)?.sha256)reasons.push(`${name}: runtime executables differ`);
   }
   if(general?.releaseCheck?.requested!==true||general?.releaseCheck?.ready!==true)reasons.push('Strict general release check required');
-  if(measurement?.outcome!=='passed'||measurement?.capability?.available!==true||!measurement.capability.device||!Number.isFinite(measurement.capability.selfTestMaxError)||!measurement?.cases?.length||measurement.cases.some(c=>c.gpu?.execution?.device!=='gpu'||c.cpu?.execution?.device!=='cpu'||!Number.isFinite(c.maxError)||c.maxError<0||c.maxError>0.0100001))reasons.push('Real GPU equivalence measurements required; CPU fallback cannot satisfy GPU acceptance');
+  if(measurement?.outcome!=='passed'||measurement?.capability?.available!==true||!measurement.capability.device||!Number.isFinite(measurement.capability.selfTestMaxError)||measurement.capability.selfTestMaxError<0||!Array.isArray(measurement?.cases)||!measurement.cases.length||!measurement.cases.every(gpuCaseMatches))reasons.push('Real GPU equivalence measurements within the pinned upstream tolerance required; CPU fallback cannot satisfy GPU acceptance');
   return {ready:reasons.length===0,reasons};
 }

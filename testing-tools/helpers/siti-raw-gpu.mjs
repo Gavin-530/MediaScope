@@ -4,8 +4,8 @@ import {sitiInput} from '../../public/siti.js';
 import {sitiGpuRequest} from '../../siti.mjs';
 
 // One owned bridge process; raw requests have no CPU fallback path.
-export async function withRawSitiGpu(exe,signal,body){
-  const child=spawn(exe,['serve'],{windowsHide:true}),lines=createInterface({input:child.stdout});
+export async function withRawSitiGpu(exe,signal,body,{deviceIndex=0}={}){
+  const child=spawn(exe,['serve',String(deviceIndex)],{windowsHide:true}),lines=createInterface({input:child.stdout});
   let current,sequence=0,stderr='',readyResolve,readyReject,closedResolve;
   const closed=new Promise(resolve=>{closedResolve=resolve}),ready=new Promise((resolve,reject)=>{readyResolve=resolve;readyReject=reject});
   const fail=e=>{readyReject(e);current?.reject(e);child.kill()};
@@ -14,7 +14,7 @@ export async function withRawSitiGpu(exe,signal,body){
   child.on('close',code=>{closedResolve();if(code!==0)fail(Error(`Raw SI/TI GPU exited ${code}: ${stderr}`))});
   lines.on('line',line=>{try{
     const p=JSON.parse(line);
-    if(p.event==='ready'){if(p.protocol!==1)throw Error('GPU protocol mismatch');readyResolve(p);return}
+    if(p.event==='ready'){if(p.protocol!==2)throw Error('GPU protocol mismatch');readyResolve(p);return}
     if(!current||p.id!==current.id)throw Error('GPU request identity mismatch');
     if(p.event==='error')throw Error(p.message);
     if(p.event==='configured')current.info=p;
