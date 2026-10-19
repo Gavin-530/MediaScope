@@ -12,11 +12,12 @@ const stamp = '\\d{8}T\\d{6}(?:\\.\\d{3})?Z';
 const names = {
   plan: new RegExp(`^plans/${topic}-plan-(${stamp})\\.md$`),
   receipt: new RegExp(`^operations/${topic}-receipt-(${stamp})\\.(?:md|json)$`),
-  reference: new RegExp(`^references/(?:benchmarks/)?${topic}-(${stamp})(?:\\.(?:md|json))?$`),
+  reference: new RegExp(`^references/(?:benchmarks|validation|tooling)/${topic}-(${stamp})(?:\\.(?:md|json))?$`),
   history: new RegExp(`^history/${topic}-(${stamp})$`),
   rollback: new RegExp(`^rollback/${topic}-(${stamp})$`)
 };
 const upstreamName = /^references\/upstream\/[a-z0-9]+(?:-[a-z0-9]+)*\/[a-z0-9][a-z0-9._-]*$/;
+const referenceLocation = /^references\/(?:(?:benchmarks|validation|tooling)\/[^/]+|upstream\/[^/]+\/[^/]+)$/;
 const text = value => typeof value === 'string' && value.trim().length > 0;
 const digest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const key = value => value.toLowerCase();
@@ -114,6 +115,7 @@ export async function checkLocalNotes(projectRoot = project) {
       if (scopes.some(scope => under(key(label), scope) || under(scope, key(label)))) fail(`Overlapping retention entries: ${label}`);
       scopes.push(key(label));
       if (!label.startsWith(({plan: 'plans', receipt: 'operations', reference: 'references', history: 'history', rollback: 'rollback'})[entry.kind] + '/')) fail(`Wrong directory for ${entry.kind}: ${label}`);
+      if (entry.kind === 'reference' && !referenceLocation.test(label)) fail(`Reference needs a fixed category and entry scope (benchmarks, validation, tooling or upstream): ${label}`);
       const match = names[entry.kind].exec(label);
       const standard = match ? validStamp(match[1]) : entry.kind === 'reference' && upstreamName.test(label);
       if (!standard && !(text(entry.legacyNameReason) && text(entry.timeBasis))) fail(`Nonstandard name without a documented historical exception: ${label}`);
@@ -128,6 +130,7 @@ export async function checkLocalNotes(projectRoot = project) {
       if (!safeRelative(entry.entrypoint) || !under(entry.entrypoint, label) || !tree.files.has(entry.entrypoint) || !links.has(entry.entrypoint)) fail(`Entry must have an existing, indexed entrypoint within its scope: ${label}`);
       if (!entry.retention || typeof entry.retention !== 'object' || Array.isArray(entry.retention) ||
           Object.entries(entry.retention).some(([role, reason]) => !roles.has(role) || !text(reason))) fail(`Invalid retention role descriptions: ${label}`);
+      if (entry.kind !== 'rollback' && entry.retention && Object.hasOwn(entry.retention, 'recovery')) fail(`Recovery material must be registered in rollback: ${label}`);
       if (!Array.isArray(entry.files) || !entry.files.length) {fail(`Missing exact file inventory: ${label}`); continue;}
       for (const file of entry.files) {
         if (!file || !safeRelative(file.path) || !under(file.path, label)) {fail(`Unsafe or out-of-scope inventory file: ${label}`); continue;}
@@ -135,6 +138,7 @@ export async function checkLocalNotes(projectRoot = project) {
         declared.add(key(file.path));
         if (!roles.has(file.role) || !text(entry.retention?.[file.role]) ||
             !Number.isSafeInteger(file.bytes) || file.bytes < 0 || !digest(file.sha256)) fail(`Incomplete file retention record: ${file.path}`);
+        if (file.role === 'recovery' && entry.kind !== 'rollback') fail(`Recovery material must be registered in rollback: ${file.path}`);
         if (/(^|\/)(?:node_modules|__pycache__|\.venv|venv|runtime|\.git)(\/|$)/i.test(file.path) ||
             /\.(?:pyc|pyo|tmp|temp|part|crdownload|exe|dll|pyd)$/i.test(file.path)) fail(`Disposable runtime/cache is forbidden in local-notes: ${file.path}`);
         if (/\.(?:mjs|cjs|js|py|ps1|sh|ipynb|ptx|c|cpp|h|hpp|cs)$/i.test(file.path) && !['reproduction', 'upstream', 'recovery'].includes(file.role)) fail(`Source script needs a reproduction/upstream/recovery role: ${file.path}`);

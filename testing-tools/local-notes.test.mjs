@@ -24,7 +24,7 @@ async function fixture(t, {entryPath = plan, kind = 'plan', legacy = false} = {}
   };
   await write(entryPath, 'retained original\n');
   await write('README.md', `[Entry](${entryPath})\n`);
-  const entry = {path: entryPath, kind, status: kind === 'plan' ? 'active' : 'historical',
+  const entry = {path: entryPath, kind, status: ({plan: 'active', reference: 'reference', rollback: 'recovery'})[kind] || 'historical',
     reason: 'Keep the approved plan and its acceptance requirements.', source: 'Local reviewed plan',
     timeBasis: 'Actual UTC save time', entrypoint: entryPath,
     retention: {document: 'Frozen plan text'},
@@ -38,6 +38,12 @@ async function fixture(t, {entryPath = plan, kind = 'plan', legacy = false} = {}
     schema: 1, legacyNamingPathSha256: baseline.map(value => sha(value))
   }}));
   return {project, root, catalog, entry, write, save};
+}
+async function bundleFixture(t, scope, kind = 'reference') {
+  const f = await fixture(t, {entryPath: `${scope}/README.md`, kind});
+  f.entry.path = scope;
+  await f.save();
+  return f;
 }
 const errors = async fixture => (await checkLocalNotes(fixture.project)).errors.join('\n');
 
@@ -85,6 +91,64 @@ test('requires UTC naming and rejects impossible calendar dates', async t => {
   }
   const f = await fixture(t, {entryPath: 'plans/example-plan-20261016T010203.123Z.md'});
   assert.equal(await errors(f), '');
+});
+
+test('accepts fixed reference categories, single results and pinned upstream versions', async t => {
+  for (const category of ['benchmarks', 'validation', 'tooling']) {
+    const f = await bundleFixture(t, `references/${category}/example-20261016T010203Z`);
+    assert.equal(await errors(f), '');
+    const single = await fixture(t, {entryPath: `references/${category}/example-20261016T010203.123Z.json`, kind: 'reference'});
+    assert.equal(await errors(single), '');
+  }
+  for (const version of ['0.6.0', 'n8.1.3', 'commit_abc123']) {
+    const f = await bundleFixture(t, `references/upstream/example/${version}`);
+    assert.equal(await errors(f), '');
+  }
+});
+
+test('timestamped references still need a fixed category and exact entry depth', async t => {
+  for (const scope of ['references/example-20261016T010203Z',
+    'references/misc/example-20261016T010203Z', 'references/other/example-20261016T010203Z',
+    'references/validation/nested/example-20261016T010203Z', 'references/upstream/example']) {
+    const f = await bundleFixture(t, scope);
+    assert.match(await errors(f), /Reference needs a fixed category and entry scope/);
+  }
+  // Even a reviewed naming exception cannot authorize an unclassified reference.
+  const legacy = await fixture(t, {entryPath: 'references/old-20261004.md', kind: 'reference', legacy: true});
+  assert.match(await errors(legacy), /Reference needs a fixed category and entry scope/);
+  const single = await fixture(t, {entryPath: 'references/example-20261016T010203Z.json', kind: 'reference'});
+  assert.match(await errors(single), /Reference needs a fixed category and entry scope/);
+  const invalidTime = await bundleFixture(t, 'references/validation/example-20260230T010203Z');
+  assert.match(await errors(invalidTime), /Nonstandard name/);
+});
+
+test('recovery originals require rollback even with exact hashes and an explicit purpose', async t => {
+  const f = await bundleFixture(t, 'references/validation/example-20261016T010203Z');
+  assert.equal(await errors(f), '');
+  const archive = `${f.entry.path}/original-source.zip`;
+  await f.write(archive, 'original');
+  f.entry.retention.recovery = 'Unique uncommitted source needed for recovery';
+  f.entry.files.push({path: archive, role: 'recovery', bytes: 8, sha256: sha('original'),
+    reason: 'Keep unique source bytes that are absent from Git.'});
+  await f.save();
+  assert.match(await errors(f), /Recovery material must be registered in rollback/);
+  delete f.entry.retention.recovery;
+  await f.save();
+  assert.match(await errors(f), /Recovery material must be registered in rollback/);
+  f.entry.files.pop();
+  await fs.unlink(path.join(f.root, archive));
+  f.entry.retention.recovery = 'A misplaced recovery declaration';
+  await f.save();
+  assert.match(await errors(f), /Recovery material must be registered in rollback/);
+
+  const rollback = await bundleFixture(t, 'rollback/example-20261016T010203Z', 'rollback');
+  const recovered = `${rollback.entry.path}/original-source.zip`;
+  await rollback.write(recovered, 'original');
+  rollback.entry.retention.recovery = 'Unique uncommitted source needed for recovery';
+  rollback.entry.files.push({...f.entry.files[0], path: recovered, role: 'recovery', bytes: 8,
+    sha256: sha('original'), reason: 'Keep unique source bytes that are absent from Git.'});
+  await rollback.save();
+  assert.equal(await errors(rollback), '');
 });
 
 test('accepts only the exact reviewed historical naming exceptions', async t => {
@@ -138,9 +202,8 @@ test('rejects escaping paths, duplicate inventory and overlapping scopes', async
 });
 
 test('registration cannot bless dependency caches or disguise scripts as documents', async t => {
-  const f = await fixture(t, {entryPath: 'references/example-20261016T010203Z/README.md', kind: 'reference'});
-  f.entry.path = 'references/example-20261016T010203Z';
-  f.entry.status = 'reference';
+  const f = await bundleFixture(t, 'references/tooling/example-20261016T010203Z');
+  assert.equal(await errors(f), '');
   for (const [relative, role, pattern] of [['runtime/installed.py', 'reproduction', /runtime\/cache is forbidden/],
     ['throwaway.mjs', 'document', /Source script needs/], ['output.log', 'result', /Log needs/],
     ['download.whl', 'upstream', /archive needs its own/]]) {
