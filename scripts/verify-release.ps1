@@ -3,7 +3,7 @@ param([Parameter(Mandatory=$true)][string]$Archive,[switch]$Deployment,[string]$
 $resolved=(Resolve-Path -LiteralPath $Archive).Path
 $project=Split-Path $PSScriptRoot
 . (Join-Path $PSScriptRoot 'evidence-lib.ps1')
-$temp=Join-Path $project "evidence-archive/pending/deployment-runs/verify-$([guid]::NewGuid().ToString('N'))"
+$temp=Join-Path $project "evidence-archive/pending/deployment-runs/verify-$([guid]::NewGuid().ToString('N').Substring(0,12))"
 Expand-SafeZip $resolved $temp
 $children=@(Get-ChildItem -LiteralPath $temp -Force)
 if($children.Count -ne 1 -or !$children[0].PSIsContainer){throw 'Expected one package root'}

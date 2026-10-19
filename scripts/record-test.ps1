@@ -113,7 +113,7 @@ if($harness){
 }
 $sandboxEvidence=@()
 if($Kind -in @('Package','Deployment','OnlineDeployment')){
-  foreach($dir in Get-ChildItem -LiteralPath $buildRoot -Directory -Force | Where-Object {$_.FullName -notin $buildBefore -and $_.Name -match '^(deployment-test|verify)-[a-f0-9]{32}$'}){
+  foreach($dir in Get-ChildItem -LiteralPath $buildRoot -Directory -Force | Where-Object {$_.FullName -notin $buildBefore -and $_.Name -match '^(deployment-test|verify)-(?:[a-f0-9]{12}|[a-f0-9]{32})$'}){
     $full=[IO.Path]::GetFullPath($dir.FullName)
     if((Split-Path -Parent $full) -ne $buildRoot){throw 'Sandbox outside build root'}
     $all=@(Get-EvidenceFiles $full) # Rejects links, including every descendant.
@@ -189,7 +189,7 @@ if($requestedResultPath){
 }
 foreach($sandbox in $sandboxEvidence){
   $target=[IO.Path]::GetFullPath($sandbox.path)
-  if((Split-Path -Parent $target) -ne $buildRoot -or (Split-Path -Leaf $target) -notmatch '^(deployment-test|verify)-[a-f0-9]{32}$'){throw 'Invalid sandbox cleanup target'}
+  if((Split-Path -Parent $target) -ne $buildRoot -or (Split-Path -Leaf $target) -notmatch '^(deployment-test|verify)-(?:[a-f0-9]{12}|[a-f0-9]{32})$'){throw 'Invalid sandbox cleanup target'}
   $current=@(Get-EvidenceFiles $target)
   if($current.Count -ne $sandbox.originalFiles -or ($current | ForEach-Object {$_.bytes} | Measure-Object -Sum).Sum -ne $sandbox.originalBytes){throw 'Sandbox changed after archival; preserved'}
   foreach($file in $sandbox.retained){if((Get-FileHash -LiteralPath (Join-Path $target $file.path) -Algorithm SHA256).Hash -ne $file.sha256){throw 'Sandbox diagnostic changed; preserved'}}

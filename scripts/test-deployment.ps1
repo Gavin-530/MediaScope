@@ -14,7 +14,8 @@ function Save-DeploymentResult([string]$Outcome,[string]$Failure) {
 trap {Save-DeploymentResult 'failed' $_.Exception.Message;throw $_}
 $project=Split-Path $PSScriptRoot
 . (Join-Path $PSScriptRoot 'evidence-lib.ps1')
-$work=Join-Path $project ('evidence-archive/pending/deployment-runs/deployment-test-'+[guid]::NewGuid().ToString('N'))
+# Keep native executable paths below the Windows process-launch boundary.
+$work=Join-Path $project ('evidence-archive/pending/deployment-runs/deployment-test-'+[guid]::NewGuid().ToString('N').Substring(0,12))
 New-Item -ItemType Directory -Force $work | Out-Null
 $homeDir=Join-Path $work 'home with spaces'
 $script:passed=0
