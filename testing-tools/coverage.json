@@ -1,6 +1,7 @@
 {
   "schema": 1,
   "features": [
+    {"id":"analysis-targets","purpose":"自动读取文件、独立逐帧/GOP/区间码率/SI-TI目标、设置随勾选收起、统一排队启动、七种组合只运行必要阶段及报告与计划往返","files":["testing-tools/server.test.mjs","testing-tools/browser.test.mjs"],"names":"\\[analysis-targets\\]"},
     {"id":"units","purpose":"十进制容量与码率自适应、规范大小写、图轴单位稳定、原始字节提示及报告精确往返和旧字段兼容","files":["testing-tools/units.test.mjs","testing-tools/browser.test.mjs"],"names":"\\[units\\]"},
     {"id":"basic-properties","purpose":"真实多位深/采样与 RGB/灰度/透明格式、色彩/SAR/旋转/扫描/附加图像；原始证据、抽样状态、解析边界、性能观察及新旧报告浏览器往返","files":["testing-tools/basic-properties.test.mjs","testing-tools/report.test.mjs","testing-tools/browser.test.mjs"],"names":"\\[basic-properties\\]"},
     {"id":"runtime-data","purpose":"近期十次和容量淘汰、重启恢复、导出保护、清理界面、退出缓存回收与独立保存视频","files":["testing-tools/runtime-data.test.mjs","testing-tools/runtime-data-browser.test.mjs","testing-tools/desktop-browser.test.mjs"],"names":"\\[runtime-data\\]|owned browser opens"},
@@ -11,7 +12,7 @@
     {"id":"metrics-colors","purpose":"同文件恒等、有损误差、官方 PSNR/SSIM/VMAF 对照、8/10/12/16-bit、RGB/灰度、Log/HDR/未知声明、采样和模型解释","files":["testing-tools/engine.test.mjs","testing-tools/bitdepth.test.mjs","testing-tools/vmaf.test.mjs","testing-tools/browser.test.mjs"],"names":"PSNR|SSIM|YUV matrix|VMAF|exact 8/10|interlaced|\\[comparison\\]"},
     {"id":"alignment-assumptions","purpose":"时间轴、用户确认、色度位置与来源记录","files":["testing-tools/engine.test.mjs","testing-tools/chroma-assumption.test.mjs","testing-tools/browser.test.mjs"],"names":"timestamps|assumption|\\[alignment\\]"},
     {"id":"siti","purpose":"固定 siti-tools 0.6.0 完整 PQ 数学流程与255尺度；原版发布片段及84组参考；150种布局900组独立已知字节/卷积参考；无效NUT素材单独分类并在启动计算前拒算；整数位深/范围/SDR/PQ/HLG/RGB；CPU串行并行、场景、时间戳、历史报告、API与界面","files":["testing-tools/engine.test.mjs","testing-tools/siti.test.mjs","testing-tools/server.test.mjs","testing-tools/report.test.mjs","testing-tools/browser.test.mjs"],"names":"SI/TI|frame parallel|serial mode|\\[analysis\\]"},
-    {"id":"siti-gpu-hardware","scope":"gpu","purpose":"真实fp64 GPU对照上游原始发布片段、84组参考、150种布局900组独立字节/卷积参考及CPU，不接受回退；位深/大小端/填充/Alpha/范围/SDR/PQ/HLG/场景/去隔行；截断拒绝、上下文复用、缓存重建、共同错误不回退和取消恢复","files":["testing-tools/siti-gpu-hardware.test.mjs"],"names":"GPU SI/TI hardware"},
+    {"id":"siti-gpu-hardware","scope":"gpu","purpose":"HLG RGB临界点独立公式与真实工作面核对及GPU双精度分段；真实FP32 GPU回读900组实际输入缓冲、精确零值/微小运动及设备故障整项回退，对照上游原始发布片段、84组参考、150种布局900组独立字节/卷积参考及CPU，不接受回退；位深/大小端/填充/Alpha/范围/SDR/PQ/HLG/场景/去隔行；截断拒绝、上下文复用、缓存重建、共同错误不回退和取消恢复","files":["testing-tools/siti-gpu-hardware.test.mjs"],"names":"GPU SI/TI hardware"},
     {"id":"trials","purpose":"源片段直接比较、原生 420/422/444 与位深、真实编码矩阵、位深转换、CRF/preset、临时媒体生命周期","files":["testing-tools/trial.test.mjs","testing-tools/native-trial.test.mjs","testing-tools/engine.test.mjs","testing-tools/browser.test.mjs"],"names":"trial|depth|\\[trial\\]"},
     {"id":"queue","purpose":"暂停、继续、取消移除、单项移除与分范围清空、失败后执行、重排队与实际计划导入导出","files":["testing-tools/server.test.mjs","testing-tools/browser.test.mjs"],"names":"queue|cancellation|pausing|requeued|plan export|\\[queue-plans\\]"},
     {"id":"portable-reports","purpose":"统一0.4文件、表格/常量/稀疏字段无损往返、原始证据和生产版本保留、四个命名模板、旧格式与损坏内容拒绝","files":["testing-tools/report.test.mjs","testing-tools/portable.test.mjs","testing-tools/browser.test.mjs"],"names":"^all four actual|^real report parser|^truncating real|^future nonmeasurement|\\[portable-04\\]|\\[portable"},

@@ -82,6 +82,7 @@
           <h2>分析媒体</h2>
           <span>MOV / MP4 / 其他 FFmpeg 支持的格式</span>
         </div>
+        <p class="hint analysis-flow">选择文件 → 调整分析目标 → 加入队列 → 开始</p>
         <label for="file">本机媒体文件</label>
         <div class="row">
           <input
@@ -90,30 +91,47 @@
             spellcheck="false"
           /><button class="secondary file-picker" data-target="file">
             选择文件</button
-          ><button id="inspect">读取信息</button>
+          >
         </div>
         <p class="hint">
-          可选择文件，也可粘贴绝对路径；支持中文路径、带引号路径及盘符后的全角冒号。文件不会上传。
+          选择文件或粘贴绝对路径后，自动读取基本信息。支持中文路径，文件不会上传。
         </p>
         <div class="row">
-          <label for="stream">视频轨道</label
-          ><select id="stream">
-            <option value="0">先读取文件信息</option></select
-          ><button id="analyze" class="secondary" disabled>完整逐帧分析</button
-          ><button id="enqueue-analyze" class="secondary">
-            完整分析加入队列
-          </button>
+          <label for="stream">视频轨道</label><select id="stream" disabled>
+            <option value="">选择文件后自动读取</option></select>
         </div>
-        <div class="row"><label>码率计算窗口<select id="bitrate-window"><option value="100">100 ms</option><option value="1000">1 秒</option></select></label></div>
-          <div class="row siti-options">
-          <label class="complexity-option"
-            ><input id="complexity" type="checkbox" /> 同时测量 SI/TI
-            内容复杂度</label
-          ><label class="worker-option" for="siti-device">计算设备<select id="siti-device" disabled>
+        <div class="file-status-row">
+          <p id="file-status" class="hint" role="status" aria-live="polite">尚未选择文件。</p>
+          <button id="inspect" type="button" class="secondary hidden">重新读取</button>
+        </div>
+        <fieldset class="analysis-targets">
+          <legend>分析目标</legend>
+          <div class="analysis-target-grid">
+            <div class="analysis-target">
+              <label class="target-toggle"><input id="frame-analysis" type="checkbox" checked /> 逐帧 / GOP 分析</label>
+              <p class="hint">查看显示帧、GOP 和编码帧头结构。</p>
+            </div>
+            <div class="analysis-target">
+              <label class="target-toggle"><input id="bitrate-enabled" type="checkbox" aria-controls="bitrate-options" /> 区间码率曲线</label>
+              <p class="hint">查看视频与各音轨的码率变化。</p>
+            </div>
+            <div class="analysis-target">
+              <label class="target-toggle"><input id="complexity" type="checkbox" aria-controls="siti-settings" /> SI/TI 内容复杂度</label>
+              <p class="hint">测量空间细节与帧间运动变化。</p>
+            </div>
+          </div>
+          <div id="bitrate-options" class="analysis-target-settings hidden">
+            <h3>区间码率设置</h3>
+            <label>码率计算窗口<select id="bitrate-window" disabled><option value="100">100 ms</option><option value="1000">1 秒</option></select></label>
+          </div>
+          <div id="siti-settings" class="analysis-target-settings hidden">
+            <h3>SI/TI 设置</h3>
+        <div class="row siti-options siti-device-row">
+          <label class="worker-option" for="siti-device">计算设备<select id="siti-device" disabled>
               <option value="cpu">CPU（默认）</option>
               <option value="gpu">GPU（OpenCL）</option>
             </select></label
-          ><label class="worker-option" for="siti-workers"
+          ><button id="siti-gpu-recheck" type="button" class="secondary" disabled>检测 GPU</button><label id="siti-workers-label" class="worker-option" for="siti-workers"
             >并行上限<select id="siti-workers" disabled>
               <option value="auto">自动（默认最多 4 路）</option>
               <option value="1">1 路（串行）</option>
@@ -124,18 +142,19 @@
             </select></label
           >
         </div>
+        <p id="siti-device-status" class="hint" role="status" aria-live="polite">CPU 计算；并行上限会按可用资源自动调整。</p>
         <div class="row siti-options">
           <label for="siti-scenes">场景范围<select id="siti-scenes" disabled>
             <option value="unconfirmed">边界未确认（全片参考）</option>
             <option value="single">已确认只有一个场景</option>
             <option value="confirmed">按已确认边界分场景</option>
           </select></label>
-          <label id="siti-scene-frames-label" class="hidden" for="siti-scene-frames">各场景起始帧<input id="siti-scene-frames" placeholder="例如 1, 101, 251" disabled /></label>
+          <label id="siti-scene-frames-label" class="hidden" for="siti-scene-frames">各场景起始帧（从 1 计数，须包含 1）<input id="siti-scene-frames" placeholder="例如 1, 101, 251" disabled /></label>
         </div>
-        <p class="hint">场景起始帧从 1 计数，须包含 1；填写全部已确认边界。各场景分别统计，场景首帧没有 TI；未确认时全片统计可能包含剪辑点影响。</p>
-        <details class="siti-options">
+        <p id="siti-scene-hint" class="hint">未确认场景边界，剪辑点可能影响 TI。</p>
+        <details id="siti-input-settings" class="siti-options">
           <summary>SI/TI 输入设置</summary>
-          <p class="hint">采用固定 siti-tools 0.6.0 的 PQ 计算流程及 255 输出尺度；扩展布局／位深单独验证。默认读取文件声明；声明缺失时，请核实后确认输入。浮点亮度和半透明输入缺少参考依据时不计算 SI/TI。</p>
+          <p class="hint">默认按文件声明解释输入；声明缺失或不准确时，请核实后在此确认。</p>
           <div class="row">
             <label>亮度范围<select id="siti-range" disabled><option value="auto">按文件声明</option><option value="tv">用户确认：有限范围</option><option value="pc">用户确认：全范围</option></select></label>
             <label>传递函数<select id="siti-transfer" disabled><option value="auto">按文件声明</option><option value="sdr">SDR（BT.1886）</option><option value="srgb">SDR（逆 sRGB）</option><option value="pq">PQ</option><option value="hlg">HLG</option></select></label>
@@ -147,14 +166,18 @@
             <label>HLG 显示黑位（cd/m²）<input id="siti-hlg-black" type="number" min="0" step="any" value="0.01" disabled /></label>
           </div>
         </details>
-        <p class="hint">
-          <span id="siti-device-status" aria-live="polite">GPU 按完整分辨率逐帧计算 SI/TI，视频仍由软件解码；设备执行失败时回退 CPU 并记录原因。</span>
-          <span class="hint">单轨最多 2,000,000 个显示帧；SI/TI 总像素最多 35,389,440（8192×4320）。实际执行仍需满足格式和资源条件。</span>
-          <button id="siti-gpu-recheck" type="button" class="secondary" disabled>重新检查 GPU</button>并行上限只影响 CPU SI/TI；自动或手动上限均会按
-          CPU、可用内存和帧数降低，异常时回退串行。直接加入队列时，未读取信息的文件自动选择第一个视频轨道；需选择其他轨道时请先读取信息。完整分析还包含全流
-          H.264 / HEVC / AV1
-          编码帧头解析，以及所有音轨的码率。长片可能需要较长时间。
-        </p>
+        <details class="siti-options">
+          <summary>计算方法与限制</summary>
+          <p class="hint">采用 siti-tools 0.6.0 的 PQ 计算流程及 255 输出尺度；扩展布局与位深单独验证。浮点亮度和半透明输入缺少参考依据时不计算 SI/TI。</p>
+          <p class="hint">GPU 用于 SI/TI 计算，视频仍由软件解码；不支持当前输入或设备执行失败时回退 CPU。并行上限仅影响 CPU，实际并发按 CPU、可用内存与帧数调整，异常时回退串行。</p>
+          <p class="hint">单轨最多 2,000,000 个显示帧；SI/TI 总像素最多 35,389,440（8192×4320）。实际执行仍需满足格式和资源条件。仅选 SI/TI 时仍会核验显示帧，不解析 GOP 或编码帧头。</p>
+        </details>
+          </div>
+        </fieldset>
+        <div class="analysis-submit">
+          <button id="enqueue-analyze" disabled>加入队列</button>
+          <p id="analysis-selection-hint" class="hint">任务保存当前参数，加入后在下方开始队列。</p>
+        </div>
       </section>
       <section class="panel hidden" id="compare-panel">
         <div class="panel-title">

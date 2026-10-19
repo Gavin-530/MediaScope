@@ -73,6 +73,7 @@ async function api(url, options = {}) {
   return url==='probe'||/^jobs\/[^/]+\/report$/.test(url)?reportFromPortable(d):d;
 }
 function showStartup(s) {
+  const wasReady = environmentReady;
   environmentReady = !s.startup || s.startup.state === "ready";
   desktopSession = !!s.desktop;
   const status = $("#startup-status");
@@ -84,6 +85,7 @@ function showStartup(s) {
     box.disabled = !environmentReady || !s.metrics.includes(box.value);
     if (environmentReady && box.disabled) box.checked = false;
   }
+  if (!wasReady && environmentReady && clean($("#file").value) && !infoPath) void readFileInfo();
 }
 window.addEventListener("beforeunload", (event) => {
   if (desktopSession && latestJobs.some((j) => ["queued", "running"].includes(j.status))) {
@@ -190,8 +192,8 @@ function message(
   syncTaskBrief();
 }
 function busy(value) {
-  $("#analyze").disabled = !environmentReady || !infoPath || !hasVideo;
-  for (const id of ["inspect", "enqueue-analyze", "compare", "enqueue-compare", "trial", "enqueue-trial"])
+  updateAnalysisSubmission();
+  for (const id of ["compare", "enqueue-compare", "trial", "enqueue-trial"])
     if ($("#" + id)) $("#" + id).disabled = !environmentReady;
   $("#import-report").disabled = value;
   $("#import-button").disabled = value;
@@ -231,7 +233,7 @@ const fileName = (file) =>
 function queueRow(j, position) {
   const names = {
       inspect: "读取信息",
-      analyze: "完整分析",
+      analyze: "文件分析",
       compare: "质量比较",
       trial: "片段实验",
     },
@@ -272,6 +274,7 @@ function renderResultList() {
       delete reportOwners[mode];
       $("#" + mode + "-details").textContent = "";
       $("#" + mode + "-summary").textContent = "";
+      delete $("#" + mode + "-result").dataset.reportOwner;
       viewRemoved = true;
     }
   }
@@ -530,6 +533,7 @@ document.querySelectorAll(".file-picker").forEach(
           input.value = result.file;
           input.dispatchEvent(new Event("input"));
           message("已选择文件：" + result.file);
+          if (button.dataset.target === "file") void readFileInfo();
         } else message("已取消选择文件");
       } catch (e) {
         message(
@@ -544,22 +548,54 @@ document.querySelectorAll(".file-picker").forEach(
       }
     }),
 );
+let fileInfoTimer, fileInfoController, fileInfoRevision = 0, fileInfoLoading = false;
+function updateAnalysisSubmission() {
+  const selected = ["frame-analysis", "bitrate-enabled", "complexity"].some(id => $("#" + id).checked);
+  $("#enqueue-analyze").disabled = !environmentReady || !infoPath || !hasVideo || fileInfoLoading || !selected;
+  $("#inspect").disabled = !environmentReady || fileInfoLoading;
+  $("#analysis-selection-hint").textContent = selected
+    ? "任务保存当前参数，加入后在下方开始队列。"
+    : "请至少选择一个分析目标。";
+}
 $("#file").oninput = () => {
+  clearTimeout(fileInfoTimer);
+  ++fileInfoRevision;
+  fileInfoController?.abort();
+  fileInfoLoading = false;
   infoPath = null;
-  $("#analyze").disabled = true;
+  hasVideo = false;
+  $("#stream").disabled = true;
+  $("#stream").innerHTML = '<option value="">选择文件后自动读取</option>';
+  $("#file-status").textContent = clean($("#file").value) ? "等待读取文件信息…" : "尚未选择文件。";
+  $("#file-status").classList.remove("error");
+  $("#inspect").classList.add("hidden");
+  updateAnalysisSubmission();
+  if (clean($("#file").value)) fileInfoTimer = setTimeout(() => void readFileInfo(), 500);
 };
+$("#file").onchange = () => void readFileInfo();
+$("#file").onkeydown = event => { if (event.key === "Enter") { event.preventDefault(); void readFileInfo(); } };
 const syncSitiWorkers = () => {
+  $("#bitrate-options").classList.toggle("hidden", !$("#bitrate-enabled").checked);
+  $("#bitrate-window").disabled = !$("#bitrate-enabled").checked;
+  $("#siti-settings").classList.toggle("hidden", !$("#complexity").checked);
   $("#siti-device").disabled = !$("#complexity").checked;
   $("#siti-workers").disabled = !$("#complexity").checked || $("#siti-device").value === "gpu";
+  $("#siti-workers-label").classList.toggle("hidden", $("#siti-device").value === "gpu");
   $("#siti-gpu-recheck").disabled = !$("#complexity").checked;
   $("#siti-scenes").disabled = !$("#complexity").checked;
   $("#siti-scene-frames").disabled = !$("#complexity").checked || $("#siti-scenes").value !== "confirmed";
   $("#siti-scene-frames-label").classList.toggle("hidden", $("#siti-scenes").value !== "confirmed");
+  $("#siti-scene-hint").textContent = $("#siti-scenes").value === "unconfirmed"
+    ? "未确认场景边界，剪辑点可能影响 TI。"
+    : $("#siti-scenes").value === "confirmed" ? "请填写全部已确认边界；各场景独立统计，不计算跨场景 TI。" : "场景首帧没有 TI，不纳入 TI 统计。";
   for(const id of ['siti-range','siti-transfer','siti-interlaced','siti-matrix'])$('#'+id).disabled=!$('#complexity').checked;
   const hlg=$('#siti-transfer').value==='hlg';$('#siti-hlg-model').classList.toggle('hidden',!hlg);
   for(const id of ['siti-hlg-white','siti-hlg-black'])$('#'+id).disabled=!$('#complexity').checked||!hlg;
+  updateAnalysisSubmission();
 };
 $('#complexity').onchange=syncSitiWorkers;
+$('#frame-analysis').onchange=syncSitiWorkers;
+$('#bitrate-enabled').onchange=syncSitiWorkers;
 $('#siti-scenes').onchange=syncSitiWorkers;
 $('#siti-transfer').onchange=syncSitiWorkers;
 function sitiSettingsInput(){
@@ -589,7 +625,7 @@ async function checkSitiGpu(force=false){
     const result = await (sitiGpuCheck ??= api("siti-gpu"));
     if(revision!==sitiGpuRevision)return;
     $("#siti-device-status").textContent = result.available
-      ? `GPU：${result.device}；数值自检通过。软件解码，GPU 双精度前处理与指标；设备执行失败时回退 CPU。`
+      ? `GPU 可用：${result.device} · 自检通过。${$("#siti-device").value === 'gpu' ? '软件解码，GPU 计算；执行失败时回退 CPU。' : '当前选择 CPU。'}`
       : `GPU 检查未通过：${result.reason}。可重新检查。`;
     if (!result.available) {
       sitiGpuCheck=null;
@@ -600,9 +636,11 @@ async function checkSitiGpu(force=false){
     if(revision!==sitiGpuRevision)return;
     sitiGpuCheck = null;
     $("#siti-device-status").textContent = `GPU 检查失败：${e.message}。运行时重新检查，失败回退 CPU。`;
+  } finally {
+    $("#siti-gpu-recheck").textContent = "重新检测 GPU";
   }
 }
-$("#siti-device").onchange=()=>{syncSitiWorkers();++sitiGpuRevision;if($("#siti-device").value==='gpu')void checkSitiGpu();};
+$("#siti-device").onchange=()=>{syncSitiWorkers();++sitiGpuRevision;if($("#siti-device").value==='gpu')void checkSitiGpu();else $("#siti-device-status").textContent="CPU 计算；并行上限会按可用资源自动调整。";};
 $("#siti-gpu-recheck").onclick=()=>void checkSitiGpu(true);
 function sitiAttemptsHTML(attempts){
   if(!Array.isArray(attempts)||!attempts.length)return '';
@@ -610,32 +648,44 @@ function sitiAttemptsHTML(attempts){
   return `<details><summary>SI/TI 计算尝试与耗时</summary>${table(['设备','耗时','已测帧','结果','失败阶段','原因'],attempts.map(a=>[a.device.toUpperCase(),formatElapsedSeconds(a.elapsedSeconds),a.framesComputed,a.outcome==='passed'?'完成':a.outcome==='cancelled'?'取消':'失败',phases[a.phase]??'',a.reason??'']))}</details>`;
 }
 syncSitiWorkers();
-$("#inspect").onclick = async () => {
+async function readFileInfo(force = false) {
+  clearTimeout(fileInfoTimer);
   const requested = clean($("#file").value);
+  if (!requested || !environmentReady || !force && (fileInfoLoading || infoPath === requested)) return;
+  fileInfoController?.abort();
+  fileInfoController = new AbortController();
+  const revision = ++fileInfoRevision;
+  fileInfoLoading = true;
+  $("#file-status").textContent = "正在读取基本信息和视频轨道…";
+  $("#file-status").classList.remove("error");
+  updateAnalysisSubmission();
   try {
-    message("正在读取文件信息…");
     const result = await api("probe", {
       method: "POST",
       body: JSON.stringify({ file: requested }),
+      signal: fileInfoController.signal,
     });
-    if (clean($("#file").value) === requested) $("#file").value = result.file;
-    render(result);
+    if (revision !== fileInfoRevision) return;
+    $("#file").value = result.file;
+    render(result, false);
+    $("#file-status").textContent = hasVideo ? "已读取基本信息，可选择视频轨道与分析目标。" : "已读取基本信息；该文件没有可分析的视频轨道。";
+    $("#inspect").classList.add("hidden");
   } catch (e) {
-    message(e.message, true);
+    if (revision !== fileInfoRevision) return;
+    infoPath = null;
+    hasVideo = false;
+    $("#stream").disabled = true;
+    $("#file-status").textContent = e.message;
+    $("#file-status").classList.add("error");
+    $("#inspect").classList.remove("hidden");
+  } finally {
+    if (revision === fileInfoRevision) {
+      fileInfoLoading = false;
+      updateAnalysisSubmission();
+    }
   }
-};
-$("#analyze").onclick = () => {
-  try{launch({
-    type: "analyze",
-    file: infoPath,
-    stream: Number($("#stream").value),
-    complexity: $("#complexity").checked,
-    bitrateWindowMs: Number($("#bitrate-window").value),
-    sitiWorkers: $("#siti-workers").value,
-    sitiDevice: $("#siti-device").value,
-    ...sitiSceneInput(),...sitiSettingsInput(),
-  })}catch(e){message(e.message,true)}
-};
+}
+$("#inspect").onclick = () => void readFileInfo(true);
 $("#compare").onclick = (event) => {
   const input = {
     type: "compare",
@@ -695,7 +745,9 @@ $("#enqueue-analyze").onclick = () => {
     stream:
       infoPath === clean($("#file").value) ? Number($("#stream").value) : null,
     complexity: $("#complexity").checked,
-    bitrateWindowMs: Number($("#bitrate-window").value),
+    frameAnalysis: $("#frame-analysis").checked,
+    bitrate: $("#bitrate-enabled").checked,
+    ...($("#bitrate-enabled").checked ? {bitrateWindowMs: Number($("#bitrate-window").value)} : {}),
     sitiWorkers: $("#siti-workers").value,
     sitiDevice: $("#siti-device").value,
     ...sitiSceneInput(),...sitiSettingsInput(),
@@ -996,6 +1048,7 @@ function render(r, activate = true, owner = null) {
     else renderMedia(r);
     reports[mode] = r;
     reportOwners[mode] = owner;
+    $("#" + mode + "-result").dataset.reportOwner = owner ?? "";
   } finally {
     viewCharts[mode] = charts;
     renderingMode = null;
@@ -1004,10 +1057,13 @@ function render(r, activate = true, owner = null) {
   }
 }
 function renderMedia(r) {
+  const frameEnabled = r.analysisTargets?.frames !== false,
+    bitrateEnabled = r.analysisTargets?.bitrate !== false;
   const displayControl = (curve, id) => curve ? `<div class="bitrate-display-control"><label for="${id}">显示窗口</label><select id="${id}">${curve.windowMs === 100 ? '<option value="100">100 ms</option>' : ''}<option value="1000">1 秒</option></select></div>` : '';
   const streams = r.raw.streams,
     videos = streams.filter((s) => s.codec_type === "video");
   if (!clean($("#file").value) || clean($("#file").value) === r.file) {
+    const selectedStream = infoPath === r.file ? $("#stream").value : null;
     infoPath = r.file;
     hasVideo = !!videos.length;
     $("#file").value = r.file;
@@ -1017,8 +1073,12 @@ function renderMedia(r) {
           `<option value="${s.index}">${s.index} · ${esc(s.codec_name)} · ${s.width} × ${s.height}</option>`,
       )
       .join("");
-    if (r.stream !== undefined) $("#stream").value = r.stream;
-    $("#analyze").disabled = !hasVideo;
+    if (videos.some(s => String(s.index) === selectedStream)) $("#stream").value = selectedStream;
+    else if (r.stream !== undefined) $("#stream").value = r.stream;
+    if (!hasVideo) $("#stream").innerHTML = '<option value="">没有视频轨道</option>';
+    $("#stream").disabled = !hasVideo;
+    $("#file-status").textContent = hasVideo ? "已读取基本信息，可选择视频轨道与分析目标。" : "该文件没有可分析的视频轨道。";
+    $("#file-status").classList.remove("error");
   }
   if (!$("#trial-file").value) {
     $("#trial-file").value = r.file;
@@ -1026,7 +1086,8 @@ function renderMedia(r) {
   }
   cards([]);
   let html = basicInfoHTML(r);
-  if (r.frames) {
+  if (r.type === "analyze" || r.frames) {
+    if (r.frames && frameEnabled) {
     const gops = r.coding?.gops || legacyGops(r.frames);
     html += `<div class="cards">${cardsHTML([
       ["显示帧数", r.frames.length],
@@ -1038,6 +1099,7 @@ function renderMedia(r) {
       "帧结构与 GOP",
       `<p class="hint">显示顺序视图。I / P / B 是预测类型；IDR / CRA / BLA 是码流访问类型，二者不混用。GOP 以随机访问/关键帧区间呈现，不据此猜测开放或闭合。</p><div class="row"><label for="frame-axis">大小图横轴</label><select id="frame-axis"><option value="time">呈现时间（s）</option><option value="frame">显示帧序号</option></select><button id="frame-full" class="secondary">查看全片</button></div><p class="hint" id="frame-axis-note"></p><div id="gop-overview"></div><div class="pager"><button id="gop-prev" class="secondary">上一 GOP</button><label>GOP #<input id="gop-index" type="number" min="0" max="${gops.length - 1}" value="0"></label><button id="gop-next" class="secondary">下一 GOP</button><span id="gop-info"></span></div><div id="frame-plot"></div><div id="frame-detail" class="frame-detail"></div><details><summary>逐帧列表 / CSV</summary><div class="pager"><button id="prev" class="secondary">上一页</button><span id="page"></span><button id="next" class="secondary">下一页</button><button id="csv" class="secondary">导出帧 CSV</button></div><div id="frames"></div></details>`,
     );
+    }
     if (r.content?.available) {
       if(r.content.execution?.gpuFallbackReason){sitiGpuCheck=null;$("#siti-device-status").textContent='该任务 GPU 执行失败，实际使用 CPU；可重新检查 GPU。';}
       const e = r.content.execution,
@@ -1062,7 +1124,8 @@ function renderMedia(r) {
         `<p>新编码帧 ${r.coding.counts.encoded} · 隐藏帧 ${r.coding.counts.hidden} · SHOW_EXISTING ${r.coding.counts.showExisting} · 显示事件 ${r.coding.counts.shown}</p><p class="hint">按码流编码顺序列出所有帧头事件，包含 KEY / INTER / INTRA_ONLY / SWITCH、隐藏帧和 SHOW_EXISTING。H=隐藏、S=显示已有帧、V=新帧直接显示。点击色带查看结构字段、刷新掩码与参考槽。OBU 负载字节不一定等于完整图像大小。</p><div id="av1-plot"></div><label>编码事件 #<input id="av1-index" type="number" min="0" max="${r.coding.events.length - 1}" value="0"></label><div id="av1-detail"></div>${raw(r.coding.sequences, "AV1 序列头（去重）")}`,
       );
     const audio = (r.tracks || []).filter((t) => t.type === "audio");
-    if (audio.length) html += section("音轨包大小时间分布", `<details id="audio-packets-optional"><summary>展开音轨包大小时间分布</summary>${audio.map(audioPacketHTML).join("")}</details>`);
+    if (audio.length && frameEnabled) html += section("音轨包大小时间分布", `<details id="audio-packets-optional"><summary>展开音轨包大小时间分布</summary>${audio.map(audioPacketHTML).join("")}</details>`);
+    if (r.packets) {
     let bitrateHTML = `<h4>${r.packets.bitrateCurve ? "视频包负载码率（PTS 归属）" : "视频码率 · 1 秒窗口（旧报告）"}</h4>${displayControl(r.packets.bitrateCurve, "bitrate-display")}${r.packets.bitrateCurve ? `<p class="hint">计算窗口 ${r.packets.bitrateCurve.windowMs} ms；整包按起始 PTS 归属，跨窗口包不拆分，首尾使用实际时长。边界归属可使恒定码率产生波动，短尾窗口偏差可能更大；不代表采样码率或传输瞬时码率。${r.packets.bitrateCurve.status === "ok" ? "" : esc(r.packets.bitrateCurve.reasons.join("；"))}</p>` : ""}<div id="bitrate"></div><p class="hint">缺少时间戳 ${r.packets.missing} 包。放大不改变统计窗口。</p>`;
     if (audio.length)
       bitrateHTML += audio
@@ -1071,7 +1134,8 @@ function renderMedia(r) {
               `<h4>音轨 #${t.index} · ${esc(t.codec)} · 窗口码率</h4>${displayControl(t.bitrateCurve, `audio-${t.index}-display`)}${t.bitrateCurve ? '<p class="hint">整包按起始 PTS 归属，跨窗口包不拆分；恒定 PCM 也可能波动，短尾窗口偏差可能更大。曲线不代表采样码率或传输瞬时码率。</p>' : ''}<div id="audio-${t.index}"></div>${t.bitrateCurve?.status === "unavailable" ? `<p class="hint">不可计算：${esc(t.bitrateCurve.reasons.join("；"))}</p>` : ""}`,
           )
           .join("");
-    html += section("音视频码率统计（可选曲线）", table(["轨道", "全程平均（原有独立口径）"], [[`视频 #${r.stream}`, rate(r.packets.averageMbps)], ...audio.map(t => [`音轨 #${t.index} · ${t.codec}`, t.averageMbps == null ? "不可计算" : rate(t.averageMbps)])]) + `<details id="bitrate-optional"><summary>展开音视频窗口码率曲线</summary>${bitrateHTML}</details>`);
+    html += section("音视频码率统计（可选曲线）", table(["轨道", "全程平均（原有独立口径）"], [[`视频 #${r.stream}`, rate(r.packets.averageMbps)], ...audio.map(t => [`音轨 #${t.index} · ${t.codec}`, t.averageMbps == null ? "不可计算" : rate(t.averageMbps)])]) + (bitrateEnabled ? `<details id="bitrate-optional"><summary>展开音视频窗口码率曲线</summary>${bitrateHTML}</details>` : '<p class="hint">本次未选择区间码率曲线。</p>'));
+    }
     if (r.tracks)
       html += section(
         "体积构成",
@@ -1092,12 +1156,14 @@ function renderMedia(r) {
   }
   $("#details").innerHTML = html;
   initBasicInfo($("#details"), r);
-  if (r.frames) {
-    if (r.frames.length) initFrames(r);
-    else $("#gop-overview").textContent = "报告中没有显示帧";
-    initAudioPackets(r);
+  if (r.type === "analyze" || r.frames) {
+    if (r.frames && frameEnabled) {
+      if (r.frames.length) initFrames(r);
+      else $("#gop-overview").textContent = "报告中没有显示帧";
+    }
+    if (frameEnabled) initAudioPackets(r);
     const bitratePlots = new Map();
-    for (const [id, t] of [["bitrate", r.packets], ...(r.tracks || []).filter(t => t.type === "audio").map(t => ["audio-" + t.index, t])]) {
+    for (const [id, t] of bitrateEnabled && r.packets ? [["bitrate", r.packets], ...(r.tracks || []).filter(t => t.type === "audio").map(t => ["audio-" + t.index, t])] : []) {
       const control = $("#" + (id === "bitrate" ? "bitrate-display" : id + "-display"));
       const drawBitrate = () => {
         const windowMs = Number(control?.value ?? 1000);

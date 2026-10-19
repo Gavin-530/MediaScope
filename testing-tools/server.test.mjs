@@ -31,6 +31,56 @@ test('[analysis-limits] SI/TI API accepts 2048 seven-digit scene starts and reje
   assert.equal((await request('jobs','POST',{...input,sitiSceneStarts:[0,2000000]})).status,400);
 });
 async function removed(id){for(let i=0;i<200;i++){if((await request('jobs/'+id)).status===404)return;await delay(100)}throw Error('Cancellation did not remove the job')}
+test('[analysis-targets] all seven target combinations run only required stages and round-trip their reports and plans',async()=>{
+  for(let mask=1;mask<8;mask++){
+    const frameAnalysis=!!(mask&1),bitrate=!!(mask&2),complexity=!!(mask&4);
+    const input={type:'analyze',file:sitiSource,frameAnalysis,bitrate,complexity,enqueue:true,...(bitrate?{bitrateWindowMs:1000}:{})};
+    const response=await request('jobs','POST',input);assert.equal(response.status,202);
+    const job=await response.json();assert.equal((await(await request('jobs/'+job.id)).json()).status,'queued');
+    const plans=await(await request('plans')).json();
+    const plan=plans.plans.find(p=>p.entryId===job.id).input;
+    assert.equal(plan.frameAnalysis,frameAnalysis);assert.equal(plan.bitrate,bitrate);assert.equal(plan.complexity,complexity);
+    // Import the exported plan before execution to exercise the same public validation.
+    await request('jobs/'+job.id,'DELETE');
+    const imported=await request('plans/import','POST',{mode:'append',start:false,plans:[{entryId:'combination-'+mask,input:plan}]});assert.equal(imported.status,200);
+    const state=await(await request('status')).json(),id=state.jobs.find(j=>j.status==='queued').id;
+    await request('queue','POST',{action:'start'});
+    const done=await finished(id);assert.equal(done.status,'done',done.message);
+    const report=await(await request('jobs/'+id+'/report')).json();
+    assert.deepEqual(report.analysisTargets,{frames:frameAnalysis,bitrate,complexity});
+    assert.equal(Array.isArray(report.frames),frameAnalysis||complexity);
+    assert.equal(!!report.coding,frameAnalysis);assert.equal(!!report.tracks,frameAnalysis||bitrate);
+    assert.equal(!!report.content,complexity);
+    if(complexity)assert.equal(report.content.available,true,report.content.reason);
+    if(report.tracks){
+      for(const track of report.tracks){
+        assert.equal(!!track.bitrateCurve,bitrate&&['video','audio'].includes(track.type));
+        if(!bitrate)assert.deepEqual(track.bins,[]);
+      }
+    }
+    const stages=report.timing.stages.map(s=>s.name);
+    assert.equal(stages.includes('完整扫描视频帧'),frameAnalysis||complexity);
+    assert.equal(stages.includes('解析全流编码帧头 / NAL / OBU'),frameAnalysis);
+    assert.equal(stages.includes('统计全部轨道的压缩包'),frameAnalysis||bitrate);
+    assert.equal(stages.includes('测量 SI/TI 内容复杂度'),complexity);
+    assert.deepEqual(parseReport(JSON.stringify(report)),report);
+    const incomplete=structuredClone(report);
+    if(report.frames)delete incomplete.frames;else delete incomplete.tracks;
+    assert.throws(()=>parseReport(JSON.stringify(incomplete)));
+    if(bitrate){
+      const missingCurve=structuredClone(report);delete missingCurve.tracks.find(t=>t.type==='video').bitrateCurve;
+      assert.throws(()=>parseReport(JSON.stringify(missingCurve)),/bitrateCurve/);
+    }
+    const bad=structuredClone(report);delete bad.analysisTargets;
+    if(!report.frames||!report.packets)assert.throws(()=>parseReport(JSON.stringify(bad)));
+    await request('queue','POST',{action:'pause'});
+  }
+  for(const values of [{frameAnalysis:false,bitrate:false,complexity:false},{frameAnalysis:'yes'},{bitrate:1}]){
+    assert.equal((await request('jobs','POST',{type:'analyze',file:source,...values,enqueue:true})).status,400);
+    assert.equal((await request('plans/import','POST',{mode:'append',start:false,plans:[{entryId:'invalid',input:{type:'analyze',file:source,...values}}]})).status,400);
+  }
+});
+
 test('API protects local data and streams a reproducible completed report',async()=>{
  assert.equal((await fetch(base+'/api/status')).status,403);
  assert.equal((await fetch(base+'/api/status',{headers:{'x-mediascope-token':token,origin:'https://external.invalid'}})).status,403);

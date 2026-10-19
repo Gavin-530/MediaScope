@@ -69,9 +69,17 @@ async function loadStartup(){
 if(!process.env.MEDIASCOPE_STARTUP_RESULT)await loadStartup();
 function send(res,status,data){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data))}
 async function body(req,limit=16384){const chunks=[];let size=0;for await(const b of req){size+=b.length;if(size>limit)throw Error('请求过大');chunks.push(b)}return JSON.parse(Buffer.concat(chunks).toString('utf8')||'{}')}
+function analysisTargets(input){
+  for(const key of ['frameAnalysis','bitrate','complexity'])if(input[key]!==undefined&&typeof input[key]!=='boolean')throw Error('分析目标选项无效');
+  const targets={frames:input.frameAnalysis!==false,bitrate:input.bitrate!==false,complexity:input.complexity===true};
+  if(!Object.values(targets).some(Boolean))throw Error('请至少选择一个分析目标');
+  if(input.bitrateWindowMs!==undefined&&![100,1000].includes(input.bitrateWindowMs))throw Error('码率窗口必须为 100 ms 或 1 秒');
+  return targets;
+}
 function normalizeInputPaths(input){
   if(input.type==='inspect'||input.type==='analyze'||input.type==='trial')input.file=normalizeMediaPath(input.file);
   if(input.type==='analyze'){
+    analysisTargets(input);
     validateSitiSceneStarts(input.sitiSceneStarts);
     validateSitiSettings(input.sitiSettings);
     input.sitiDevice??='cpu';
@@ -85,7 +93,7 @@ function normalizeInputPaths(input){
 function portableInput(input){const copy=structuredClone(input);delete copy.enqueue;return copy}
 function validatePlanInput(value){
  if(!value||typeof value!=='object'||Array.isArray(value)||!['inspect','analyze','compare','trial'].includes(value.type))throw Error('计划任务类型无效');
- const keys={inspect:['type','file'],analyze:['type','file','stream','complexity','sitiWorkers','sitiDevice','sitiSceneStarts','sitiSettings','bitrateWindowMs'],compare:['type','reference','candidate','refStream','candidateStream','comparisonMode','timingMode','metrics','vmafModel','confirm','timingConfirmed','playbackConfirmed','chromaConfirmed','chromaAssumptions'],trial:['type','file','stream','start','duration','encoder','depthMode','presets','cpuUsed','crfs','metrics','vmafModel','keepFiles','exportDirectory']}[value.type];
+ const keys={inspect:['type','file'],analyze:['type','file','stream','frameAnalysis','bitrate','complexity','sitiWorkers','sitiDevice','sitiSceneStarts','sitiSettings','bitrateWindowMs'],compare:['type','reference','candidate','refStream','candidateStream','comparisonMode','timingMode','metrics','vmafModel','confirm','timingConfirmed','playbackConfirmed','chromaConfirmed','chromaAssumptions'],trial:['type','file','stream','start','duration','encoder','depthMode','presets','cpuUsed','crfs','metrics','vmafModel','keepFiles','exportDirectory']}[value.type];
  if(Object.keys(value).some(key=>!keys.includes(key)))throw Error('计划任务包含未知参数');
  const input=structuredClone(value);normalizeInputPaths(input);
  const index=v=>Number.isSafeInteger(v)&&v>=0;
@@ -128,7 +136,8 @@ async function selectMediaFile(folder=false){
 function createJob(input){
   if(closing||dataCleaning)throw Error('软件正在退出或清理本地数据，无法提交新任务');
   const queuedAt=new Date().toISOString();
-  const description=input.type==='analyze'?`视频轨道 ${input.stream==null?'自动':`#${input.stream}`}${input.complexity?' · SI/TI':''}`
+  const targets=input.type==='analyze'?analysisTargets(input):null;
+  const description=input.type==='analyze'?`视频轨道 ${input.stream==null?'自动':`#${input.stream}`} · ${[targets.frames?'逐帧 / GOP':null,targets.bitrate?'区间码率':null,targets.complexity?'SI/TI':null].filter(Boolean).join(' · ')}`
     :input.type==='compare'?`轨道 #${input.refStream} → #${input.candidateStream} · ${(input.metrics||[]).join(' / ').toUpperCase()}`
     :input.type==='trial'?`${input.start??0}–${Number(input.start??0)+Number(input.duration??0)} 秒 · ${input.encoder} · CRF ${(input.crfs||[]).join(', ')}`
     :'容器与轨道信息';
@@ -175,29 +184,38 @@ async function execute(job,input){
     if(job.type==='inspect'){
       result=await stage('读取容器与轨道',c=>probe(input.file,c),{phaseIndex:1,phaseCount:1});result.metadata=metadataSummary(result);
     }else if(job.type==='analyze'){
+      const targets=analysisTargets(input),needsFrames=targets.frames||targets.complexity,needsPackets=targets.frames||targets.bitrate;
       const bitrateWindowMs=input.bitrateWindowMs??100;
-      if(![100,1000].includes(bitrateWindowMs))throw Error('码率窗口必须为 100 ms 或 1 秒');
-      const phaseCount=input.complexity===true?4:3;
+      const phaseCount=1+Number(needsFrames)+Number(needsPackets)+Number(targets.complexity);let phaseIndex=1;
       const info=await stage('读取文件',c=>probe(input.file,c),{phaseIndex:1,phaseCount});
       if(input.stream==null)input.stream=info.raw.streams.find(s=>s.codec_type==='video')?.index;
       const stream=video(info,input.stream);
       let frames,tracks,coding;
-      frames=await stage('完整扫描视频帧',c=>scan(input.file,input.stream,c),{phaseIndex:2,phaseCount});
-      if(process.env.MEDIASCOPE_SEQUENTIAL_ANALYSIS==='1'){
-        tracks=await stage('统计全部轨道的压缩包',c=>allPackets(input.file,info.raw.streams,{...c,bitrateWindowMs,audioPacketDistribution:true}),{phaseIndex:3,phaseCount,subtask:'packets'});
-        coding=await stage('解析全流编码帧头 / NAL / OBU',c=>structure(input.file,stream,frames,c),{phaseIndex:3,phaseCount,subtask:'headers'});
-      }else{
-        const group='包统计与码流头并行读取';publish({stage:group,detail:'两项并行执行',phaseIndex:3,phaseCount});
-        const completed=await Promise.allSettled([
-          stage('统计全部轨道的压缩包',c=>allPackets(input.file,info.raw.streams,{...c,bitrateWindowMs,audioPacketDistribution:true}),{phaseIndex:3,phaseCount,concurrentGroup:group,subtask:'packets'}),
-          stage('解析全流编码帧头 / NAL / OBU',c=>traceStructure(input.file,stream,c),{phaseIndex:3,phaseCount,concurrentGroup:group,subtask:'headers'})
-        ]);
-        const failed=completed.find(x=>x.status==='rejected');if(failed)throw failed.reason;
-        tracks=completed[0].value;coding=mapStructure(completed[1].value,stream,frames);
+      if(needsFrames)frames=await stage('完整扫描视频帧',c=>scan(input.file,input.stream,c),{phaseIndex:++phaseIndex,phaseCount});
+      if(needsPackets){
+        ++phaseIndex;
+        const readPackets=c=>allPackets(input.file,info.raw.streams,{...c,bitrateEnabled:targets.bitrate,...(targets.bitrate?{bitrateWindowMs}:{}),audioPacketDistribution:targets.frames});
+        if(!targets.frames||process.env.MEDIASCOPE_SEQUENTIAL_ANALYSIS==='1'){
+          tracks=await stage('统计全部轨道的压缩包',readPackets,{phaseIndex,phaseCount,subtask:'packets'});
+          if(targets.frames)coding=await stage('解析全流编码帧头 / NAL / OBU',c=>structure(input.file,stream,frames,c),{phaseIndex,phaseCount,subtask:'headers'});
+        }else{
+          const group='包统计与码流头并行读取';publish({stage:group,detail:'两项并行执行',phaseIndex,phaseCount});
+          const completed=await Promise.allSettled([
+            stage('统计全部轨道的压缩包',readPackets,{phaseIndex,phaseCount,concurrentGroup:group,subtask:'packets'}),
+            stage('解析全流编码帧头 / NAL / OBU',c=>traceStructure(input.file,stream,c),{phaseIndex,phaseCount,concurrentGroup:group,subtask:'headers'})
+          ]);
+          const failed=completed.find(x=>x.status==='rejected');if(failed)throw failed.reason;
+          tracks=completed[0].value;coding=mapStructure(completed[1].value,stream,frames);
+        }
       }
-      const packetStats=tracks.find(t=>t.index===stream.index);
-      let content=null;if(input.complexity===true)content=await stage('测量 SI/TI 内容复杂度',c=>complexity(input.file,stream,c,frames),{phaseIndex:4,phaseCount});
-      result={...info,metadata:metadataSummary(info),stream:Number(input.stream),summary:summarize(frames),frames,packets:packetStats,tracks,coding,content,overheadBytes:info.size-tracks.reduce((s,t)=>s+t.bytes,0),warnings:['码率曲线按绝对 PTS 的所选窗口统计包负载，首尾除以实际区间时长；缺失 PTS 或持续时间时明确不可计算。100 ms 可聚合显示为 1 秒。全程平均值沿用原有独立口径。','GOP 视图按显示顺序的随机访问/关键帧边界分组；不将 CRA 自动标为闭合 GOP，也不声称已验证所有跨组引用。','帧大小取解码器报告的 pkt_size；AV1 多编码帧可能共用一个包，不重复相加估计编码帧体积。',coding.status==='resource-limited'?'详细码流头解析达到独立资源上限，未完成全流头解析；显示帧、码率及 SI/TI 按各自状态解释。': '附加数据来自轨道报告，本次未执行帧级附加数据读取；码流头解析范围见 coding，不等同于完整解释所有私有 SEI。',...coding.warnings]};
+      let content=null;if(targets.complexity)content=await stage('测量 SI/TI 内容复杂度',c=>complexity(input.file,stream,c,frames),{phaseIndex:++phaseIndex,phaseCount});
+      result={...info,metadata:metadataSummary(info),stream:Number(input.stream),analysisTargets:targets,
+        ...(frames?{summary:summarize(frames),frames}:{}),
+        ...(tracks?{packets:tracks.find(t=>t.index===stream.index),tracks,overheadBytes:info.size-tracks.reduce((s,t)=>s+t.bytes,0)}:{}),
+        ...(coding?{coding}:{}),content,warnings:[
+          ...(targets.bitrate?['码率曲线按绝对 PTS 的所选窗口统计包负载，首尾除以实际区间时长；缺失 PTS 或持续时间时明确不可计算。100 ms 可聚合显示为 1 秒。全程平均值沿用原有独立口径。']:[]),
+          ...(targets.frames?['GOP 视图按显示顺序的随机访问/关键帧边界分组；不将 CRA 自动标为闭合 GOP，也不声称已验证所有跨组引用。','帧大小取解码器报告的 pkt_size；AV1 多编码帧可能共用一个包，不重复相加估计编码帧体积。',coding.status==='resource-limited'?'详细码流头解析达到独立资源上限，未完成全流头解析；显示帧、码率及 SI/TI 按各自状态解释。':'附加数据来自轨道报告，本次未执行帧级附加数据读取；码流头解析范围见 coding，不等同于完整解释所有私有 SEI。',...coding.warnings]:[])
+        ]};
     }else if(job.type==='compare'){
       if(input.confirm!==true)throw Error('请确认两个视频包含同一剪辑与画面顺序');
       if(input.chromaAssumptions!==undefined&&input.chromaConfirmed!==true)throw Error('请明确确认未声明视频的色度位置；结果将依赖此假设');

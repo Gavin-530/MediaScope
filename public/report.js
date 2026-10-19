@@ -144,7 +144,23 @@ export function validateReport(r) {
       objects(r.metadata.items, "metadata.items");
       r.metadata.items.forEach((x) => arr(x.sources, "metadata.items.sources"));
     }
-    if (r.type === "analyze" || r.frames !== undefined) {
+    if (r.analysisTargets !== undefined) {
+      obj(r.analysisTargets, 'analysisTargets');
+      const targets = r.analysisTargets;
+      if(r.type!=='analyze'||Object.keys(targets).length!==3||!['frames','bitrate','complexity'].every(k=>typeof targets[k]==='boolean')||!Object.values(targets).some(Boolean))fail('analysisTargets');
+      const needsFrames=targets.frames||targets.complexity,needsPackets=targets.frames||targets.bitrate;
+      if(needsFrames!==Array.isArray(r.frames)||!needsFrames&&r.summary!==undefined)fail('analysisTargets / frames / summary');
+      if(targets.frames)obj(r.coding,'coding');
+      else if(r.coding!==undefined)fail('analysisTargets / coding');
+      if(targets.complexity)obj(r.content,'content');
+      else if(r.content!==null&&r.content!==undefined)fail('analysisTargets / content');
+      if(needsPackets!==Array.isArray(r.tracks)||!needsPackets&&r.packets!==undefined)fail('analysisTargets / tracks / packets');
+      if(r.tracks){
+        if(!targets.bitrate&&r.tracks.some(t=>t.bitrateCurve!==undefined||t.bins?.length))fail('analysisTargets.bitrate');
+        if(targets.bitrate&&r.tracks.some(t=>['video','audio'].includes(t.type)&&!t.bitrateCurve))fail('analysisTargets / bitrateCurve');
+      }
+    }
+    if ((r.type === "analyze" && !r.analysisTargets) || r.frames !== undefined) {
       objects(r.frames, "frames");
       if(!r.frames.length||r.frames.length>MAX_ANALYSIS_FRAMES)fail('frames.length');
       const required=(value,keys,p)=>{for(const key of keys)if(!Object.hasOwn(value,key))fail(p+'.'+key);};
@@ -153,23 +169,8 @@ export function validateReport(r) {
         required(f,['pts','t','duration','bytes','type','key','interlaced'],'frames');
         if(!(f.pts===null||typeof f.pts==='string')||!['t','duration','bytes'].every(k=>nullableNumber(f[k]))||typeof f.type!=='string'||!f.type.length||typeof f.key!=='boolean'||typeof f.interlaced!=='boolean')fail('frames.values');
       }
-      obj(r.packets, "packets");
-      objects(r.packets.bins, "packets.bins");
-      if (r.packets.bitrateCurve) validateBitrateCurve(r.packets.bitrateCurve);
       obj(r.summary, "summary");
       if(r.summary.count!==r.frames.length)fail('summary.count');
-      if (r.tracks) {
-        objects(r.tracks, "tracks");
-        r.tracks.forEach((x) => {
-          index(x.index, "tracks.index");
-          objects(x.bins, "tracks.bins");
-          if (x.bitrateCurve) validateBitrateCurve(x.bitrateCurve);
-          if (x.packetDistribution !== undefined) {
-            if (x.type !== 'audio') fail('tracks.packetDistribution.type');
-            validateAudioPacketDistribution(x.packetDistribution);
-          }
-        });
-      }
       if (r.content?.available) {
         try{validateSitiAttempts(r.content.execution,r.frames.length)}catch{fail('content.execution.attempts')}
         try{validateSitiConfiguration(r.content.execution,r.raw.streams.find(s=>s.index===r.stream))}catch{fail('content.execution.configuration')}
@@ -231,6 +232,23 @@ export function validateReport(r) {
           if(typeof e.kind!=='string'||typeof e.hidden!=='boolean'||typeof e.showExisting!=='boolean')fail('coding.events.values');
         });
       }
+    }
+    if((r.type==='analyze'||r.frames!==undefined)&&(!r.analysisTargets||r.analysisTargets.frames||r.analysisTargets.bitrate)) {
+      obj(r.packets, 'packets');
+      objects(r.packets.bins, 'packets.bins');
+      if(r.packets.bitrateCurve)validateBitrateCurve(r.packets.bitrateCurve);
+    }
+    if(r.tracks!==undefined){
+      objects(r.tracks, 'tracks');
+      r.tracks.forEach(x=>{
+        index(x.index, 'tracks.index');
+        objects(x.bins, 'tracks.bins');
+        if(x.bitrateCurve)validateBitrateCurve(x.bitrateCurve);
+        if(x.packetDistribution!==undefined){
+          if(x.type!=='audio')fail('tracks.packetDistribution.type');
+          validateAudioPacketDistribution(x.packetDistribution);
+        }
+      });
     }
   } else if (r.type === "compare") {
     file(r.reference, "reference");

@@ -27,7 +27,8 @@ export async function allPackets(file,streams,ctx){
     const bytes=Number(o.size);r.bytes+=bytes;r.count++;processed++;
     if(processed===1||processed%500===0)ctx.update?.({detail:`已统计 ${processed.toLocaleString()} 个压缩包`,completed:processed,total:null,unit:'个压缩包'});
     let t=num(o.pts_time);if(t===null){t=num(o.dts_time);r.fallbackDts++}if(!Number.isFinite(t)){r.missing++;return}
-    const second=Math.floor(t);r.map.set(second,(r.map.get(second)||0)+bytes);r.start=r.start===null?t:Math.min(t,r.start);r.end=Math.max(r.end??t,t+(num(o.duration_time)||0));
+    if(ctx.bitrateEnabled!==false){const second=Math.floor(t);r.map.set(second,(r.map.get(second)||0)+bytes)}
+    r.start=r.start===null?t:Math.min(t,r.start);r.end=Math.max(r.end??t,t+(num(o.duration_time)||0));
   });
   ctx.update?.({detail:`已统计 ${processed.toLocaleString()} 个压缩包`,completed:processed,total:processed,unit:'个压缩包'});
   return [...tracks.values()].map(({map,...r})=>{const keys=[...map.keys()].sort((a,b)=>a-b);if(keys.length&&keys.at(-1)-keys[0]>1000000)throw Error('时间戳跨度异常，无法生成码率图');const bins=[];if(keys.length)for(let s=keys[0];s<=keys.at(-1);s++)bins.push({second:s,mbps:(map.get(s)||0)*8/1e6});return {...r,bins,...(curves?.has(r.index)?{bitrateCurve:curves.get(r.index).finish()}:{}),...(audioPackets?.has(r.index)?{packetDistribution:audioPackets.get(r.index).finish()}:{}),averageMbps:r.end>r.start?r.bytes*8/(r.end-r.start)/1e6:null,windowStats:distribution(bins.map(b=>b.mbps))}});
@@ -158,7 +159,7 @@ export async function complexity(file,stream,ctx={},frames=null){
       'SI：Sobel 梯度幅值的总体标准差，剔除一像素边界；TI：相邻帧差的总体标准差。场景首帧 TI 为 null，不纳入统计；逐帧值保留未舍入结果。',
       ctx.sitiSceneStarts?'按用户确认的场景分别统计，不计算跨场景 TI。':'场景边界未确认，全片结果可能含剪辑点 TI；分场景比较须确认边界。',
       ...(execution.configuration.input.deinterlace?['已选择 BWDIF 每帧输出一帧；按输出逐行画面计算，并核验帧数和时间戳。']:[]),
-      'CPU 串行、并行和 GPU 共用输入解释及固定上游计算模型。GPU 使用双精度前处理与指标；CPU 并行共用一次软件解码并传递相邻原始帧。验证保留未修改上游函数及发布文件结果；这不等于 ITU 官方认证。比较须保持相同显示假设、分辨率、帧率、场景及前处理条件。'
+      'CPU 串行、并行和 GPU 共用输入解释及固定上游计算模型。GPU 指标采用 FP32，HLG RGB 关键前处理保留 FP64；CPU 并行共用一次软件解码并传递相邻原始帧。验证保留未修改上游函数及发布文件结果；这不等于 ITU 官方认证。比较须保持相同显示假设、分辨率、帧率、场景及前处理条件。'
     ]};
   }catch(e){if(ctx.signal?.aborted)throw e;return {available:false,reason:e.message,...(e.sitiPhase?{errorPhase:e.sitiPhase}:{}),...(e.sitiAttempts?{attempts:e.sitiAttempts}:{})}}
 }

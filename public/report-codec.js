@@ -92,7 +92,7 @@ function transformReport(report,encode){
       return t;
     });
   }
-  if(r.type==='analyze'){
+  if(r.type==='analyze' && (r.analysisTargets?.frames!==false || r.analysisTargets?.bitrate!==false)){
     const selected=report.tracks?.filter(t=>t.index===r.stream);
     if(selected?.length!==1)throw Error('0.4 所选视频轨道索引无效');
     if(encode){

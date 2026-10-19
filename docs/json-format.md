@@ -12,6 +12,8 @@
 
 结果保留原有生成时间、`producer.applicationVersion`、素材与轨道信息、工具版本、命令及耗时、指标配置、逐帧与逐包数据、汇总、原始证据、警告、不可用/失败/资源受限状态。重新导出只更新外层生成信息，不覆盖每份结果的来源。`type` 为 `inspect`、`analyze`、`compare` 或 `trial`；前两者归入文件分析功能。
 
+按目标运行的 `analyze` 报告增加 `analysisTargets: {frames, bitrate, complexity}`，三项均为布尔值且至少一项为真。`frames` 或 `complexity` 开启时保存核验显示帧及汇总；`frames` 开启时保存编码结构。`frames` 或 `bitrate` 开启时保存轨道包统计及所选轨道引用；仅选 SI/TI 时不保存这些包字段。关闭 `bitrate` 时各轨道 `bins` 为空且不保存 `bitrateCurve`；开启时遵循原窗口协议。未选项目不以空图或失败结果代替。无 `analysisTargets` 的旧报告继续要求原完整分析字段。计划使用 `frameAnalysis`、`bitrate` 与原有 `complexity` 开关；前两项缺省时按原完整分析兼容，界面新建计划会显式保存选择。
+
 `timing` 为所含结果的计算耗时汇总，读取时核对一致性。各指标自己的配置版本、实施解释、模型和工具版本继续保留，不等于重复的文件版本。原始日志字符串逐字保留；原始 JSON 对象的属性顺序和排版不承诺与工具输出文本相同。
 
 ## 明细表

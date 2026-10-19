@@ -1,7 +1,7 @@
 import {readFixture} from './helpers/fixtures.mjs';
 import {test,before,after} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdir,readFile,writeFile} from 'node:fs/promises';
+import {mkdir,mkdtemp,readFile,writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {chromium} from 'playwright-core';
 import {makeMedia} from './helpers/real-media.mjs';
@@ -28,8 +28,8 @@ after(async()=>{await browser?.close()});
 
 function scenario(name,body){
   test(name,{timeout:90000},async t=>{
-    const dir=path.join(root,String(++sequence).padStart(2,'0'));
-    await mkdir(dir,{recursive:true});
+    await mkdir(root,{recursive:true});
+    const dir=await mkdtemp(path.join(root,String(++sequence).padStart(2,'0')+'-'));
     let app,context,page;const errors=[];
     try{
       app=await startServer(path.join(dir,'reports'));
@@ -56,19 +56,24 @@ async function importReport(page,file){
   await page.waitForFunction(()=>document.querySelector('#import-report').value==='');
 }
 async function preview(page,file=media.source){
-  await page.locator('#file').fill(file);
   const response=page.waitForResponse(r=>r.url().endsWith('/api/probe')&&r.request().method()==='POST');
-  await page.locator('#inspect').click();
+  await page.locator('#file').fill(file);
   const report=reportFromPortable(await(await response).json());
+  await page.waitForFunction(()=>!document.querySelector('#stream').disabled);
   await page.locator('#inspect-details').getByRole('heading',{name:'文件基本信息',exact:true}).waitFor();
   assert.equal(report.type,'inspect');return report;
 }
 async function runTask(page,app,button){
   const response=page.waitForResponse(r=>r.url().endsWith('/api/jobs')&&r.request().method()==='POST');
   await page.locator(button).click();const job=await(await response).json();
+  if(button==='#enqueue-analyze'&&!(await app.request('status')).queueRunning)await page.locator('#queue-start').click();
   const done=await waitForJob(app.request,job.id);
   assert.equal(done.status,'done',JSON.stringify(done));
-  await page.waitForFunction(()=>document.querySelector('#task-label')?.textContent==='任务完成');
+  if(button==='#enqueue-analyze'){
+    await page.locator(`[data-result-open="${job.id}"]`).click();
+    await page.waitForFunction(id=>document.querySelector('#inspect-result').dataset.reportOwner===id,job.id);
+  }
+  else await page.waitForFunction(()=>document.querySelector('#task-label')?.textContent==='任务完成');
   return {job:done,report:await app.request(`jobs/${job.id}/report`)};
 }
 async function download(page,button,file){
@@ -81,11 +86,100 @@ async function download(page,button,file){
   await downloaded.saveAs(file);const text=await readFile(file,'utf8');assert.equal(text.includes('\n'),false);
   const decoded=parsePortable(text);assert.equal(downloaded.suggestedFilename(),portableFilename(decoded.results,decoded.plans,stamp));return decoded;
 }
-async function analyze(page,app){await preview(page);return runTask(page,app,'#analyze')}
+async function analyze(page,app){await preview(page);await page.locator('#bitrate-enabled').check();return runTask(page,app,'#enqueue-analyze')}
+scenario('[analysis-targets] automatic preview and independent targets follow the queue workflow and survive import',async({page,app,dir})=>{
+  assert.equal(await page.locator('#frame-analysis').isChecked(),true);
+  assert.equal(await page.locator('#bitrate-enabled').isChecked(),false);
+  assert.equal(await page.locator('#complexity').isChecked(),false);
+  assert.equal(await page.locator('#bitrate-options').isVisible(),false);
+  assert.equal(await page.locator('#siti-settings').isVisible(),false);
+  assert.equal(await page.locator('#analyze').count(),0);
+  assert.equal(await page.locator('#inspect').isVisible(),false);
+  await preview(page,media.sitiSource);
+  assert.equal((await app.request('status')).jobs.length,0,'automatic preview must not start or enqueue analysis');
+  await page.locator('#frame-analysis').uncheck();
+  assert.equal(await page.locator('#enqueue-analyze').isDisabled(),true);
+  await page.locator('#frame-analysis').check();
+  const frames=await runTask(page,app,'#enqueue-analyze');
+  assert.deepEqual(frames.report.analysisTargets,{frames:true,bitrate:false,complexity:false});
+  assert.equal(frames.report.packets.bitrateCurve,undefined);
+  assert.deepEqual(frames.report.packets.bins,[]);
+  assert.equal(await page.locator('#bitrate-optional').count(),0);
+  assert.equal(await page.locator('#frame-plot canvas').count(),1);
+
+  if(await page.locator('#queue-pause').isEnabled())await page.locator('#queue-pause').click();
+  await page.locator('#frame-analysis').uncheck();await page.locator('#bitrate-enabled').check();
+  await page.locator('#bitrate-window').selectOption('1000');
+  const queued=page.waitForResponse(r=>r.url().endsWith('/api/jobs')&&r.request().method()==='POST');
+  await page.locator('#enqueue-analyze').click();const job=await(await queued).json();
+  assert.equal((await app.request('jobs/'+job.id)).status,'queued');
+  await page.locator('#bitrate-enabled').uncheck();await page.locator('#complexity').check();
+  assert.equal(await page.locator('#bitrate-options').isVisible(),false);
+  assert.equal(await page.locator('#bitrate-window').isDisabled(),true);
+  assert.equal(await page.locator('#siti-settings').isVisible(),true);
+  assert.equal(await page.locator('.siti-device-row #siti-gpu-recheck').isVisible(),true);
+  assert.equal(await page.locator('#siti-settings details[open]').count(),0);
+  const plan=(await app.request('plans')).plans[0].input;
+  assert.equal(plan.bitrate,true);assert.equal(plan.bitrateWindowMs,1000);assert.equal(plan.complexity,false);
+  await page.locator('#queue-start').click();assert.equal((await waitForJob(app.request,job.id)).status,'done');
+  await page.locator(`[data-result-open="${job.id}"]`).click();
+  const bitrate=await app.request(`jobs/${job.id}/report`);
+  assert.deepEqual(bitrate.analysisTargets,{frames:false,bitrate:true,complexity:false});
+  assert.equal(bitrate.frames,undefined);assert.equal(bitrate.packets.bitrateCurve.windowMs,1000);
+  assert.equal(await page.locator('#frame-plot').count(),0);assert.equal(await page.locator('#bitrate-optional').count(),1);
+  const curveFile=path.join(dir,'curve-only.json');await saveImportFixture(curveFile,bitrate);await importReport(page,curveFile);
+  await page.locator('#bitrate-optional > summary').click();assert.equal(await page.locator('#bitrate canvas').count(),1);
+
+  const siti=await runTask(page,app,'#enqueue-analyze');
+  assert.deepEqual(siti.report.analysisTargets,{frames:false,bitrate:false,complexity:true});
+  assert.equal(siti.report.content.available,true,siti.report.content.reason);
+  assert.equal(siti.report.packets,undefined);assert.equal(siti.report.coding,undefined);
+  assert.equal(await page.locator('#frame-plot').count(),0);assert.equal(await page.locator('#bitrate').count(),0);
+  assert.equal(await page.locator('#si canvas').count(),1);
+  const sitiFile=path.join(dir,'siti-only.json');await saveImportFixture(sitiFile,siti.report);await importReport(page,sitiFile);
+  assert.equal(await page.locator('#si canvas').count(),1);
+  const exported=await download(page,'#inspect-export',path.join(dir,'siti-only-roundtrip.json'));
+  assert.deepEqual(exported.results[0].report,siti.report);
+  await page.locator('#complexity').uncheck();assert.equal(await page.locator('#siti-settings').isVisible(),false);
+  await page.screenshot({path:path.join(dir,'analysis-targets.png'),fullPage:true});
+});
+
+scenario('[analysis-targets] invalid file preview is inline and can be retried or replaced',async({page,app})=>{
+  await page.locator('#file').fill(path.join(root,'does-not-exist.mp4'));
+  await page.locator('#inspect').waitFor({state:'visible'});
+  assert.equal(await page.locator('#enqueue-analyze').isDisabled(),true);
+  assert.equal(await page.locator('#stream').isDisabled(),true);
+  const retry=page.waitForResponse(r=>r.url().endsWith('/api/probe'));
+  await page.locator('#inspect').click();await retry;
+  await preview(page,media.source);
+  assert.equal(await page.locator('#inspect').isVisible(),false);
+  assert.equal(await page.locator('#enqueue-analyze').isEnabled(),true);
+  assert.equal((await app.request('status')).jobs.length,0);
+});
+
+scenario('[analysis-targets] switching files cancels a pending preview without restoring stale track information',async({page})=>{
+  let unblock,started;
+  const released=new Promise(resolve=>unblock=resolve),pending=new Promise(resolve=>started=resolve);
+  await page.route('**/api/probe',async route=>{
+    if(route.request().postDataJSON().file===media.source){started();await released;}
+    await route.continue().catch(()=>{});
+  });
+  try{
+    await page.locator('#file').fill(media.source);await pending;
+    await preview(page,media.candidate);
+    unblock();await page.unrouteAll({behavior:'wait'});
+    assert.equal(await page.locator('#file').inputValue(),media.candidate);
+    assert.equal(await page.locator('#enqueue-analyze').isEnabled(),true);
+    assert.equal(await page.locator('#file-status.error').count(),0);
+    assert.match(await page.locator('#inspect-details').innerText(),/候选\.mp4/);
+  }finally{unblock()}
+});
+
 scenario('[bitrate-window] [units] calculation selection and display aggregation survive report import',async({page,app,dir})=>{
   await preview(page);
+  await page.locator('#bitrate-enabled').check();
   await page.locator('#bitrate-window').selectOption('100');
-  const {report}=await runTask(page,app,'#analyze');
+  const {report}=await runTask(page,app,'#enqueue-analyze');
   assert.equal(report.packets.bitrateCurve.windowMs,100);
   assert.equal(report.packets.bitrateCurve.status,'ok');
   assert.equal(await page.locator('#bitrate-optional').evaluate(el=>el.open),false);
@@ -119,7 +213,7 @@ scenario('[bitrate-window] [units] calculation selection and display aggregation
   await page.locator('#bitrate-optional > summary').click();
   assert.equal(await page.locator('#bitrate-display').inputValue(),'100');
   await page.locator('#bitrate-window').selectOption('1000');
-  const next=await runTask(page,app,'#analyze');
+  const next=await runTask(page,app,'#enqueue-analyze');
   assert.equal(next.report.packets.bitrateCurve.windowMs,1000);
   assert.equal(await page.locator('#bitrate-display option').count(),1);
 });
@@ -175,7 +269,7 @@ scenario('[queue-removal] GUI removes waiting tasks and completed/imported resul
 
 scenario('[startup] [units] actual browser loads the complete app and the API rejects an absent session token',async({page,app})=>{
   assert.equal((await fetch(app.base+'/api/status')).status,403);
-  assert.equal(await page.locator('#analyze').isEnabled(),false);
+  assert.equal(await page.locator('#enqueue-analyze').isEnabled(),false);
   const help=(await page.locator('p.hint').allTextContents()).join(' ');
   assert.match(help,/最大 256 MB/);assert.match(help,/合计不超过 100 MB/);
   assert.ok(!help.includes('B 表示字节')&&!help.includes('1000 进位'));
@@ -273,12 +367,12 @@ scenario('[analysis] SI/TI reference settings and HLG display survive GUI plans 
   for(const name of ['rgb24-sdr-pc','gray-sdr-tv','gray16le-srgb-pc','gray12le-hlg-pc','gray10le-hlg-tv-display']){
     const c=vectors.cases.find(c=>c.name===name),fixture=await sitiInputFixture(dir,c);
     await preview(page,fixture.file);await page.locator('#complexity').check();
-    if(!await page.locator('#siti-range').isVisible())await page.locator('details.siti-options summary').click();
+    if(!await page.locator('#siti-range').isVisible())await page.locator('#siti-input-settings > summary').click();
     assert.equal(await page.locator('#siti-scale').count(),0);assert.equal(await page.locator('#siti-float-depth').count(),0);assert.equal(await page.locator('#siti-alpha').count(),0);
     await page.locator('#siti-range').selectOption(c.range);await page.locator('#siti-transfer').selectOption(c.domain);await page.locator('#siti-matrix').selectOption(c.matrix??'auto');
     if(c.domain==='hlg'){if(name==='gray12le-hlg-pc')assert.equal(await page.locator('#siti-hlg-white').inputValue(),'1000');await page.locator('#siti-hlg-white').fill('2000');if(c.settings.hlg)await page.locator('#siti-hlg-black').fill(String(c.settings.hlg.blackCdM2))}
     await page.locator('#siti-scenes').selectOption('single');
-    const {report}=await runTask(page,app,'#analyze');assert.equal(report.content.available,true,report.content.reason);
+    const {report}=await runTask(page,app,'#enqueue-analyze');assert.equal(report.content.available,true,report.content.reason);
     assert.equal(report.content.execution.configuration.configurationVersion,8);assert.equal(report.content.execution.configuration.outputMultiplier,255);
     if(c.domain==='hlg')assert.equal(report.content.execution.configuration.display.whiteCdM2,2000);
     await page.locator('#inspect-details').getByRole('heading',{name:'SI/TI 内容复杂度',exact:true}).waitFor();
@@ -305,7 +399,7 @@ scenario('[analysis] GPU SI/TI selection preserves the P.910 SDR method and disp
   await page.waitForFunction(()=>!document.querySelector('#siti-device-status').textContent.includes('正在检查'));
   assert.equal(await page.locator('#siti-device').inputValue(),capability.available?'gpu':'cpu');
   assert.equal(await page.locator('#siti-workers').isDisabled(),capability.available);
-  const {report}=await runTask(page,app,'#analyze');
+  const {report}=await runTask(page,app,'#enqueue-analyze');
   assert.equal(report.content.execution.device,capability.available?'gpu':'cpu');
   assert.equal(report.content.execution.method,SITI_COMPAT_PROFILE);
   if(capability.available)assert.equal(report.content.execution.validation.selfTest,'passed');
@@ -328,7 +422,7 @@ scenario('[analysis] SI/TI confirmed scenes exclude boundary TI and export separ
   await preview(page,media.sitiSource);await page.locator('#complexity').check();
   assert.equal(await page.locator('#siti-scenes').inputValue(),'unconfirmed');
   await page.locator('#siti-scenes').selectOption('confirmed');await page.locator('#siti-scene-frames').fill('1, 7, 12');
-  const {report}=await runTask(page,app,'#analyze');
+  const {report}=await runTask(page,app,'#enqueue-analyze');
   assert.deepEqual(report.content.sceneAnalysis.starts,[0,6,11]);assert.equal(report.content.si,null);assert.equal(report.content.ti,null);
   assert.deepEqual(report.content.points.filter(p=>p.ti===null).map(p=>p.frame),[0,6,11]);assert.equal(report.content.scenes.at(-1).ti,null);
   const details=page.locator('#inspect-details');assert.match(await details.innerText(),/按用户确认/);assert.match(await details.innerText(),/1–6/);assert.match(await details.innerText(),/7–11/);
@@ -341,9 +435,9 @@ scenario('[analysis] SI/TI confirmed scenes exclude boundary TI and export separ
 scenario('[analysis] [units] actual multi-audio file, frame scan, GOP, SI/TI and export match the server report',async({page,app,dir})=>{
   const info=await preview(page,media.sitiSource);assert.deepEqual(info.raw,(await probe(media.sitiSource)).raw);
   assert.equal(info.raw.streams.length,3);
-  await page.locator('#complexity').check();await page.locator('#siti-workers').selectOption('8');
+  await page.locator('#bitrate-enabled').check();await page.locator('#complexity').check();await page.locator('#siti-workers').selectOption('8');
   assert.equal(await page.locator('#siti-device').inputValue(),'cpu');
-  const {report}=await runTask(page,app,'#analyze');
+  const {report}=await runTask(page,app,'#enqueue-analyze');
   assert.deepEqual(await page.locator('#inspect-details > .section > h3').allTextContents(),['文件基本信息','帧结构与 GOP','SI/TI 内容复杂度','音轨包大小时间分布','音视频码率统计（可选曲线）','体积构成']);
   assert.equal(await page.locator('#inspect-details > .cards .card').count(),4);
   assert.equal(report.frames.length,12);assert.equal(report.tracks.filter(s=>s.type==='audio').length,2);
@@ -621,10 +715,12 @@ scenario('[sidebar] asynchronous report completion leaves every visible sidebar 
   assert.equal(new URL(page.url()).hash,chapter.hash,'the first sidebar click navigates to the actual rendered heading');
 });
 
-scenario('[compact-task] an actual missing-file failure never reuses a hidden phase from the previous task',async({t,page,app})=>{
+scenario('[compact-task] an actual submission failure never reuses a hidden phase from the previous task',async({t,page,app})=>{
   if(!requireFeature(t,await page.locator('#toggle-island').count()>0,'compact task status'))return;
   await analyze(page,app);await page.locator('#toggle-island').click();
-  await page.locator('#file').fill(path.join(root,'does-not-exist.mp4'));await page.locator('#inspect').click();
+  await page.locator('[data-mode="compare"]').click();
+  await page.locator('#reference').fill('does-not-exist.mp4');
+  await page.locator('#candidate').fill(media.source);await page.locator('#confirm').check();await page.locator('#compare').click();
   await page.waitForFunction(()=>document.querySelector('#task-label')?.textContent==='任务未完成');
   await page.waitForFunction(()=>document.querySelector('#island-brief-text')?.textContent.includes('任务未完成'));
   assert.doesNotMatch(await page.locator('#island-brief-text').textContent(),/阶段\s*\d/);
