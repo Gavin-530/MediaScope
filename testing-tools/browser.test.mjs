@@ -123,6 +123,7 @@ scenario('[analysis-targets] automatic preview and independent targets follow th
   assert.equal(plan.bitrate,true);assert.equal(plan.bitrateWindowMs,1000);assert.equal(plan.complexity,false);
   await page.locator('#queue-start').click();assert.equal((await waitForJob(app.request,job.id)).status,'done');
   await page.locator(`[data-result-open="${job.id}"]`).click();
+  await page.waitForFunction(id=>document.querySelector('#inspect-result').dataset.reportOwner===id,job.id);
   const bitrate=await app.request(`jobs/${job.id}/report`);
   assert.deepEqual(bitrate.analysisTargets,{frames:false,bitrate:true,complexity:false});
   assert.equal(bitrate.frames,undefined);assert.equal(bitrate.packets.bitrateCurve.windowMs,1000);
