@@ -9,6 +9,7 @@ import {vmafModels} from "./vmaf.js";
 import {validateSitiSceneStarts,validateSitiSettings} from "./siti.js";
 import {
   parseCrfs,
+  trialBdRate,
   rowLabel,
   trialPlotData,
   trialFramePlotData,
@@ -797,6 +798,27 @@ function trialInput() {
     ...($("#trial-keep").checked ? {exportDirectory: clean($("#trial-save-directory").value)} : {}),
   };
 }
+function updateTrialReportContext(saved = reports.trial) {
+  const host = document.querySelector("#bd-report-context");
+  if (!host || !saved) return;
+  const rows = saved.rows.map(row => ({...row, preset: row.preset ?? saved.experiment.preset})),
+    groups = [...new Set(rows.map(rowLabel))],
+    sameValues = (a, b) => JSON.stringify([...new Set(a)].sort()) === JSON.stringify([...new Set(b)].sort());
+  let changed = false;
+  if (clean($("#trial-file").value)) {
+    try {
+      const input = trialInput(),
+        presets = input.encoder === 'libaom-av1' ? [`cpu-used=${input.cpuUsed}`] : input.presets;
+      changed = input.file !== saved.source.file || input.stream !== saved.stream ||
+        input.start !== saved.experiment.start || input.duration !== saved.experiment.duration ||
+        input.encoder !== saved.experiment.encoder ||
+        (saved.experiment.depthMode != null && input.depthMode !== saved.experiment.depthMode) ||
+        !sameValues(presets, rows.map(row => row.preset)) || !sameValues(input.crfs, rows.map(row => row.crf));
+    } catch { changed = true; }
+  }
+  host.innerHTML = `<p class="hint">当前报告：${groups.length} 条曲线，${rows.length} 个采样点。</p>` +
+    (changed ? notices(['当前设置与报告不同。请重新运行实验，或打开对应已完成任务的报告。']) : '');
+}
 function trialControls() {
   const av1 = $("#trial-encoder").value === "libaom-av1",
     both = $("#trial-depth").value === "both";
@@ -811,8 +833,9 @@ function trialControls() {
   } catch (e) {
     $("#trial-count").textContent = e.message;
   }
+  updateTrialReportContext();
 }
-for (const id of ["trial-encoder", "trial-depth", "trial-crfs", "trial-cpu"])
+for (const id of ["trial-file", "trial-stream", "trial-start", "trial-duration", "trial-encoder", "trial-depth", "trial-crfs", "trial-cpu"])
   $("#" + id).addEventListener("input", trialControls);
 document
   .querySelectorAll("[name=trial-preset]")
@@ -1681,6 +1704,10 @@ function renderTrial(r) {
     `<div class="two"><label>横轴<select id="rd-axis"><option value="videoMbps">视频平均码率（${bitScale.unit}）</option><option value="videoBytes">视频包体积（${byteScale.unit}）</option><option value="encodeSeconds">编码耗时（s）</option><option value="encodeFps">编码速度（frame/s）</option></select></label><label>纵轴指标<select id="rd-metric">${metrics.map((m) => `<option value="${m}">${esc(metricLabels[m])}</option>`).join("")}</select></label></div><div id="rd"></div><p class="hint">码率—质量图：同等质量时越靠左越省码率，同等码率时越高越好；需比较同一参考片段及指标域。成本图仅显示散点：相同质量下比较编码时间或速度。体积与码率仅计视频包。PSNR 为 MSE 域汇总，SSIM / VMAF 为逐帧均值。</p>`,
   );
   html += section(
+    "BD-rate · 同等质量下的平均码率差",
+    `<div id="bd-report-context" aria-live="polite"></div><div class="two"><label>基准曲线<select id="bd-anchor">${groups.map((g, i) => `<option value="${i}">${esc(g)}</option>`).join("")}</select></label><label>对比曲线<select id="bd-test">${groups.map((g, i) => `<option value="${i}">${esc(g)}</option>`).join("")}</select></label></div><label>质量指标<select id="bd-metric">${Object.keys(metricLabels).map(m => `<option value="${m}">${esc(metricLabels[m])}${m === 'ssim' ? ' · dB' : ''}</option>`).join("")}</select></label><div id="bd-result" aria-live="polite"></div><p class="hint">负值表示对比方案省码率，正值表示增加。结果仅代表共同质量区间。</p>`,
+  );
+  html += section(
     "逐帧质量叠加 · 固定位深与 preset，对比 CRF",
     `<div class="two"><label>固定对比组<select id="trial-group">${groups.map((g, i) => `<option value="${i}">${esc(g)}</option>`).join("")}</select></label><label>纵轴质量指标<select id="trial-frame-metric">${metrics.map((m) => `<option value="${m}">${esc(metricLabels[m])}</option>`).join("")}</select></label></div><div id="trial-crf-select" class="checks"></div><p id="trial-frame-note" class="hint"></p><div id="trial-frames"></div>`,
   );
@@ -1700,6 +1727,21 @@ function renderTrial(r) {
     encodeFps: "编码速度（frame/s）↑",
     crf: "CRF（无量纲）",
   };
+  const updateBdRate = () => {
+    const result = trialBdRate(rows, groups[Number($("#bd-anchor").value)],
+      groups[Number($("#bd-test").value)], $("#bd-metric").value);
+    $("#bd-result").innerHTML = result.ok
+      ? table(["BD-rate（对比组相对基准组）", "共同质量区间", "区间覆盖：基准 / 对比", "采样点：基准 / 对比"], [[
+          `${result.percent > 0 ? '+' : ''}${fmt(result.percent, 3)} %`,
+          `${fmt(result.qualityRange[0], 6)} – ${fmt(result.qualityRange[1], 6)} · ${result.qualityDomain}`,
+          result.coverage.map(v => fmt(v * 100, 1) + ' %').join(' / '),
+          result.pointCounts.join(' / '),
+        ]]) + notices(result.warnings)
+      : notices(['BD-rate 不可计算：' + result.reason]);
+  };
+  $("#bd-test").value = groups.length > 1 ? '1' : '0';
+  for (const id of ['#bd-anchor', '#bd-test', '#bd-metric']) $(id).onchange = updateBdRate;
+  updateBdRate();
   const drawSamples = () => {
     $("#trial-sample-table").innerHTML = table(
       [
@@ -1834,6 +1876,7 @@ function renderTrial(r) {
   drawSamples();
   update();
   updateGroup();
+  updateTrialReportContext(r);
 }
 api("status")
   .then((s) => {

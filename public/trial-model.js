@@ -1,3 +1,31 @@
+import {bdRate} from "./bd-rate.js";
+
+export function trialBdRate(rows, anchor, test, metric) {
+  if (!['psnr', 'ssim', 'vmaf'].includes(metric))
+    return {ok: false, reason: '请选择已测量的质量指标。'};
+  if (!anchor || !test || anchor === test) {
+    const groups = new Set(rows.map(rowLabel));
+    return {ok: false, reason: groups.size < 2
+      ? '当前报告只有一组实测曲线，缺少第二组；请运行包含两组设置的实验，并打开该次实验报告。'
+      : '请选择两个不同的位深 / preset 组；当前基准组与对比组相同。'};
+  }
+  const selected = [anchor, test].map(group => rows.filter(row => rowLabel(row) === group));
+  if (metric === 'vmaf') {
+    const models = selected.flat().map(row => row.metrics?.vmaf?.model);
+    if (models.some(model => !model) || new Set(models).size !== 1)
+      return {ok: false, reason: 'VMAF 模型缺失或不一致，不能比较。'};
+  }
+  if (metric === 'ssim' && selected.flat().some(row => {
+    const q = row.metrics?.ssim?.pooled;
+    return !Number.isFinite(q) || q < 0 || q >= 1;
+  })) return {ok: false, reason: 'SSIM 必须为有限的 0 ≤ SSIM < 1；等于 1 时 dB 变换为无穷，不自动删除采样点。'};
+  const result = bdRate(...selected.map(group => group.map(row => ({
+    rate: row.videoMbps,
+    quality: metric === 'ssim' ? -10 * Math.log10(1 - row.metrics.ssim.pooled) : row.metrics?.[metric]?.pooled,
+  }))));
+  return {...result, metric, qualityDomain: metric === 'ssim' ? 'SSIM dB = −10·log10(1−SSIM)' : metric === 'psnr' ? 'PSNR / dB' : 'VMAF / 原始模型分数'};
+}
+
 export function parseCrfs(text) {
   const tokens = text
       .trim()

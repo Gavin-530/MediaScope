@@ -358,6 +358,7 @@ const server=http.createServer(async(req,res)=>{
     files['/timing.js']='timing.js';
     files['/analysis-limits.js']='analysis-limits.js';
     files['/report-codec.js']='report-codec.js';
+    files['/bd-rate.js']='bd-rate.js';
     if(req.method!=='GET'||!files[url.pathname]){res.writeHead(404);res.end();return}
     const name=files[url.pathname];let data=await readFile(path.join(root,'public',name));if(name==='index.html')data=Buffer.from(data.toString().replace('__TOKEN__',token).replaceAll('__APP_VERSION__',appVersion).replace('__LOCAL_THEME__',localData.settings.theme).replace('__PORTABLE_LIMIT__',byteLimit(maxPortableBytes)).replace('__RECENT_LIMIT__',byteLimit(recentBytes)));
     res.writeHead(200,{'Content-Type':name.endsWith('.html')?'text/html; charset=utf-8':name.endsWith('.js')?'text/javascript; charset=utf-8':'text/css; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' blob:; object-src 'none'; frame-ancestors 'none'"});res.end(data);

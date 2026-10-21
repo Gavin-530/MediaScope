@@ -16,6 +16,7 @@ import {formatBytes, byteEvidence, quantityScale} from '../public/units.js';
 import {bitrateView} from '../public/bitrate-model.js';
 import {sitiInputFixture} from './helpers/siti-inputs.mjs';
 import {sitiSceneSummary,SITI_COMPAT_PROFILE} from '../public/siti.js';
+import {trialBdRate,rowLabel} from '../public/trial-model.js';
 
 const root=path.resolve('.build/testing-work/browser');
 let browser,media,sequence=0;
@@ -606,6 +607,81 @@ scenario('[trial] [units] real x264 trial encodes both CRFs, preserves frame met
   assert.equal(lossless.report.rows[0].metrics.psnr.pooled,'Infinity');
   await page.locator('#trial-psnr canvas').hover({position:{x:60,y:50}});
   assert.match(await page.locator('#trial-psnr .chart-label').innerText(),/Infinity/,'infinite quality is not presented as a missing measurement');
+});
+
+scenario('[bd-rate] changed presets distinguish the displayed single-group report from a completed queued two-group trial',async({page,app,dir})=>{
+  await page.locator('[data-mode="trial"]').click();await page.locator('#trial-file').fill(media.source);
+  await page.locator('#trial-duration').fill('1');await page.locator('#trial-encoder').selectOption('libx264');
+  await page.locator('[name="trial-preset"][value="medium"]').uncheck();await page.locator('[name="trial-preset"][value="ultrafast"]').check();
+  await page.locator('#trial-crfs').fill('18,36');
+  const initial=await runTask(page,app,'#trial');
+  assert.match(await page.locator('#bd-result').innerText(),/当前报告只有一组/);
+  assert.match(await page.locator('#bd-report-context').innerText(),/1 条曲线，2 个采样点/);
+  assert.equal(await page.locator('#bd-report-context .notice').count(),0);
+  await page.locator('[name="trial-preset"][value="superfast"]').check();
+  assert.match(await page.locator('#bd-report-context').innerText(),/当前设置与报告不同/);
+  assert.equal(await page.locator('#bd-anchor option').count(),1);
+  const response=page.waitForResponse(r=>r.url().endsWith('/api/jobs')&&r.request().method()==='POST');
+  await page.locator('#enqueue-trial').click();const submitted=await response,job=await submitted.json();
+  assert.deepEqual(submitted.request().postDataJSON().presets,['ultrafast','superfast']);
+  if(!(await app.request('status')).queueRunning)await page.locator('#queue-start').click();
+  const done=await waitForJob(app.request,job.id);assert.equal(done.status,'done',JSON.stringify(done));
+  const completed=await app.request(`jobs/${job.id}/report`);
+  assert.equal(completed.rows.length,4);assert.deepEqual(completed.experiment.presets,['ultrafast','superfast']);
+  assert.equal(await page.locator('#trial-result').getAttribute('data-report-owner'),initial.job.id);
+  assert.equal(await page.locator('#bd-anchor option').count(),1,'a queued task must not silently replace the viewed report');
+  await page.locator(`[data-result-open="${job.id}"]`).click();
+  await page.waitForFunction(id=>document.querySelector('#trial-result').dataset.reportOwner===id,job.id);
+  assert.equal(await page.locator('#bd-anchor option').count(),2);
+  assert.match(await page.locator('#bd-report-context').innerText(),/2 条曲线，4 个采样点/);
+  assert.equal(await page.locator('#bd-report-context .notice').count(),0);
+  assert.equal(await page.locator('#bd-result tbody tr').count(),1);
+  await writeFile(path.join(dir,'report.json'),JSON.stringify({initial:initial.report,completed}));
+  await page.locator('#bd-result').locator('..').screenshot({path:path.join(dir,'bd-report-context.png')});
+});
+
+scenario('[bd-rate] real trial curves calculate all three metrics, reverse baseline and survive report export/import',async({page,app,dir})=>{
+  await page.locator('[data-mode="trial"]').click();await page.locator('#trial-file').fill(media.source);
+  await page.locator('#trial-duration').fill('1');await page.locator('#trial-encoder').selectOption('libx264');
+  await page.locator('[name="trial-preset"][value="medium"]').uncheck();
+  for(const preset of ['ultrafast','fast'])await page.locator(`[name="trial-preset"][value="${preset}"]`).check();
+  await page.locator('#trial-crfs').fill('18,24,30,36');await page.locator('#trial-vmaf').check();
+  let {report}=await runTask(page,app,'#trial');
+  await writeFile(path.join(dir,'report.json'),JSON.stringify(report));
+  const groups=[...new Set(report.rows.map(rowLabel))];assert.equal(groups.length,2);
+  const check=async(metric,a=0,b=1)=>{
+    await page.locator('#bd-anchor').selectOption(String(a));await page.locator('#bd-test').selectOption(String(b));
+    await page.locator('#bd-metric').selectOption(metric);
+    const result=trialBdRate(report.rows,groups[a],groups[b],metric);
+    assert.equal(result.ok,true,JSON.stringify(result));
+    const cells=page.locator('#bd-result tbody td');
+    assert.equal(await cells.first().innerText(),`${result.percent>0?'+':''}${result.percent.toLocaleString('zh-CN',{maximumFractionDigits:3})} %`);
+    assert.match(await cells.nth(1).innerText(),metric==='ssim'?/SSIM dB/:metric==='psnr'?/PSNR/:/VMAF/);
+    assert.equal(await cells.nth(3).innerText(),result.pointCounts.join(' / '));return result;
+  };
+  const forward=await check('psnr'),reverse=await check('psnr',1,0);
+  assert.ok(Math.abs((1+forward.percent/100)*(1+reverse.percent/100)-1)<1e-10);
+  await check('ssim');await check('vmaf');
+  await page.locator('#bd-test').selectOption('0');assert.match(await page.locator('#bd-result').innerText(),/两个不同/);
+  const file=path.join(dir,'bd-trial.json'),exported=await download(page,'#trial-export',file);
+  assert.deepEqual(exported.results[0].report,report);
+  await importReport(page,file);await check('psnr');await check('ssim');await check('vmaf');
+  await page.locator('#bd-result').locator('..').screenshot({path:path.join(dir,'bd-rate.png')});
+  assert.doesNotMatch(await page.locator('#bd-result').innerText(),/采样稀疏/);
+  for(const crfs of ['18,36','18,27,36']){
+    await page.locator('#trial-crfs').fill(crfs);report=(await runTask(page,app,'#trial')).report;
+    const count=crfs.split(',').length, sparseDir=path.join(dir,`sparse-${count}`);
+    await mkdir(sparseDir);await writeFile(path.join(sparseDir,'report.json'),JSON.stringify(report));
+    for(const metric of ['psnr','ssim','vmaf']){
+      await check(metric);assert.match(await page.locator('#bd-result').innerText(),/采样稀疏/);
+    }
+    const sparseFile=path.join(sparseDir,'export.json');await download(page,'#trial-export',sparseFile);
+    await importReport(page,sparseFile);await check('psnr');
+    assert.match(await page.locator('#bd-result').innerText(),/采样稀疏/);
+    await page.locator('#bd-result').locator('..').screenshot({path:path.join(sparseDir,'bd-rate.png')});
+  }
+  await page.locator('#trial-crfs').fill('24');
+  await runTask(page,app,'#trial');assert.match(await page.locator('#bd-result').innerText(),/至少需要 2 个/);
 });
 
 scenario('[packet-distribution] actual audio packets, optional rates and frame axes survive export/import with legacy fallback',async({page,app,dir})=>{
