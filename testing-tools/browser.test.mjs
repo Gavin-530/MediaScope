@@ -273,7 +273,8 @@ scenario('[startup] [units] actual browser loads the complete app and the API re
   assert.equal((await fetch(app.base+'/api/status')).status,403);
   assert.equal(await page.locator('#enqueue-analyze').isEnabled(),false);
   const help=(await page.locator('p.hint').allTextContents()).join(' ');
-  assert.match(help,/最大 256 MB/);assert.match(help,/合计不超过 100 MB/);
+  assert.match(help,/最大 256 MB/);assert.match(help,/结果仅在本次运行中保留/);
+  assert.doesNotMatch(help,/近期任务自动保留|合计不超过 100 MB/);
   assert.ok(!help.includes('B 表示字节')&&!help.includes('1000 进位'));
   assert.ok(!help.includes('268.435')&&!help.includes('104.858'));
   for(const mode of ['inspect','compare','trial']){
@@ -488,12 +489,14 @@ scenario('[analysis] [units] actual multi-audio file, frame scan, GOP, SI/TI and
 
 scenario('[comparison] user confirmation gates actual lossless identity and lossy candidate measurement',async({page,app,dir})=>{
   await page.locator('[data-mode="compare"]').click();
-  await page.locator('#reference').fill(media.source);await page.locator('#candidate').fill(media.source);
+  const unavailable=path.join(dir,'unavailable-before-confirmation.mp4');
+  await page.locator('#reference').fill(unavailable);await page.locator('#candidate').fill(unavailable);
   const denied=page.waitForResponse(r=>r.url().endsWith('/api/jobs')&&r.request().method()==='POST');
   await page.locator('#compare').click();const rejected=await waitForJob(app.request,(await(await denied).json()).id);
   assert.equal(rejected.status,'error');assert.match(rejected.message,/请确认/);
-  const failure=JSON.parse(await readFile(path.join(dir,'reports',rejected.id,'failure.json'),'utf8'));
-  assert.deepEqual(failure.commands,[],'no media processing before user confirmation');
+  assert.equal(rejected.progress?.phaseIndex,undefined,'confirmation is checked before any media-processing phase');
+  await assert.rejects(readFile(path.join(dir,'reports',rejected.id,'failure.json')), {code:'ENOENT'});
+  await page.locator('#reference').fill(media.source);await page.locator('#candidate').fill(media.source);
   await page.locator('#confirm').check();
   const identical=await runTask(page,app,'#compare');
   assert.equal(identical.report.metrics.psnr.pooled,'Infinity');assert.equal(identical.report.metrics.ssim.pooled,1);
