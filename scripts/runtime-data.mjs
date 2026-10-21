@@ -2,11 +2,7 @@ import {mkdir,readFile,writeFile,rename,readdir,lstat,rm,open,unlink,copyFile} f
 import {constants} from 'node:fs';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
-import {compareTimes} from './time.mjs';
-import {byteLimit} from '../public/units.js';
-import {reportFromPortable,portableFormat,portableVersion} from '../public/portable.js';
 
-export const recentLimit=10, recentBytes=100*1000**2;
 const jobId=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 export const ended=job=>['done','error','cancelled'].includes(job.status);
 const alive=pid=>{if(!Number.isSafeInteger(pid)||pid<1)return false;try{process.kill(pid,0);return true}catch(e){return e.code!=='ESRCH'}};
@@ -35,7 +31,6 @@ async function json(file,value,{compact=false,signal}={}){
   const temp=file+'.'+randomUUID()+'.tmp';
   try{signal?.throwIfAborted();await writeFile(temp,JSON.stringify(value,null,compact?undefined:2),{signal});signal?.throwIfAborted();await rename(temp,file)}finally{await unlink(temp).catch(()=>{})}
 }
-export const writeReportFile=(file,value,signal)=>json(file,value,{compact:true,signal});
 const windowRect=value=>value&&['left','top','width','height'].every(key=>Number.isInteger(value[key])&&Math.abs(value[key])<=2147483647)&&value.width>0&&value.height>0;
 const rectValues=value=>Object.fromEntries(['left','top','width','height'].map(key=>[key,value[key]]));
 export function desktopWindowBounds(area,saved){
@@ -100,117 +95,47 @@ export async function saveTrialVideos(root,id,files,destination){
     const output=path.join(target,path.basename(file));
     await copyFile(file,output,constants.COPYFILE_EXCL);saved.push(output);
   }}catch(e){for(const file of saved)await unlink(file).catch(()=>{});throw e}
-  // Originals remain until the updated report has been saved successfully.
+  // Explicitly copied media survive cleanup of this task workspace.
   return saved;
 }
 
 export class RuntimeData {
-  constructor(root){this.root=path.resolve(root);this.settings={theme:'system',clearOnExit:false};this.pending=Promise.resolve();this.holds=new Map();this.clearAfterExport=new Set();this.warnings=[]}
+  constructor(root){
+    this.root=path.resolve(root);this.workRoot=path.join(this.root,'.work',randomUUID());
+    this.settings={theme:'system'};this.pending=Promise.resolve();this.holds=new Map();this.clearAfterExport=new Set();this.warnings=[];
+  }
   enqueue(work){const next=this.pending.then(work);this.pending=next.catch(()=>{});return next}
   async init(){
     await safeTree(this.root);await mkdir(this.root,{recursive:true});
-    try{const saved=JSON.parse(await readFile(path.join(this.root,'settings.json'),'utf8'));if(['system','light','dark'].includes(saved.theme))this.settings.theme=saved.theme;if(typeof saved.clearOnExit==='boolean')this.settings.clearOnExit=saved.clearOnExit}catch(e){if(e.code!=='ENOENT')this.warnings.push('本地设置损坏，已使用默认设置')}
-    await this.clearSession();
-    const records=[];
-    for(const entry of await readdir(this.root,{withFileTypes:true})){
-      if(!entry.isDirectory()||!jobId.test(entry.name))continue;
-      const folder=path.join(this.root,entry.name);await safeTree(folder);let keepMedia=false,hasReport=false;
-      try{
-        const report=await lstat(path.join(folder,'report.json')).catch(e=>{if(e.code==='ENOENT')return null;throw e});
-        hasReport=!!report;
-        const saved=report?JSON.parse(await readFile(path.join(folder,'report.json'),'utf8')):null;
-        if(report&&(saved.format!==portableFormat||saved.formatVersion!==portableVersion)){
-          this.warnings.push('旧版或不支持的报告未载入，原目录保留：'+entry.name);continue;
-        }
-        const value=report?reportFromPortable(saved):null;
-        const input=JSON.parse(await readFile(path.join(folder,'job-input.json'),'utf8'));
-        keepMedia=input.keepFiles===true;
-        let job;
-        try{job=JSON.parse(await readFile(path.join(folder,'job.json'),'utf8'))}catch(e){if(e.code!=='ENOENT')throw e}
-        const failure=report?null:JSON.parse(await readFile(path.join(folder,'failure.json'),'utf8').catch(e=>{if(e.code==='ENOENT')return '{"status":"cancelled","error":"上次运行意外结束"}';throw e}));
-        const stat=report||await lstat(folder);
-        job={id:entry.name,type:input.type,status:report?'done':failure.status==='error'?'error':'cancelled',message:report?'完成':failure.error||'任务未完成',file:input.file,reference:input.reference,candidate:input.candidate,description:job?.description||'近期任务',queuedAt:job?.queuedAt||stat.mtime.toISOString(),startedAt:job?.startedAt,finishedAt:job?.finishedAt||stat.mtime.toISOString(),timing:job?.timing,restored:true};
-        if(report&&!job.timing)job.timing=value.timing;
-        if(!['inspect','analyze','compare','trial'].includes(job.type))throw Error('未知任务类型');
-        if(job.status==='cancelled'){await removeOwned(this.root,entry.name);continue}
-        if(!report)await json(path.join(folder,'failure.json'),failure);
-        await this.trimWork(entry.name);
-        if(report)job.reportPath=path.join(folder,'report.json');
-        await json(path.join(folder,'job.json'),job);records.push({job,input});
-      }catch(e){
-        if(hasReport){this.warnings.push('报告未能恢复，原目录保留：'+entry.name+'；'+e.message);continue;}
-        // A failed migration must never discard explicitly retained videos.
-        if(keepMedia&&(await readdir(folder)).some(name=>name.endsWith('.mkv')))throw Error('旧实验视频迁移未完成，请另存后重试：'+e.message);
-        this.warnings.push('已移除无法恢复的运行记录：'+entry.name);await removeOwned(this.root,entry.name);
-      }
-    }
-    return records.sort((a,b)=>compareTimes(a.job.finishedAt,b.job.finishedAt));
+    try{const saved=JSON.parse(await readFile(path.join(this.root,'settings.json'),'utf8'));if(['system','light','dark'].includes(saved.theme))this.settings.theme=saved.theme}
+    catch(e){if(e.code!=='ENOENT')this.warnings.push('本地设置损坏，已使用默认设置')}
+    // Only this process owns this fresh workspace. Existing reports are neither loaded nor removed.
+    await mkdir(path.dirname(this.workRoot),{recursive:true});await mkdir(this.workRoot);
   }
-  async clearSession(){
-    const session=path.join(this.root,'.session');await safeTree(session);
-    for(const entry of await readdir(session,{withFileTypes:true}).catch(e=>{if(e.code==='ENOENT')return [];throw e})){
-      const folder=path.join(session,entry.name);
-      if(entry.isDirectory()){
-        if(!jobId.test(entry.name)){this.warnings.push('未清理未知会话目录：'+entry.name);continue;}
-        try{
-          const saved=JSON.parse(await readFile(path.join(folder,'report.json'),'utf8'));
-          if(saved.format!==portableFormat||saved.formatVersion!==portableVersion){this.warnings.push('旧版会话报告原目录保留：'+entry.name);continue;}
-        }catch(e){if(e.code!=='ENOENT'){this.warnings.push('无法核查的会话报告原目录保留：'+entry.name);continue;}}
-        await removeOwned(session,entry.name);
-      }else await unlink(folder);
-    }
-    if(!(await readdir(session).catch(e=>{if(e.code==='ENOENT')return [];throw e})).length)await removeOwned(this.root,'.session');
-  }
-  async trimWork(id){
-    const folder=path.join(this.root,id);
-    await safeTree(folder);
-    for(const name of await readdir(folder))if(!['report.json','job-input.json','failure.json','job.json'].includes(name))await rm(path.join(folder,name),{recursive:true,force:true});
-  }
-  async save(job,input){
-    const folder=path.join(this.root,job.id);await mkdir(folder,{recursive:true});
-    await json(path.join(folder,'job-input.json'),input);
-    const {controller,result,reportPath,...metadata}=job;await json(path.join(folder,'job.json'),metadata);
-    if(job.status!=='done'&&!await lstat(path.join(folder,'failure.json')).catch(e=>{if(e.code==='ENOENT')return null;throw e}))await json(path.join(folder,'failure.json'),{status:job.status,error:job.message,commands:[]});
-    await this.trimWork(job.id);
-    const bytes=await safeTree(folder);
-    if(bytes>recentBytes){
-      const session=path.join(this.root,'.session');await mkdir(session,{recursive:true});
-      const target=path.join(session,job.id);await rename(folder,target);
-      if(job.reportPath)job.reportPath=path.join(target,'report.json');
-      job.sessionOnly=true;job.retentionMessage=`报告超过 ${byteLimit(recentBytes)}，仅在本次会话可用；请导出保存`;
-    }
-  }
+  async finish(job){await removeOwned(this.workRoot,job.id)}
+  async close(){await removeOwned(path.dirname(this.workRoot),path.basename(this.workRoot))}
   pinned(id){for(const [key,hold]of this.holds){if(hold.expires<Date.now())this.holds.delete(key);else if(hold.ids.includes(id))return true}return false}
-  hold(ids,jobs){if(!Array.isArray(ids)||ids.length>10000||ids.some(id=>!jobs.get(id)?.reportPath))throw Error('导出结果已变化，请重新选择');const key=randomUUID();this.holds.set(key,{ids,expires:Date.now()+10*60*1000});return key}
+  hold(ids,jobs){
+    if(!Array.isArray(ids)||ids.length>10000||ids.some(id=>!jobs.get(id)?.result))throw Error('导出结果已变化，请重新选择');
+    const key=randomUUID();this.holds.set(key,{ids,expires:Date.now()+10*60*1000});return key;
+  }
   async remove(job,jobs,inputs){
     if(this.pinned(job.id)){job.removed=true;this.clearAfterExport.add(job.id);return}
-    if(job.sessionOnly){const target=path.join(this.root,'.session',job.id);await safeTree(target);await rm(target,{recursive:true,force:true})}
-    else await removeOwned(this.root,job.id);
-    jobs.delete(job.id);inputs.delete(job.id);this.clearAfterExport.delete(job.id);
+    await this.finish(job);jobs.delete(job.id);inputs.delete(job.id);this.clearAfterExport.delete(job.id);
   }
   async prune(jobs,inputs,{clear=false}={}){
     for(const [key,hold]of this.holds)if(hold.expires<Date.now())this.holds.delete(key);
-    const recent=[...jobs.values()].filter(j=>ended(j)).sort((a,b)=>compareTimes(b.finishedAt||'',a.finishedAt||''));
-    let count=0,bytes=0,exhausted=false;
-    for(const job of recent){
-      const size=job.sessionOnly?0:await safeTree(path.join(this.root,job.id));
-      const discard=clear||job.status==='cancelled'||this.clearAfterExport.has(job.id);
-      if(!discard&&(count>=recentLimit||bytes+size>recentBytes))exhausted=true;
-      if(!discard&&!exhausted){count++;bytes+=size;continue}
-      if(this.pinned(job.id)){if(clear)this.clearAfterExport.add(job.id);continue}
-      if(job.sessionOnly){const target=path.join(this.root,'.session',job.id);await safeTree(target);await rm(target,{recursive:true,force:true})}
-      else await removeOwned(this.root,job.id);
-      jobs.delete(job.id);inputs.delete(job.id);this.clearAfterExport.delete(job.id);
+    for(const job of [...jobs.values()]){
+      if(!ended(job)||!(clear||job.status==='cancelled'||this.clearAfterExport.has(job.id)))continue;
+      await this.remove(job,jobs,inputs);
     }
   }
   async updateSettings(value){
-    if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(k=>!['theme','clearOnExit'].includes(k))||value.theme!==undefined&&!['system','light','dark'].includes(value.theme)||value.clearOnExit!==undefined&&typeof value.clearOnExit!=='boolean')throw Error('本地设置无效');
+    if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(k=>k!=='theme')||value.theme!==undefined&&!['system','light','dark'].includes(value.theme))throw Error('本地设置无效');
     const settings={...this.settings,...value};await json(path.join(this.root,'settings.json'),settings);this.settings=settings;
   }
   async usage(jobs){
-    const profileBytes=await safeTree(path.join(this.root,'desktop-profile'));
-    let recordBytes=0,count=0;
-    for(const job of jobs.values())if(ended(job)&&!job.sessionOnly){count++;recordBytes+=await safeTree(path.join(this.root,job.id))}
-    return {settings:this.settings,count,recordBytes,profileBytes,totalBytes:await safeTree(this.root),limit:recentLimit,maxBytes:recentBytes,warnings:this.warnings};
+    const workBytes=await safeTree(this.workRoot),profileBytes=await safeTree(path.join(this.root,'desktop-profile'));
+    return {settings:this.settings,count:[...jobs.values()].filter(job=>job.status==='done'&&!job.removed).length,workBytes,profileBytes,totalBytes:workBytes+profileBytes,warnings:this.warnings};
   }
 }

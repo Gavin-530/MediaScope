@@ -1,11 +1,10 @@
 import http from 'node:http';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { readFile, mkdir, writeFile } from 'node:fs/promises';
+import { readFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import {createReadStream} from 'node:fs';
 import { FF,FP,run,probe,video,scan,summarize,compare,normalizeMediaPath,decodeThreadCount } from './engine.mjs';
 import {allPackets,structure,traceStructure,mapStructure,metadataSummary,complexity,trial,trialOptions} from './analysis.mjs';
 import {sitiGpuCapability,closeSitiGpu} from './siti.mjs';
@@ -13,7 +12,7 @@ import {validateSitiSceneStarts,validateSitiSettings} from './public/siti.js';
 import {makePortable,maxPortableBytes,utcNow} from './public/portable.js';
 import {byteLimit} from './public/units.js';
 import {vmafModel} from './public/vmaf.js';
-import {RuntimeData,acquireDataLease,verifyDataLease,removeOwned,ended,trialDestination,saveTrialVideos,recentBytes,writeReportFile} from './scripts/runtime-data.mjs';
+import {RuntimeData,acquireDataLease,verifyDataLease,removeOwned,ended,trialDestination,saveTrialVideos} from './scripts/runtime-data.mjs';
 const root=path.dirname(fileURLToPath(import.meta.url)),token=randomBytes(24).toString('hex'),jobs=new Map();
 const dataRoot=path.resolve(process.env.MEDIASCOPE_DATA_DIR||path.join(root,'.mediascope'));
 const dataLease=process.env.MEDIASCOPE_DATA_LEASE?null:await acquireDataLease(dataRoot);
@@ -27,13 +26,9 @@ let active=null,pickerActive=false,pickerProcess=null,queueRunning=false,closing
 const probes=new Set();
 const inputs=new Map();
 let dataCleaning=false;
-for(const {job,input}of await localData.init()){
-  try{normalizeInputPaths(input);jobs.set(job.id,{...job,controller:new AbortController()});inputs.set(job.id,input)}
-  catch{await removeOwned(dataRoot,job.id)}
-}
-await localData.prune(jobs,inputs,{clear:localData.settings.clearOnExit});
+await localData.init();
 const retentionTimer=setInterval(()=>{
-  if([...localData.holds.values()].some(hold=>hold.expires<Date.now()))void localData.enqueue(()=>localData.prune(jobs,inputs)).catch(e=>console.error('近期记录清理未完成：'+e.message));
+  if([...localData.holds.values()].some(hold=>hold.expires<Date.now()))void localData.enqueue(()=>localData.prune(jobs,inputs)).catch(e=>console.error('本次结果清理未完成：'+e.message));
 },10000);retentionTimer.unref();
 function pump(){
  if(active||!queueRunning||closing||dataCleaning)return;
@@ -146,8 +141,7 @@ function createJob(input){
   pump();return job;
 }
 async function execute(job,input){
-  const cwd=path.join(dataRoot,job.id);await mkdir(cwd,{recursive:true});
-  await writeFile(path.join(cwd,'job-input.json'),JSON.stringify(input,null,2));
+  const cwd=path.join(localData.workRoot,job.id);await mkdir(cwd,{recursive:true});
   const started=performance.now(),stages=[];
   const publish=value=>{
     const next=typeof value==='string'?{detail:value}:value;
@@ -230,18 +224,16 @@ async function execute(job,input){
     }else if(job.type==='trial'){
       if(input.keepFiles)trialDestination(dataRoot,job.id,input.exportDirectory);
       const options=trialOptions(input);result=await trial(input,{...ctx,progressPlan:'trial',trialPhaseCount:options.points+2});
-      if(input.keepFiles)result.experiment.retainedFiles=await saveTrialVideos(dataRoot,job.id,result.experiment.retainedFiles,input.exportDirectory);
+      if(input.keepFiles)result.experiment.retainedFiles=await saveTrialVideos(localData.workRoot,job.id,result.experiment.retainedFiles,input.exportDirectory);
     }else throw Error('未知任务');
     if(job.controller.signal.aborted)throw Error('任务已取消');
     job.result={createdAt:utcNow(),producer:{applicationVersion:appVersion},type:job.type,tools:versions,commands:ctx.commands,timing:{computeSeconds:(performance.now()-started)/1000,decodeThreads:ctx.decodeThreads,stages,scope:'计算阶段，不含报告序列化、保存、传输及浏览器渲染；同一 concurrentGroup 的阶段时间相互重叠，不能相加；子进程耗时见 commands[].elapsedSeconds'},...result};
     job.timing=job.result.timing;
-    await writeReportFile(path.join(cwd,'report.json'),makePortable({results:[{entryId:job.id,report:job.result}],applicationVersion:appVersion}),job.controller.signal);
-    job.reportPath=path.join(cwd,'report.json');delete job.result;
-    job.status='done';job.message='完成';job.progress={...(job.progress||{}),stage:'完成',detail:'报告已保存',completed:1,total:1,unit:'份报告',updatedAt:utcNow()};
-   }catch(e){delete job.result;const status=job.controller.signal.aborted?'cancelled':'error';job.message=e.message;job.progress={...(job.progress||{}),stage:status==='cancelled'?'已取消':'任务未完成',detail:e.message,updatedAt:utcNow()};await writeFile(path.join(cwd,'failure.json'),JSON.stringify({status,error:e.message,commands:ctx.commands},null,2)).catch(()=>{});job.status=status;}
+    job.status='done';job.message='完成';job.progress={...(job.progress||{}),stage:'完成',detail:'结果可查看；长期保留请导出 JSON',completed:1,total:1,unit:'份报告',updatedAt:utcNow()};
+   }catch(e){delete job.result;const status=job.controller.signal.aborted?'cancelled':'error';job.message=e.message;job.progress={...(job.progress||{}),stage:status==='cancelled'?'已取消':'任务未完成',detail:e.message,updatedAt:utcNow()};job.status=status;}
   finally{job.finishedAt=new Date().toISOString();await localData.enqueue(async()=>{
+    await localData.finish(job);
     if(job.status==='cancelled')await localData.remove(job,jobs,inputs);
-    else await localData.save(job,input);
     await localData.prune(jobs,inputs);
   }).catch(e=>{job.retentionMessage='本地数据清理未完成：'+e.message;console.error(job.retentionMessage)})}
 }
@@ -270,7 +262,7 @@ const server=http.createServer(async(req,res)=>{
           await removeOwned(dataRoot,'desktop-profile');send(res,200,{message:'运行缓存已清理'});return;
         }
         if(dataCleaning)throw Error('本地数据正在清理');dataCleaning=true;
-        try{await localData.enqueue(()=>localData.prune(jobs,inputs,{clear:true}));send(res,200,{message:[...jobs.values()].some(j=>ended(j))?'已清理近期记录；正在导出的记录暂时保留':'近期记录已清空'})}
+        try{await localData.enqueue(()=>localData.prune(jobs,inputs,{clear:true}));send(res,200,{message:[...jobs.values()].some(j=>ended(j))?'已清空本次结果；正在导出的结果暂时保留':'本次结果已清空'})}
         finally{dataCleaning=false;pump()}return;
       }
       if(req.method==='POST'&&url.pathname==='/api/desktop/shutdown'){
@@ -339,12 +331,8 @@ const server=http.createServer(async(req,res)=>{
           pump();send(res,200,{ok:true});return;
         }
         if(req.method==='GET'){if(match[2]){
-          if(!j.reportPath){send(res,409,{error:'报告尚未完成'});return}
-          const key=await localData.enqueue(()=>localData.hold([j.id],jobs));
-          res.writeHead(200,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});
-          const stream=createReadStream(j.reportPath);
-          stream.once('close',()=>void localData.enqueue(async()=>{localData.holds.delete(key);await localData.prune(jobs,inputs)}).catch(e=>console.error('报告读取后清理未完成：'+e.message)));
-          res.once('close',()=>stream.destroy());stream.on('error',()=>res.destroy());stream.pipe(res);
+          if(!j.result){send(res,409,{error:'报告尚未完成'});return}
+          send(res,200,makePortable({results:[{entryId:j.id,report:j.result}],applicationVersion:appVersion}));
         }else{const {controller,result,...meta}=j;send(res,200,meta)}return}
       }
       if(req.method==='POST'&&url.pathname==='/api/jobs'){
@@ -360,7 +348,7 @@ const server=http.createServer(async(req,res)=>{
     files['/report-codec.js']='report-codec.js';
     files['/bd-rate.js']='bd-rate.js';
     if(req.method!=='GET'||!files[url.pathname]){res.writeHead(404);res.end();return}
-    const name=files[url.pathname];let data=await readFile(path.join(root,'public',name));if(name==='index.html')data=Buffer.from(data.toString().replace('__TOKEN__',token).replaceAll('__APP_VERSION__',appVersion).replace('__LOCAL_THEME__',localData.settings.theme).replace('__PORTABLE_LIMIT__',byteLimit(maxPortableBytes)).replace('__RECENT_LIMIT__',byteLimit(recentBytes)));
+    const name=files[url.pathname];let data=await readFile(path.join(root,'public',name));if(name==='index.html')data=Buffer.from(data.toString().replace('__TOKEN__',token).replaceAll('__APP_VERSION__',appVersion).replace('__LOCAL_THEME__',localData.settings.theme).replace('__PORTABLE_LIMIT__',byteLimit(maxPortableBytes)));
     res.writeHead(200,{'Content-Type':name.endsWith('.html')?'text/html; charset=utf-8':name.endsWith('.js')?'text/javascript; charset=utf-8':'text/css; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' blob:; object-src 'none'; frame-ancestors 'none'"});res.end(data);
   }catch(e){send(res,400,{error:e.message})}
 });
@@ -380,7 +368,7 @@ async function shutdown(){
   while((active||!drained)&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,50));
   if(!drained){server.closeAllConnections();await new Promise(resolve=>setImmediate(resolve))}
   await localData.pending;
-  if(!active){await localData.enqueue(async()=>{if(localData.settings.clearOnExit){localData.holds.clear();await localData.prune(jobs,inputs,{clear:true})}await localData.clearSession()}).catch(e=>console.error('退出清理未完成：'+e.message));}
+  if(!active){await localData.enqueue(async()=>{localData.holds.clear();await localData.prune(jobs,inputs,{clear:true});await localData.close()}).catch(e=>console.error('退出清理未完成：'+e.message));}
   await dataLease?.release();
   process.exit(0);
 }

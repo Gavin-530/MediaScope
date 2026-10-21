@@ -2146,20 +2146,19 @@ $("#trial-save-picker").onclick = async () => {
 };
 async function refreshLocalData(){
   const value=await api("local-data");
-  $("#clear-on-exit").checked=value.settings.clearOnExit;
-  $("#local-data-usage").textContent=`近期记录 ${value.count} / ${value.limit} 次 · ${formatBytes(value.recordBytes)}；浏览器缓存 ${formatBytes(value.profileBytes)}；运行目录总计 ${formatBytes(value.totalBytes)}。${value.warnings.join('；')}`;
-  $("#local-data-usage").title=`近期记录 ${byteEvidence(value.recordBytes)}；浏览器缓存 ${byteEvidence(value.profileBytes)}；运行目录总计 ${byteEvidence(value.totalBytes)}`;
+  $("#local-data-usage").textContent=`本次结果 ${value.count} 项；临时工作文件 ${formatBytes(value.workBytes)}；浏览器缓存 ${formatBytes(value.profileBytes)}。${value.warnings.join('；')}`;
+  $("#local-data-usage").title=`临时工作文件 ${byteEvidence(value.workBytes)}；浏览器缓存 ${byteEvidence(value.profileBytes)}`;
 }
 $("#local-data-panel").ontoggle=()=>{if($("#local-data-panel").open)refreshLocalData().catch(e=>message(e.message,true))};
 $("#local-data-refresh").onclick=()=>refreshLocalData().catch(e=>message(e.message,true));
-$("#clear-on-exit").onchange=async()=>{
-  const checkbox=$("#clear-on-exit");checkbox.disabled=true;
-  try{await api("local-data/settings",{method:"POST",body:JSON.stringify({clearOnExit:checkbox.checked})})}
-  catch(e){checkbox.checked=!checkbox.checked;message(e.message,true)}finally{checkbox.disabled=false}
-};
 for(const [id,category]of [["#local-data-clear","records"],["#local-cache-clear","cache"]])$(id).onclick=async()=>{
-  if(category==='records'&&!confirm('清空本地近期记录？需要长期保留的结果请先导出 JSON。'))return;
+  if(category==='records'&&!confirm('清空本次结果？未导出的结果将无法恢复。'))return;
   const button=$(id);button.disabled=true;
-  try{const value=await api("local-data/clean",{method:"POST",body:JSON.stringify({category})});await poll();await refreshLocalData();message(value.message)}
+  const ids=category==='records'?[...latestJobs.filter(job=>['done','error'].includes(job.status)).map(job=>job.id),...importedResults.map(item=>item.id)]:[];
+  try{
+    const value=await api("local-data/clean",{method:"POST",body:JSON.stringify({category})});
+    if(category==='records'){ids.forEach(id=>removedReportIds.add(id));importedResults=[];renderResultList()}
+    await poll();await refreshLocalData();message(value.message);
+  }
   catch(e){message(e.message,true)}finally{button.disabled=false}
 };

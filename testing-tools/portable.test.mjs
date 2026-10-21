@@ -1,12 +1,11 @@
 import {test,before,after} from 'node:test';
 import assert from 'node:assert/strict';
-import {readFile,mkdtemp,readdir,mkdir} from 'node:fs/promises';
+import {readFile} from 'node:fs/promises';
 import path from 'node:path';
 import {makePortable,parsePortable,portableFormat,portableVersion,portableFilename} from '../public/portable.js';
 import {encodeTable,decodeTable} from '../public/report-codec.js';
 import {makeMedia} from './helpers/real-media.mjs';
 import {startServer} from './helpers/server.mjs';
-import {writeReportFile} from '../scripts/runtime-data.mjs';
 
 const applicationVersion=JSON.parse(await readFile(new URL('../package.json',import.meta.url),'utf8')).version;
 let report,results,plans,app;
@@ -61,14 +60,6 @@ test('[portable-04] duplicate entries, nested versions, changed timing and malfo
   const value=makePortable({results,plans,applicationVersion});
   for(const broken of [{...value,kind:'plan'},{...value,plans:undefined},{...value,producer:{}},{...value,createdAt:'2026-02-31T00:00:00Z'},{...value,results:[...value.results,...value.results]},{...value,results:[{entryId:'bad',report:{...value.results[0].report,schema:'MediaScope/0.2'}}]},{...value,timing:{}},{...value,results:[],plans:[]},{...value,plans:[{entryId:'bad',input:{type:'unknown'}}]}])assert.throws(()=>parsePortable(JSON.stringify(broken)));
   const reordered={...value,timing:Object.fromEntries(Object.entries(value.timing).reverse())};assert.deepEqual(parsePortable(JSON.stringify(reordered)).results,results);
-});
-
-test('[portable-04] cancelled report saving publishes no partial file; successful saving is compact and lossless',async()=>{
-  const root=path.resolve('.build/testing-work/portable');await mkdir(root,{recursive:true});const folder=await mkdtemp(path.join(root,'atomic-')),file=path.join(folder,'report.json');
-  const value=makePortable({results,applicationVersion}),controller=new AbortController();controller.abort();
-  await assert.rejects(writeReportFile(file,value,controller.signal));assert.deepEqual(await readdir(folder),[]);
-  await writeReportFile(file,value);assert.deepEqual((await readdir(folder)),['report.json']);const saved=await readFile(file,'utf8');
-  assert.equal(saved,JSON.stringify(value));assert.deepEqual(parsePortable(saved).results,results);
 });
 
 test('[portable-04] filenames have exactly four templates, actual count controls selection and only source name/time vary',()=>{

@@ -67,15 +67,14 @@
       </p>
       <details class="panel" id="local-data-panel">
         <summary>本地数据</summary>
-        <p class="hint">近期任务自动保留最多 10 次、合计不超过 __RECENT_LIMIT__，重启后可查看。长期保存请导出 JSON。浏览器运行缓存退出后清理。</p>
+        <p class="hint">结果仅在本次运行中保留，长期保存请主动导出 JSON。浏览器运行缓存退出后清理。</p>
         <p id="local-data-usage" role="status" aria-live="polite">展开后查看占用情况。</p>
         <div class="row">
-          <label><input id="clear-on-exit" type="checkbox" />退出后清空近期记录</label>
           <button id="local-data-refresh" class="secondary">刷新占用</button>
-          <button id="local-data-clear" class="secondary">清空近期记录</button>
+          <button id="local-data-clear" class="secondary">清空本次结果</button>
           <button id="local-cache-clear" class="secondary">清理运行缓存</button>
         </div>
-        <p class="hint">运行中和等待中的任务继续保留。清空记录不会删除原视频、外部导出文件或测试归档。软件退出后也可手动删除整个运行数据目录。</p>
+        <p class="hint">运行中和等待中的任务继续保留。清空结果不会删除原视频、外部导出文件或测试归档。软件退出后也可手动删除整个运行数据目录。</p>
       </details>
       <section class="panel" id="inspect-panel">
         <div class="panel-title">

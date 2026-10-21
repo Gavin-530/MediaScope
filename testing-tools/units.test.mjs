@@ -2,7 +2,6 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {formatBytes, formatBitrate, byteEvidence, byteLimit, quantityScale, quantityNumber, scalePlotData} from '../public/units.js';
 import {maxPortableBytes} from '../public/portable.js';
-import {recentBytes} from '../scripts/runtime-data.mjs';
 import {trialValue} from '../public/trial-model.js';
 
 test('[units] decimal capacity and bitrate prefixes obey case and adapt across boundaries', () => {
@@ -31,7 +30,6 @@ test('[units] common plot units preserve source values, missing points and metad
 test('[units] integer evidence remains exact and capacity policies use round decimal limits', () => {
   assert.equal(byteEvidence('9007199254740993'),'9,007,199,254,740,993 B');
   assert.equal(byteEvidence(0),'0 B');
-  assert.equal(maxPortableBytes,256000000);assert.equal(recentBytes,100000000);
+  assert.equal(maxPortableBytes,256000000);
   assert.equal(byteLimit(maxPortableBytes),'256 MB');
-  assert.equal(byteLimit(recentBytes),'100 MB');
 });
