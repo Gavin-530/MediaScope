@@ -1705,7 +1705,7 @@ function renderTrial(r) {
   );
   html += section(
     "BD-rate · 同等质量下的平均码率差",
-    `<div id="bd-report-context" aria-live="polite"></div><div class="two"><label>基准曲线<select id="bd-anchor">${groups.map((g, i) => `<option value="${i}">${esc(g)}</option>`).join("")}</select></label><label>对比曲线<select id="bd-test">${groups.map((g, i) => `<option value="${i}">${esc(g)}</option>`).join("")}</select></label></div><label>质量指标<select id="bd-metric">${Object.keys(metricLabels).map(m => `<option value="${m}">${esc(metricLabels[m])}${m === 'ssim' ? ' · dB' : ''}</option>`).join("")}</select></label><div id="bd-result" aria-live="polite"></div><p class="hint">负值表示对比方案省码率，正值表示增加。结果仅代表共同质量区间。</p>`,
+    `<div id="bd-report-context" aria-live="polite"></div><div class="two"><label>基准曲线<select id="bd-anchor">${groups.map((g, i) => `<option value="${i}">${esc(g)}</option>`).join("")}</select></label><label>对比曲线<select id="bd-test">${groups.map((g, i) => `<option value="${i}">${esc(g)}</option>`).join("")}</select></label></div><label>计算模式<select id="bd-profile"><option value="reference">参考测量 · PSNR-Y 帧均值 / PCHIP</option><option value="exploratory">探索比较 · 原报告指标</option></select></label><label>质量指标<select id="bd-metric">${Object.keys(metricLabels).map(m => `<option value="${m}">${esc(metricLabels[m])}${m === 'ssim' ? ' · dB' : ''}</option>`).join("")}</select></label><div id="bd-result" aria-live="polite"></div><div id="bd-plot"></div><p id="bd-plot-note" class="hint"></p><button id="bd-export" disabled>导出当前 BD-rate 与完整复算依据（JSON）</button><p class="hint">负值表示对比方案省码率，正值表示增加。结果仅代表共同质量区间。</p>`,
   );
   html += section(
     "逐帧质量叠加 · 固定位深与 preset，对比 CRF",
@@ -1727,20 +1727,46 @@ function renderTrial(r) {
     encodeFps: "编码速度（frame/s）↑",
     crf: "CRF（无量纲）",
   };
+  let bdPlot;
   const updateBdRate = () => {
     const result = trialBdRate(rows, groups[Number($("#bd-anchor").value)],
-      groups[Number($("#bd-test").value)], $("#bd-metric").value);
+      groups[Number($("#bd-test").value)], $("#bd-metric").value, $("#bd-profile").value);
+    bdPlot?.dispose();$("#bd-plot").innerHTML="";$("#bd-plot-note").textContent="";
+    if(result.ok && result.points) {
+      const data=[...result.points.anchor.map(p=>[p.rate,p.quality,p,0]),...result.points.test.map(p=>[p.rate,p.quality,p,1])].sort((a,b)=>a[0]-b[0]);
+      bdPlot=draw("bd-plot",data,{connect:true,axis:"基本码流码率（kbit/s）",unit:result.qualityDomain,
+        series:[{id:0,name:result.anchor,color:"#80e1c4"},{id:1,name:result.test,color:"#76a9ed"}],
+        describe:p=>"CRF "+p[2].crf+" · "+fmt(p[0],6)+" kbit/s · "+fmt(p[1],8)+" dB"});
+      $("#bd-plot-note").textContent="此图使用本次 BD-rate 的基本码流码率与 PSNR-Y 帧均值。采样点连线辅助审阅，计算采用 PCHIP 积分；请检查共同区间、曲线交叉与采样分布。";
+    }
+    $("#bd-export").disabled = !result.ok;
     $("#bd-result").innerHTML = result.ok
       ? table(["BD-rate（对比组相对基准组）", "共同质量区间", "区间覆盖：基准 / 对比", "采样点：基准 / 对比"], [[
           `${result.percent > 0 ? '+' : ''}${fmt(result.percent, 3)} %`,
           `${fmt(result.qualityRange[0], 6)} – ${fmt(result.qualityRange[1], 6)} · ${result.qualityDomain}`,
           result.coverage.map(v => fmt(v * 100, 1) + ' %').join(' / '),
           result.pointCounts.join(' / '),
-        ]]) + notices(result.warnings)
+        ]]) + notices(result.warnings) + (result.reference ? `<p class="hint">依据：<a href="${result.reference.url}" target="_blank" rel="noopener">ITU-T HSTP-VID-WPOM §7.2–7.4</a>；${esc(result.reference.numericalReference)}。${esc(result.rateDomain)}。</p>` + raw({measurement:result.measurement,components:result.componentMeans},"BD-rate 测量依据与 Y/U/V 均值") : notices(["探索模式使用原报告汇总指标，不声明符合参考 PSNR-Y 测量口径。"]))
       : notices(['BD-rate 不可计算：' + result.reason]);
   };
   $("#bd-test").value = groups.length > 1 ? '1' : '0';
-  for (const id of ['#bd-anchor', '#bd-test', '#bd-metric']) $(id).onchange = updateBdRate;
+  const savedBd = r.bdRateComparisons?.[0];
+  if (savedBd) {
+    $("#bd-profile").value = savedBd.profile;
+    $("#bd-metric").value = savedBd.metric;
+    $("#bd-anchor").value = String(groups.indexOf(savedBd.anchor));
+    $("#bd-test").value = String(groups.indexOf(savedBd.test));
+  }
+  for (const id of ['#bd-anchor', '#bd-test', '#bd-metric', '#bd-profile']) $(id).onchange = updateBdRate;
+  $("#bd-export").onclick = () => {
+    try {
+      const anchor=groups[Number($("#bd-anchor").value)], test=groups[Number($("#bd-test").value)],
+        metric=$("#bd-metric").value, profile=$("#bd-profile").value,
+        result=trialBdRate(rows,anchor,test,metric,profile);
+      if (!result.ok) throw Error(result.reason);
+      downloadPortable([{entryId:"bd-rate",report:{...r,bdRateComparisons:[{anchor,test,metric,profile,result}]}}],[]);
+    } catch(e) {message(e.message,true);}
+  };
   updateBdRate();
   const drawSamples = () => {
     $("#trial-sample-table").innerHTML = table(

@@ -106,6 +106,12 @@
       "bytes": 27316,
       "sha256": "84557e030e302fa14e28a1cd1227f3320986050c4cf5f5f4d590215971329873",
       "url": "https://raw.githubusercontent.com/Gavin-530/MediaScope/0f0f77e33e7156294c7313101cb50d7795c6e2a5/test/reference/siti/vqeg-reference.py"
+    },
+    {
+      "path": "bd-rate/JVET-O0003-v1.zip",
+      "bytes": 934995,
+      "sha256": "2aeb260b44b7dfc18837084b12dea0d555d5873fd3f171aeb0ae4fb12be447c8",
+      "url": "https://www.itu.int/wftp3/av-arch/jvet-site/2019_07_O_Gothenburg/documents/JVET-O0003-v1.zip"
     }
   ]
 }

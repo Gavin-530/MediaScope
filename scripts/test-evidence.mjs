@@ -9,6 +9,7 @@ export function measurementFile(relative) {
   if(/^(metrics-equivalence|reference-cache|vfr-equivalence|structure-equivalence|siti-parallel|siti-gpu|siti-p910|bitrate-equivalence|vmaf-official)-[A-Za-z0-9]{6}$/.test(top))return name.endsWith('.json');
   if(['browser','server-reports','chroma-assumption','portable','report-validation'].includes(top))return name==='report.json'||/^theme-.*\.json$/.test(name)||name==='sidebar-links.json';
   if(['trials-expanded','chart-model'].includes(top))return name==='measured-trial.json';
+  if(top==='bd-reference')return ['bd-reference.json','bd-measurement.json','bd-trial-report.json'].includes(name);
   if(top==='startup-desktop')return ['cache-result.json','page-timing.json'].includes(name);
   if(top==='runtime-data')return /^measured-.*\.json$/.test(name);
   if(top==='basic-properties')return name==='measured-properties.json';
@@ -16,6 +17,12 @@ export function measurementFile(relative) {
 }
 
 export const criticalMeasurements = [
+  {testName:'[bd-rate] exact integer pixel oracle 8-bit tv: frame mean, peak, zero MSE and bitstream bytes',pathPattern:/^bd-reference\/known-8-tv-false-[A-Za-z0-9]{6}\/bd-measurement\.json$/},
+  {testName:'[bd-rate] exact integer pixel oracle 8-bit pc: frame mean, peak, zero MSE and bitstream bytes',pathPattern:/^bd-reference\/known-8-pc-false-[A-Za-z0-9]{6}\/bd-measurement\.json$/},
+  {testName:'[bd-rate] exact integer pixel oracle 10-bit tv: frame mean, peak, zero MSE and bitstream bytes',pathPattern:/^bd-reference\/known-10-tv-false-[A-Za-z0-9]{6}\/bd-measurement\.json$/},
+  {testName:'[bd-rate] exact integer pixel oracle 10-bit pc: frame mean, peak, zero MSE and bitstream bytes',pathPattern:/^bd-reference\/known-10-pc-false-[A-Za-z0-9]{6}\/bd-measurement\.json$/},
+  {testName:'[bd-rate] 801 original JVET workbook cells: 780 numerical answers and 21 original errors',pathPattern:/^bd-reference\/jvet-[A-Za-z0-9]{6}\/bd-reference\.json$/},
+  {testName:'[bd-rate] real SDR trial, strict adapter, legacy compatibility and tamper-detecting JSON round trip',pathPattern:/^bd-reference\/trial-[A-Za-z0-9]{6}\/bd-trial-report\.json$/},
   {testName:'[analysis-limits] SI/TI really decodes the 8192x4320 boundary and matches analytic PQ edge statistics',pathPattern:/^siti-p910-[A-Za-z0-9]{6}\/8k-boundary\.json$/},
   {testName:'[analysis-limits] SI/TI processes two million real frames and saves every result without one giant JSON string',pathPattern:/^siti-p910-[A-Za-z0-9]{6}\/two-million-boundary\.json$/},
   {testName:'GPU SI/TI hardware measures real 8192x4320 frames against analytic values and CPU',pathPattern:/^siti-gpu-[A-Za-z0-9]{6}\/8k-boundary\.json$/},

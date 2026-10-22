@@ -638,6 +638,8 @@ scenario('[bd-rate] changed presets distinguish the displayed single-group repor
   assert.equal(await page.locator('#bd-anchor option').count(),2);
   assert.match(await page.locator('#bd-report-context').innerText(),/2 条曲线，4 个采样点/);
   assert.equal(await page.locator('#bd-report-context .notice').count(),0);
+  assert.match(await page.locator('#bd-result').innerText(),/至少需要 4 个/);
+  await page.locator('#bd-profile').selectOption('exploratory');
   assert.equal(await page.locator('#bd-result tbody tr').count(),1);
   await writeFile(path.join(dir,'report.json'),JSON.stringify({initial:initial.report,completed}));
   await page.locator('#bd-result').locator('..').screenshot({path:path.join(dir,'bd-report-context.png')});
@@ -653,9 +655,10 @@ scenario('[bd-rate] real trial curves calculate all three metrics, reverse basel
   await writeFile(path.join(dir,'report.json'),JSON.stringify(report));
   const groups=[...new Set(report.rows.map(rowLabel))];assert.equal(groups.length,2);
   const check=async(metric,a=0,b=1)=>{
+    await page.locator('#bd-profile').selectOption('exploratory');
     await page.locator('#bd-anchor').selectOption(String(a));await page.locator('#bd-test').selectOption(String(b));
     await page.locator('#bd-metric').selectOption(metric);
-    const result=trialBdRate(report.rows,groups[a],groups[b],metric);
+    const result=trialBdRate(report.rows,groups[a],groups[b],metric,'exploratory');
     assert.equal(result.ok,true,JSON.stringify(result));
     const cells=page.locator('#bd-result tbody td');
     assert.equal(await cells.first().innerText(),`${result.percent>0?'+':''}${result.percent.toLocaleString('zh-CN',{maximumFractionDigits:3})} %`);
@@ -684,7 +687,38 @@ scenario('[bd-rate] real trial curves calculate all three metrics, reverse basel
     await page.locator('#bd-result').locator('..').screenshot({path:path.join(sparseDir,'bd-rate.png')});
   }
   await page.locator('#trial-crfs').fill('24');
-  await runTask(page,app,'#trial');assert.match(await page.locator('#bd-result').innerText(),/至少需要 2 个/);
+  await runTask(page,app,'#trial');assert.match(await page.locator('#bd-result').innerText(),/至少需要 4 个/);
+  await page.locator('#bd-profile').selectOption('exploratory');assert.match(await page.locator('#bd-result').innerText(),/至少需要 2 个/);
+});
+
+scenario('[bd-rate] reference mode uses measured Y and elementary bitrate, exports a recomputable comparison and refuses sparse input',async({page,app,dir})=>{
+  await page.locator('[data-mode="trial"]').click();await page.locator('#trial-file').fill(media.source);
+  await page.locator('#trial-duration').fill('1');await page.locator('#trial-encoder').selectOption('libx264');
+  await page.locator('[name="trial-preset"][value="medium"]').uncheck();
+  for(const preset of ['ultrafast','fast'])await page.locator('[name="trial-preset"][value="'+preset+'"]').check();
+  await page.locator('#trial-crfs').fill('18,24,30,36');
+  const {report}=await runTask(page,app,'#trial');
+  const groups=[...new Set(report.rows.map(rowLabel))],expected=trialBdRate(report.rows,groups[0],groups[1],'psnr');
+  assert.equal(expected.ok,true,JSON.stringify(expected));
+  assert.equal(await page.locator('#bd-profile').inputValue(),'reference');
+  assert.match(await page.locator('#bd-result').innerText(),/PSNR-Y 帧算术均值/);
+  assert.match(await page.locator('#bd-result').innerText(),/基本码流/);
+  assert.equal(await page.locator('#bd-plot canvas').count(),1);
+  assert.match(await page.locator('#bd-plot-note').innerText(),/PSNR-Y 帧均值/);
+  const exported=await download(page,'#bd-export',path.join(dir,'bd-reference.json'));
+  const saved=exported.results[0].report.bdRateComparisons[0];assert.deepEqual(saved.result,expected);
+  assert.equal(saved.profile,'reference');
+  await importReport(page,path.join(dir,'bd-reference.json'));
+  assert.equal(await page.locator('#bd-profile').inputValue(),'reference');
+  assert.equal(await page.locator('#bd-export').isEnabled(),true);
+  await page.locator('#bd-anchor').selectOption('1');await page.locator('#bd-test').selectOption('0');
+  const reverse=trialBdRate(report.rows,groups[1],groups[0],'psnr');
+  assert.equal(await page.locator('#bd-result tbody td').first().innerText(),(reverse.percent>0?'+':'')+reverse.percent.toLocaleString('zh-CN',{maximumFractionDigits:3})+' %');
+  await page.locator('#bd-result').locator('..').screenshot({path:path.join(dir,'bd-reference.png')});
+  await page.locator('#trial-crfs').fill('18,27,36');await runTask(page,app,'#trial');
+  assert.match(await page.locator('#bd-result').innerText(),/至少需要 4 个/);
+  assert.equal(await page.locator('#bd-export').isEnabled(),false);
+  await writeFile(path.join(dir,'report.json'),JSON.stringify(report));
 });
 
 scenario('[packet-distribution] actual audio packets, optional rates and frame axes survive export/import with legacy fallback',async({page,app,dir})=>{
