@@ -153,7 +153,9 @@ export async function measureBdPoint(reference, candidate, stream, comparison, s
   for(const c of Object.values(components)) {c.mean=bdMean(c.sse.map(s=>bdPsnr(s,c.samples,peak)));c.zeroFrames=c.sse.filter(s=>s===0).length;}
   const codec=comparison.candidate.raw.streams.find(s=>s.codec_type==='video').codec_name;
   const format=codec==='av1'?'obu':codec, frameRate=bdFrameRate(stream,segment);
-  const scratch=await mkdtemp(path.join(ctx.cwd,'bd-bitstream-'));
+  // Windows mkdtemp can reject a long ordinary path even when its parent exists.
+  const scratchRoot=path.toNamespacedPath(path.resolve(ctx.cwd));
+  const scratch=await mkdtemp(path.join(scratchRoot,'bd-bitstream-'));
   let rate;
   try {
     const file=path.join(scratch,'point.'+format);
@@ -163,7 +165,7 @@ export async function measureBdPoint(reference, candidate, stream, comparison, s
     rate={codec,format:codec==='av1'?'low-overhead OBU':'Annex B',...evidence,
       frames,...frameRate,duration:frames/fps,kbps:evidence.bytes*8*fps/frames/1000,checksumPolicy:'reject-decoded-picture-hash'};
   } finally {
-    if (!path.resolve(scratch).startsWith(path.resolve(ctx.cwd)+path.sep)) throw Error('BD-rate 临时目录越界');
+    if (!path.resolve(scratch).startsWith(scratchRoot+path.sep)) throw Error('BD-rate 临时目录越界');
     await rm(scratch,{recursive:true,force:true});
   }
   await assertSegmentUnchanged(segment);

@@ -19,6 +19,19 @@ const root=path.resolve('.build/testing-work/bd-reference');
 const close=(a,b,tol=1e-10)=>assert.ok(Math.abs(a-b)<=tol,`${a} != ${b}`);
 const colors=['-color_range','tv','-color_primaries','bt709','-color_trc','bt709','-colorspace','bt709','-chroma_sample_location','left'];
 async function context(name){await mkdir(root,{recursive:true});return {cwd:await mkdtemp(path.join(root,name+'-')),commands:[],update:()=>{}};}
+async function longMeasurementContext(ctx,minimumLength){
+  let cwd=path.join(ctx.cwd,`long-${minimumLength}`);
+  const targetLength=Math.max(minimumLength,cwd.length+32);
+  while(cwd.length<targetLength){
+    const remaining=targetLength-cwd.length;
+    if(remaining===1){cwd+='p';continue;}
+    cwd=path.join(cwd,'p'.repeat(Math.min(40,remaining-1)));
+  }
+  assert.ok(cwd.startsWith(ctx.cwd+path.sep));
+  await mkdir(cwd,{recursive:true});
+  await writeFile(path.join(cwd,'control.txt'),'preserve');
+  return {...ctx,cwd};
+}
 
 test('[bd-rate] 801 original JVET workbook cells: 780 numerical answers and 21 original errors',async()=>{
   const cases=jvetCases(await fixtures.read('bd-rate/JVET-O0003-v1.zip'));
@@ -90,6 +103,20 @@ for(const depth of [8,10])for(const range of ['tv','pc'])
   test(`[bd-rate] exact integer pixel oracle ${depth}-bit ${range}: frame mean, peak, zero MSE and bitstream bytes`,()=>knownPixels(depth,range));
 test('[bd-rate] chroma-only damage retains perfect Y and independent U/V errors',()=>knownPixels(10,'tv',true));
 
+test('[bd-rate] long measurement directories preserve exact results and clean only their scratch files',async()=>{
+  for(const depth of [8,10]){
+    const k=await knownPixels(depth);
+    // Match CI's 246-character parent (266-character temporary directory).
+    for(const minimumLength of [230,246]){
+      const longCtx=await longMeasurementContext(k.ctx,minimumLength),{cwd}=longCtx;
+      const measured=await measureBdPoint(k.ref,k.encoded,k.stream,k.comparison,k.segment,longCtx);
+      assert.deepEqual(measured,k.measured);
+      assert.equal(await readFile(path.join(cwd,'control.txt'),'utf8'),'preserve');
+      assert.deepEqual(await readdir(cwd),['control.txt']);
+    }
+  }
+});
+
 for(const encoder of ['libx265','libaom-av1'])for(const depth of [8,10])
 test(`[bd-rate] ${encoder} ${depth}-bit actual trial matches independent decoded integer SSE and elementary bytes`,async()=>{
   const ctx=await context(`codec-${encoder}-${depth}`),source=path.join(ctx.cwd,'source.mkv'),pix=depth===8?'yuv420p':'yuv420p10le';
@@ -131,8 +158,10 @@ test('[bd-rate] HEVC decoded-picture-hash is rejected and scratch data is cleane
   const k=await knownPixels(10),file=path.join(k.ctx.cwd,'checksum.mkv');
   await run(FF,['-v','error','-i',k.ref,'-c:v','libx265','-preset','ultrafast','-x265-params','lossless=1:hash=1:log-level=error:pools=1',...colors,file],k.ctx);
   const comparison=await compare(k.ref,file,0,0,['psnr'],{...k.ctx,referenceSegment:k.segment});
-  await assert.rejects(()=>measureBdPoint(k.ref,file,k.stream,comparison,k.segment,k.ctx),/decoded_picture_hash/);
-  assert.ok(!(await readdir(k.ctx.cwd)).some(f=>f.startsWith('bd-bitstream-')));
+  const longCtx=await longMeasurementContext(k.ctx,246);
+  await assert.rejects(()=>measureBdPoint(k.ref,file,k.stream,comparison,k.segment,longCtx),/decoded_picture_hash/);
+  assert.equal(await readFile(path.join(longCtx.cwd,'control.txt'),'utf8'),'preserve');
+  assert.deepEqual(await readdir(longCtx.cwd),['control.txt']);
 });
 
 test('[bd-rate] unsupported metadata, cross-depth, VFR and cancellation cannot become reference results',async()=>{
