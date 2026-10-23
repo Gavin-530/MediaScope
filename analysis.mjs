@@ -1,4 +1,5 @@
 import {measureSiti} from './siti.mjs';
+import {measureBdPoint} from './bd-measure.mjs';
 import {validateSitiSettings,distribution,sitiSceneSummary,validateSitiSceneStarts} from './public/siti.js';
 export {distribution} from './public/siti.js';
 import {createBitrateAccumulator} from './public/bitrate-model.js';
@@ -254,7 +255,17 @@ export async function trial(input,ctx){
       const metricDir=path.join(ctx.cwd,'metrics-'+id);await mkdir(metricDir,{recursive:true});
       ctx.update({stage,detail:`核验并测量编码点 ${point} / ${options.points}`,phaseIndex:point+2,phaseCount,completed:0,total:refFrames.length,unit:'帧'});
       const comparison=await compare(qualityReference,output,native?s.index:0,0,metrics,{...ctx,cwd:metricDir,referenceSegment:native?segment:undefined,expectedCandidatePixelFormat:pix},depthMode==='both'?'bt709-limited-8-10':'native'),p=(await allPackets(output,comparison.candidate.raw.streams,ctx))[0];
-      rows.push({id,crf,encoder,preset,bitDepth:depth,pixelFormat:pix,settings:opts,encodeSeconds:elapsed,encodeFps:refFrames.length/elapsed,videoBytes:p.bytes,videoMbps:p.averageMbps,metrics:comparison.metrics,alignment:comparison.alignment,normalization:comparison.normalization,skippedMetrics:comparison.skippedMetrics,warnings:comparison.warnings});
+      let bdRateMeasurement;
+      if(metrics.includes('psnr')) {
+        try {bdRateMeasurement=await measureBdPoint(qualityReference,output,s,comparison,segment,{...ctx,cwd:metricDir});}
+        catch(e) {
+          if(ctx.signal?.aborted)throw e;
+          // Preserve the existing trial measurements; the reference BD-rate path
+          // refuses this point and exposes its reason instead of substituting pooled PSNR.
+          bdRateMeasurement={version:1,status:'unavailable',reason:e.message};
+        }
+      }
+      rows.push({id,crf,encoder,preset,bitDepth:depth,pixelFormat:pix,settings:opts,encodeSeconds:elapsed,encodeFps:refFrames.length/elapsed,videoBytes:p.bytes,videoMbps:p.averageMbps,metrics:comparison.metrics,alignment:comparison.alignment,normalization:comparison.normalization,skippedMetrics:comparison.skippedMetrics,warnings:comparison.warnings,...(bdRateMeasurement?{bdRateMeasurement}:{})});
       ctx.update({stage,detail:`编码点 ${point} / ${options.points} 已完成`,phaseIndex:point+2,phaseCount,completed:1,total:1,unit:'个编码点'});
     }
     if(input.keepFiles===true)retained=true;

@@ -1,12 +1,15 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {bdRate} from '../public/bd-rate.js';
-import {trialBdRate,rowLabel} from '../public/trial-model.js';
+import {trialBdRate as calculateTrialBdRate,rowLabel} from '../public/trial-model.js';
+import {bdNumericAcceptance} from './helpers/bd-precision.mjs';
 
 // Explicit mathematical vectors, not measured media. Nonlinear reference answers
 // were independently evaluated with SciPy 1.17.1 PchipInterpolator.integrate.
+// Existing report-metric adapter is explicitly exploratory.
+const trialBdRate = (...args) => calculateTrialBdRate(...args, 'exploratory');
 const points = (qualities, rates) => qualities.map((quality, i) => ({quality, rate: rates[i]}));
-const close = (a, b) => assert.ok(Math.abs(a - b) < 1e-9, `${a} differs from ${b}`);
+const close = (a, b) => assert.ok(Math.abs(a - b) <= bdNumericAcceptance.absolutePercentagePoints, `${a} differs from ${b}`);
 const linear = [30, 32, 35, 40].map(quality => ({quality, rate: Math.exp(quality / 10)}));
 test('[bd-rate] identical, proportional and reversed curves obey analytic results without mutation', () => {
   const anchor = structuredClone(linear), test = anchor.map(p => ({...p, rate: p.rate * .8}));

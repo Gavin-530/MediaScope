@@ -69,7 +69,14 @@ test('[test-system] successful critical checks require retained measurement data
     await assert.rejects(saveMeasurements(work,work,{requiredMeasurements:criticalMeasurements}),/Missing critical measurement evidence/);
     await fs.writeFile(path.join(p910,name),JSON.stringify({fixture:'evidence protocol only',outcome:'passed'}));
   }
-  assert.equal((await saveMeasurements(work,work,{requiredMeasurements:criticalMeasurements})).measurements,10);
+  // Explicit protocol fixtures only; these do not stand in for product measurements.
+  for(const name of ['jvet-Ab1234/bd-reference.json','trial-Ab1234/bd-trial-report.json',
+    ...[8,10].flatMap(depth=>['tv','pc'].map(range=>'known-'+depth+'-'+range+'-false-Ab1234/bd-measurement.json'))]){
+    await assert.rejects(saveMeasurements(work,work,{requiredMeasurements:criticalMeasurements}),/Missing critical measurement evidence/);
+    const file=path.join(work,'bd-reference',name);await fs.mkdir(path.dirname(file),{recursive:true});
+    await fs.writeFile(file,JSON.stringify({fixture:'BD-rate evidence protocol only',outcome:'passed'}));
+  }
+  assert.equal((await saveMeasurements(work,work,{requiredMeasurements:criticalMeasurements})).measurements,16);
  } finally {assert.ok(work.startsWith(path.resolve('.build/testing-work')+path.sep));await fs.rm(work,{recursive:true,force:true})}
 });
 

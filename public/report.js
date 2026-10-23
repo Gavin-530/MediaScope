@@ -4,6 +4,8 @@ import {vmafModel,parseVmafLog,vmafConfiguration,vmafInputReason} from './vmaf.j
 import {parseMetricSummary} from './metric-summary.js';
 import {validateSitiSceneResult,validateSitiConfiguration,validateSitiAttempts} from './siti.js';
 import {MAX_ANALYSIS_FRAMES} from './analysis-limits.js';
+import {validateBdMeasurement,sameBdResult} from './bd-reference.js';
+import {trialBdRate} from './trial-model.js';
 // Validate the saved data without normalizing, rounding or discarding evidence.
 export function parseReport(text) {
   let r;
@@ -380,6 +382,35 @@ export function validateReport(r) {
     objects(r.rows, "rows");
     if (!r.rows.length) fail("rows");
     r.rows.forEach((x) => metrics(x.metrics, "rows.metrics", false, x.normalization));
+    for(const row of r.rows) if(row.bdRateMeasurement!==undefined) {
+      const m=row.bdRateMeasurement;
+      if(m?.status==='unavailable') {
+        if(m.version!==1||typeof m.reason!=='string'||!m.reason.length)fail('rows.bdRateMeasurement.reason');
+      } else {
+        validateBdMeasurement(m,r.experiment.actualFrames);
+        if(row.alignment?.pairing!=='strict'||row.alignment.frames!==m.frames||row.normalization?.crossDepth||
+          row.pixelFormat!==m.input.pixelFormat||row.bitDepth!==(m.input.pixelFormat==='yuv420p10le'?10:8))fail('rows.bdRateMeasurement / row');
+        const source=r.source.raw?.streams?.find(s=>s.index===r.stream),p=m.input,
+          mapping={width:'width',height:'height',pixelFormat:'pix_fmt',range:'color_range',primaries:'color_primaries',transfer:'color_transfer',matrix:'color_space',chromaLocation:'chroma_location'};
+        if(!source||r.experiment.depthMode!=='native'||Object.entries(mapping).some(([k,v])=>p[k]!==source[v])||
+          m.rate.frameRate!==source.r_frame_rate||row.normalization?.metadataGaps?.length!==0||
+          ({libx264:'h264',libx265:'hevc','libaom-av1':'av1'})[row.encoder]!==m.rate.codec)fail('rows.bdRateMeasurement / source');
+        const [n,d]=m.rate.frameRate.split('/').map(Number),times=r.experiment.frameTimes,
+          tick=r.experiment.preparation?.selection?.timeBase;
+        if(!Array.isArray(times)||times.length!==m.frames||!Number.isFinite(tick)||tick<=0||
+          m.rate.timestampToleranceSeconds!==Math.max(tick,1e-6)+1e-6||
+          m.rate.maxTimestampErrorSeconds!==times.reduce((max,t,i)=>Math.max(max,Math.abs(t-i/(n/d))),0))fail('rows.bdRateMeasurement / experiment.frameTimes');
+      }
+    }
+    if(r.bdRateComparisons!==undefined) {
+      arr(r.bdRateComparisons,'bdRateComparisons');
+      if(!r.bdRateComparisons.length||r.bdRateComparisons.length>64)fail('bdRateComparisons.length');
+      for(const saved of r.bdRateComparisons) {
+        if(!saved||!['reference','exploratory'].includes(saved.profile))fail('bdRateComparisons.profile');
+        const result=trialBdRate(r.rows,saved.anchor,saved.test,saved.metric,saved.profile);
+        if(!result.ok||!sameBdResult(saved.result,result))fail('bdRateComparisons.result / 复算不一致');
+      }
+    }
     if (r.experiment.actualFrames !== undefined) {
       index(r.experiment.actualFrames, "experiment.actualFrames");
       for (const row of r.rows)

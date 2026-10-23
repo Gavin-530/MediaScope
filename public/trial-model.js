@@ -1,6 +1,7 @@
 import {bdRate} from "./bd-rate.js";
+import {referenceBdRate} from './bd-trial.js';
 
-export function trialBdRate(rows, anchor, test, metric) {
+export function trialBdRate(rows, anchor, test, metric, profile = 'reference') {
   if (!['psnr', 'ssim', 'vmaf'].includes(metric))
     return {ok: false, reason: '请选择已测量的质量指标。'};
   if (!anchor || !test || anchor === test) {
@@ -10,6 +11,8 @@ export function trialBdRate(rows, anchor, test, metric) {
       : '请选择两个不同的位深 / preset 组；当前基准组与对比组相同。'};
   }
   const selected = [anchor, test].map(group => rows.filter(row => rowLabel(row) === group));
+  if(profile === 'reference') return referenceBdRate(selected,anchor,test,metric);
+  if(profile !== 'exploratory') return {ok:false,reason:'BD-rate 模式无效。'};
   if (metric === 'vmaf') {
     const models = selected.flat().map(row => row.metrics?.vmaf?.model);
     if (models.some(model => !model) || new Set(models).size !== 1)
@@ -23,7 +26,7 @@ export function trialBdRate(rows, anchor, test, metric) {
     rate: row.videoMbps,
     quality: metric === 'ssim' ? -10 * Math.log10(1 - row.metrics.ssim.pooled) : row.metrics?.[metric]?.pooled,
   }))));
-  return {...result, metric, qualityDomain: metric === 'ssim' ? 'SSIM dB = −10·log10(1−SSIM)' : metric === 'psnr' ? 'PSNR / dB' : 'VMAF / 原始模型分数'};
+  return {...result, metric, profile:'exploratory', qualityDomain: metric === 'ssim' ? 'SSIM dB = −10·log10(1−SSIM)' : metric === 'psnr' ? 'PSNR（全分量 MSE 汇总）/ dB' : 'VMAF / 原始模型分数'};
 }
 
 export function parseCrfs(text) {

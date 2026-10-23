@@ -94,7 +94,12 @@ test('API protects local data and returns a reproducible in-memory report',async
  assert.equal(wire.results[0].report.frames.count,report.frames.length);assert.equal(wire.results[0].report.packets,undefined);
  assert.deepEqual(parsePortable(fileText).results[0].report,report);
  const rawResponse=await fetch(base+`/api/jobs/${job.id}/report`,{headers:{'x-mediascope-token':token}});
- assert.deepEqual(await rawResponse.json(),wire);
+ // Each export has its own outer creation time; the measured report is immutable.
+ const freshWire=await rawResponse.json();
+ assert.ok(Number.isFinite(Date.parse(freshWire.createdAt)));
+ assert.ok(Date.parse(freshWire.createdAt)>=Date.parse(wire.createdAt));
+ assert.deepEqual({...freshWire,createdAt:wire.createdAt},wire);
+ assert.deepEqual(parsePortable(JSON.stringify(freshWire)).results[0].report,report);
  const concurrent=report.timing.stages.filter(s=>s.concurrentGroup);assert.equal(concurrent.length,2);assert.equal(new Set(concurrent.map(s=>s.concurrentGroup)).size,1);assert.ok(report.timing.decodeThreads>=1&&report.timing.decodeThreads<=12);
  assert.deepEqual(status.timing,report.timing,'result list metadata preserves recorded task and stage timing');
 });
