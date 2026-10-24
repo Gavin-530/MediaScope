@@ -102,4 +102,6 @@ npm run test:commits
 
 默认检查基线 `fc648355fcc12e1a07003fd75746cedf8a73bdba` 之后的提交；该基线及其祖先（36 条）按确切 SHA 豁免，旧分支新增提交不豁免。`--file` 只检查说明格式，不验证尚未创建的提交版本。退出码 `0` 为检查通过（可能没有新提交），`1` 为不合格，`2` 为参数、事件或 Git 对象缺失；浅克隆须补齐所需历史。
 
+普通 push 检查事件的 `before..after` 范围；新建分支和 GitHub 明确标记 `forced: true` 的 push 检查固定基线之后的全部目标历史。强推前的旧提交可能已不在新克隆中，不能依赖它确定范围；完整历史检查仍逐项验证提交，豁免边界保持不变。其他事件或所需基线/目标对象缺失时继续以退出码 `2` 阻塞，不把缺失当作通过。事件标记依据 [GitHub push 事件定义](https://docs.github.com/en/webhooks/webhook-events-and-payloads#push)。
+
 [Commit messages 工作流](../.github/workflows/commit-messages.yml) 在推送、PR、合并队列和手动执行时检查新增提交，PR 另检查标题。它读取事件 JSON，不把标题插入 shell。修改推送后才生效，管理员还须配置必需分支检查；格式检查不运行产品回归，也不自动发布。

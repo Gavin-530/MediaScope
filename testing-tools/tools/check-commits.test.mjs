@@ -56,6 +56,8 @@ test('release versions are checked when snapshot identity is available', () => {
 test('selects push, new branch, PR, merge queue, manual and deleted-ref ranges', () => {
   assert.deepEqual(eventRange({before: 'a', after: 'b'}, 'push', 'base'), {base: 'a', head: 'b'});
   assert.deepEqual(eventRange({before: '0'.repeat(40), after: 'b'}, 'push', 'base'), {base: 'base', head: 'b'});
+  assert.deepEqual(eventRange({before: 'a', after: 'b', forced: true}, 'push', 'base'), {base: 'base', head: 'b'});
+  assert.deepEqual(eventRange({before: 'a', after: 'b', forced: false}, 'push', 'base'), {base: 'a', head: 'b'});
   const title = 'fix(ui): display a literal $(echo example)';
   assert.deepEqual(eventRange({pull_request: {base: {sha: 'a'}, head: {sha: 'b'}, title}}, 'pull_request'), {base: 'a', head: 'b', title});
   assert.deepEqual(eventRange({merge_group: {base_sha: 'a', head_sha: 'b'}}, 'merge_group'), {base: 'a', head: 'b'});
@@ -103,6 +105,28 @@ test('exempts the exact old history and detects new malformed commits on an olde
   const result = checkHistory({repo: f.repo, base: oldTip, head: bad, policyBase: oldTip});
   assert.equal(result.checked, 1);
   assert.equal(result.failures[0].commit, bad.slice(0, 7));
+});
+
+test('force pushes check complete eligible history when the old tip is absent from a fresh clone', t => {
+  const f = fixture(t);
+  const before = f.commit('fix: original branch tip');
+  f.git('checkout', '--quiet', '-B', 'main', f.policyBase);
+  const good = f.commit('fix: rewritten branch tip');
+  const bad = f.commit('Invalid rewritten title');
+  const clone = temporaryDirectory(t);
+  f.git('clone', '--quiet', '--no-local', '--single-branch', '--branch', 'main', f.repo, clone);
+  const missing = spawnSync('git', ['-C', clone, 'cat-file', '-e', `${before}^{commit}`],
+    {encoding: 'utf8', windowsHide: true});
+  assert.notEqual(missing.status, 0, 'The fixture must exclude the unreachable old tip.');
+
+  const check = (after, forced) => checkHistory({repo: clone, policyBase: f.policyBase,
+    ...eventRange({before, after, forced}, 'push', f.policyBase)});
+  assert.deepEqual(check(good, true), {checked: 1, titleChecked: false, failures: []});
+  const result = check(bad, true);
+  assert.equal(result.checked, 2);
+  assert.equal(result.failures.length, 1);
+  assert.equal(result.failures[0].commit, bad.slice(0, 7));
+  assert.throws(() => check(good, false), /Command failed/);
 });
 
 test('checks every commit snapshot version and lockfile, rather than only the current version', t => {

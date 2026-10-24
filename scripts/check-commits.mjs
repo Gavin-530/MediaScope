@@ -54,7 +54,10 @@ export function eventRange(event, eventName, policyBase = baseline) {
   if (eventName === 'workflow_dispatch') return {base: policyBase, head: 'HEAD'};
   if (event.deleted === true) return {deleted: true};
   if (typeof event.before === 'string' && typeof event.after === 'string') {
-    return {base: /^0+$/.test(event.before) ? policyBase : event.before, head: event.after};
+    // A force-push may leave before unreachable in a fresh clone. Validate the
+    // complete eligible history instead; the exact policy exemption is unchanged.
+    const base = event.forced === true || /^0+$/.test(event.before) ? policyBase : event.before;
+    return {base, head: event.after};
   }
   throw Error('Unsupported or incomplete GitHub event; cannot determine the commit range.');
 }
