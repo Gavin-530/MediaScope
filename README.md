@@ -145,7 +145,7 @@ SDR 和逆 sRGB 按固定上游归一化 EOTF 后仿射映射至 300 / 0.1 cd/m�
 
 ## 参与开发
 
-[贡献与提交规范](docs/contributing.md)说明提交标题、PR 审查与验证表述的要求。测试和发布分别遵循[测试规范](docs/testing.md)与[发布规范](docs/releasing.md)。长期维护的自动验证程序集中在[测试工具目录](testing-tools/README.md)，素材缓存和运行产物不进入该目录或 Git。
+[贡献与提交规范](docs/contributing.md)说明提交标题、按风险选择分支或直接推送、主线合入、PR 审阅与验证表述的要求。测试和发布分别遵循[测试规范](docs/testing.md)与[发布规范](docs/releasing.md)。长期维护的自动验证程序集中在[测试工具目录](testing-tools/README.md)，素材缓存和运行产物不进入该目录或 Git。
 
 ## 参考
 
