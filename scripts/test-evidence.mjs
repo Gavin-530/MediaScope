@@ -6,7 +6,7 @@ import {gzipSync} from 'node:zlib';
 export function measurementFile(relative) {
   const name=path.posix.basename(relative),top=relative.split('/')[0];
   if(/^(psnr|ssim|vmaf)\.(log|json)$/.test(name)&&(!relative.includes('/')||['bitdepth','trial','trial-libx265','trial-libaom-av1'].includes(top)))return true;
-  if(/^(metrics-equivalence|reference-cache|vfr-equivalence|structure-equivalence|siti-parallel|siti-gpu|siti-p910|bitrate-equivalence|vmaf-official)-[A-Za-z0-9]{6}$/.test(top))return name.endsWith('.json');
+  if(/^(metrics-equivalence|reference-cache|vfr-equivalence|structure-equivalence|siti-parallel|siti-gpu|siti-p910|bitrate-equivalence|vmaf-official|repeat-analysis)-[A-Za-z0-9]{6}$/.test(top))return name.endsWith('.json');
   if(['browser','server-reports','chroma-assumption','portable','report-validation'].includes(top))return name==='report.json'||/^theme-.*\.json$/.test(name)||name==='sidebar-links.json';
   if(['trials-expanded','chart-model'].includes(top))return name==='measured-trial.json';
   if(top==='bd-reference')return ['bd-reference.json','bd-measurement.json','bd-trial-report.json'].includes(name);
@@ -17,6 +17,13 @@ export function measurementFile(relative) {
 }
 
 export const criticalMeasurements = [
+  {testName:'[repeat-analysis] native integer layouts preserve every plane, alpha, edge and LSB against independent known bytes',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/native-layouts\.json$/},
+  {testName:'[repeat-analysis] original PTS, offset and VFR holds agree with separate FFprobe integer evidence',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/timestamps\.json$/},
+  {testName:'[repeat-analysis] missing source PTS never borrows generated framehash timestamps',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/missing-pts\.json$/},
+  {testName:'[repeat-analysis] freezedetect metadata matches upstream events and preserves open EOF in native 8, 10, 12, 16-bit and alpha',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/freeze\.json$/},
+  {testName:'[repeat-analysis] P010 P012 P016 native raw paths match official hashes and reject non-sample bits without a container claim',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/semiplanar-raw\.json$/},
+  {testName:'[repeat-analysis] closed and open freeze events reproduce upstream strings, event frames and durations',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/closed-freeze\.json$/},
+  {testName:'[repeat-analysis] bad padding, truncated decode, unsupported representation and mid-process cancel cannot succeed',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/failure-boundaries\.json$/},
   {testName:'[bd-rate] exact integer pixel oracle 8-bit tv: frame mean, peak, zero MSE and bitstream bytes',pathPattern:/^bd-reference\/known-8-tv-false-[A-Za-z0-9]{6}\/bd-measurement\.json$/},
   {testName:'[bd-rate] exact integer pixel oracle 8-bit pc: frame mean, peak, zero MSE and bitstream bytes',pathPattern:/^bd-reference\/known-8-pc-false-[A-Za-z0-9]{6}\/bd-measurement\.json$/},
   {testName:'[bd-rate] exact integer pixel oracle 10-bit tv: frame mean, peak, zero MSE and bitstream bytes',pathPattern:/^bd-reference\/known-10-tv-false-[A-Za-z0-9]{6}\/bd-measurement\.json$/},
