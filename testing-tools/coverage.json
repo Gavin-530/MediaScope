@@ -1,7 +1,8 @@
 {
   "schema": 1,
   "features": [
-    {"id":"analysis-targets","purpose":"自动读取文件、独立逐帧/GOP/区间码率/SI-TI目标、设置随勾选收起、统一排队启动、七种组合只运行必要阶段及报告与计划往返","files":["testing-tools/server.test.mjs","testing-tools/browser.test.mjs"],"names":"\\[analysis-targets\\]"},
+    {"id":"repeat-analysis","purpose":"原生整数样本精确重复与区间、原始PTS有理数诊断、上游持续静止候选、指纹复核预览/显示差分、独立目标与0.4报告/计划/CSV往返","files":["testing-tools/repeat.test.mjs","testing-tools/server.test.mjs","testing-tools/browser.test.mjs"],"names":"\\[repeat-analysis\\]"},
+    {"id":"analysis-targets","purpose":"自动读取文件、独立逐帧/GOP/区间码率/SI-TI/重复帧目标、设置随勾选收起、统一排队启动、15种组合只运行必要阶段及报告与计划往返","files":["testing-tools/server.test.mjs","testing-tools/browser.test.mjs"],"names":"\\[analysis-targets\\]|\\[repeat-analysis\\]"},
     {"id":"units","purpose":"十进制容量与码率自适应、规范大小写、图轴单位稳定、原始字节提示及报告精确往返和旧字段兼容","files":["testing-tools/units.test.mjs","testing-tools/browser.test.mjs"],"names":"\\[units\\]"},
     {"id":"basic-properties","purpose":"真实多位深/采样与 RGB/灰度/透明格式、色彩/SAR/旋转/扫描/附加图像；原始证据、抽样状态、解析边界、性能观察及新旧报告浏览器往返","files":["testing-tools/basic-properties.test.mjs","testing-tools/report.test.mjs","testing-tools/browser.test.mjs"],"names":"\\[basic-properties\\]"},
     {"id":"runtime-data","purpose":"结果仅保留在本次内存、任务及退出临时文件回收、重启不恢复、主动 JSON 导出导入、旧资料和独立保存视频保护","files":["testing-tools/runtime-data.test.mjs","testing-tools/runtime-data-browser.test.mjs","testing-tools/desktop-browser.test.mjs"],"names":"\\[runtime-data\\]|owned browser opens"},

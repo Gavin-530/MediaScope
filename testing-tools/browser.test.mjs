@@ -56,6 +56,25 @@ async function importReport(page,file){
   // The async import handler clears the input only after rendering and polling finish.
   await page.waitForFunction(()=>document.querySelector('#import-report').value==='');
 }
+scenario('[repeat-analysis] independent target displays actual runs, original timing, verified preview, RGB difference and portable evidence',async({page,app,dir})=>{
+  const file=path.join(dir,'duplicates.nut');
+  await run(FF,['-v','error','-y','-f','lavfi','-i','color=size=128x96:rate=24:duration=3','-c:v','rawvideo',file]);
+  await preview(page,file);await page.locator('#frame-analysis').uncheck();
+  await page.locator('#repeat-enabled').check();assert.equal(await page.locator('#repeat-options').isVisible(),true);await page.locator('#freeze-enabled').check();
+  const {report}=await runTask(page,app,'#enqueue-analyze');assert.equal(report.repeatAnalysis.exact.duplicates,71);assert.equal(report.repeatAnalysis.exact.comparisons,71);
+  const host=page.locator('#repeat-result');assert.match(await host.textContent(),/精确重复次数/);assert.match(await host.textContent(),/N−1/);
+  assert.equal(await page.locator('#frame-plot').count(),0);assert.equal(await page.locator('#bitrate').count(),0);
+  await host.locator('[data-rows="runs"] [data-frame="0"]').click();assert.equal(await page.locator('#repeat-frame').inputValue(),'0');
+  await page.locator('#repeat-frame').fill('1');await page.locator('#repeat-preview').click();
+  await page.waitForFunction(()=>document.querySelector('#repeat-preview-images')?.querySelectorAll('img').length===2&&document.querySelector('#repeat-preview-images canvas'));
+  assert.match(await page.locator('#repeat-preview-status').textContent(),/原帧指纹已核对/);
+  const difference=await page.locator('#repeat-preview-images canvas').evaluate(c=>{const a=c.getContext('2d').getImageData(0,0,c.width,c.height).data;let max=0;for(let i=0;i<a.length;i++)if(i%4!==3)max=Math.max(max,a[i]);return max;});assert.equal(difference,0);
+  const pending=page.waitForEvent('download');await host.locator('[data-csv="runs"]').click();const csv=await pending;const csvFile=path.join(dir,'runs.csv');await csv.saveAs(csvFile);assert.match(await readFile(csvFile,'utf8'),/next-original-pts|last-ffprobe-duration|unknown/);
+  const exported=path.join(dir,'repeat-report.json');const portable=await download(page,'#inspect-export',exported);assert.deepEqual(portable.results[0].report.repeatAnalysis,report.repeatAnalysis);
+  await importReport(page,exported);assert.match(await page.locator('#repeat-result').textContent(),/精确重复次数/);
+  assert.deepEqual(await page.locator('#repeat-result [data-rows="runs"] tbody tr').count(),1);
+  await writeFile(path.join(dir,'report.json'),JSON.stringify(report));
+});
 async function preview(page,file=media.source){
   const response=page.waitForResponse(r=>r.url().endsWith('/api/probe')&&r.request().method()==='POST');
   await page.locator('#file').fill(file);

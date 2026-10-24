@@ -7,6 +7,7 @@ import { plot, gopOverview } from "./charts.js";
 import { basicInfoHTML, initBasicInfo } from "./basic-info.js";
 import {vmafModels} from "./vmaf.js";
 import {validateSitiSceneStarts,validateSitiSettings} from "./siti.js";
+import {repeatHTML,initRepeat} from './repeat-view.js';
 import {
   parseCrfs,
   trialBdRate,
@@ -551,7 +552,7 @@ document.querySelectorAll(".file-picker").forEach(
 );
 let fileInfoTimer, fileInfoController, fileInfoRevision = 0, fileInfoLoading = false;
 function updateAnalysisSubmission() {
-  const selected = ["frame-analysis", "bitrate-enabled", "complexity"].some(id => $("#" + id).checked);
+  const selected = ["frame-analysis", "bitrate-enabled", "complexity", "repeat-enabled"].some(id => $("#" + id).checked);
   $("#enqueue-analyze").disabled = !environmentReady || !infoPath || !hasVideo || fileInfoLoading || !selected;
   $("#inspect").disabled = !environmentReady || fileInfoLoading;
   $("#analysis-selection-hint").textContent = selected
@@ -576,6 +577,8 @@ $("#file").oninput = () => {
 $("#file").onchange = () => void readFileInfo();
 $("#file").onkeydown = event => { if (event.key === "Enter") { event.preventDefault(); void readFileInfo(); } };
 const syncSitiWorkers = () => {
+  $("#repeat-options").classList.toggle("hidden", !$("#repeat-enabled").checked);
+  $("#freeze-enabled").disabled = !$("#repeat-enabled").checked;
   $("#bitrate-options").classList.toggle("hidden", !$("#bitrate-enabled").checked);
   $("#bitrate-window").disabled = !$("#bitrate-enabled").checked;
   $("#siti-settings").classList.toggle("hidden", !$("#complexity").checked);
@@ -597,6 +600,7 @@ const syncSitiWorkers = () => {
 $('#complexity').onchange=syncSitiWorkers;
 $('#frame-analysis').onchange=syncSitiWorkers;
 $('#bitrate-enabled').onchange=syncSitiWorkers;
+$('#repeat-enabled').onchange=syncSitiWorkers;
 $('#siti-scenes').onchange=syncSitiWorkers;
 $('#siti-transfer').onchange=syncSitiWorkers;
 function sitiSettingsInput(){
@@ -748,6 +752,7 @@ $("#enqueue-analyze").onclick = () => {
     complexity: $("#complexity").checked,
     frameAnalysis: $("#frame-analysis").checked,
     bitrate: $("#bitrate-enabled").checked,
+    ...($("#repeat-enabled").checked?{repeatAnalysis:true,freezeDetection:$("#freeze-enabled").checked}:{}),
     ...($("#bitrate-enabled").checked ? {bitrateWindowMs: Number($("#bitrate-window").value)} : {}),
     sitiWorkers: $("#siti-workers").value,
     sitiDevice: $("#siti-device").value,
@@ -1109,6 +1114,8 @@ function renderMedia(r) {
   }
   cards([]);
   let html = basicInfoHTML(r);
+  if(r.repeatAnalysis)html+=repeatHTML(r.repeatAnalysis);
+  else if(r.type==='analyze')html+='<p class="hint">本次未计算重复帧与时间诊断。选择该分析目标后重新运行可取得证据。</p>';
   if (r.type === "analyze" || r.frames) {
     if (r.frames && frameEnabled) {
     const gops = r.coding?.gops || legacyGops(r.frames);
@@ -1179,6 +1186,7 @@ function renderMedia(r) {
   }
   $("#details").innerHTML = html;
   initBasicInfo($("#details"), r);
+  if(r.repeatAnalysis)initRepeat($("#details"),r,{api,download,draw});
   if (r.type === "analyze" || r.frames) {
     if (r.frames && frameEnabled) {
       if (r.frames.length) initFrames(r);

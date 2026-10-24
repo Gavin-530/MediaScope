@@ -1865,3 +1865,9 @@ button#import-button:hover {
   gap: 16px;
   user-select: none;
 }
+
+.repeat-preview-images { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 1rem; }
+.repeat-preview-images figure { margin: 0; min-width: 0; }
+.repeat-preview-images img, .repeat-preview-images canvas { display: block; width: 100%; height: auto; }
+.repeat-preview-images figcaption { margin-top: .5rem; overflow-wrap: anywhere; }
+#repeat-result td { overflow-wrap: anywhere; }

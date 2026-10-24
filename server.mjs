@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { FF,FP,run,probe,video,scan,summarize,compare,normalizeMediaPath,decodeThreadCount } from './engine.mjs';
 import {allPackets,structure,traceStructure,mapStructure,metadataSummary,complexity,trial,trialOptions} from './analysis.mjs';
 import {sitiGpuCapability,closeSitiGpu} from './siti.mjs';
+import {analyzeRepeats,repeatPreview} from './repeat.mjs';
 import {validateSitiSceneStarts,validateSitiSettings} from './public/siti.js';
 import {makePortable,maxPortableBytes,utcNow} from './public/portable.js';
 import {byteLimit} from './public/units.js';
@@ -22,7 +23,7 @@ const localData=new RuntimeData(dataRoot);
 const appVersion=JSON.parse((await readFile(path.join(root,'package.json'),'utf8')).replace(/^\uFEFF/,'')).version;
 const port=Number(process.env.PORT||4317);let origin=`http://127.0.0.1:${port}`;
 const execFileAsync=promisify(execFile);
-let active=null,pickerActive=false,pickerProcess=null,queueRunning=false,closing=false;
+let active=null,pickerActive=false,pickerProcess=null,queueRunning=false,closing=false,repeatPreviewActive=false;
 const probes=new Set();
 const inputs=new Map();
 let dataCleaning=false;
@@ -51,6 +52,7 @@ async function loadStartup(){
       if(result.state==='ready'){
         for(const key of ['ffmpeg','ffprobe'])versions[key]=result.validation.programs[key].version;
         capabilities.metrics=['psnr','ssim','vmaf'];clearInterval(startupTimer);
+        if(result.validation.optional)capabilities.optional=result.validation.optional;
       }else if(result.state==='error')clearInterval(startupTimer);
     }catch(e){if(e.code==='ENOENT'){startup.state='error';startup.message='启动检查记录丢失，请重启软件';clearInterval(startupTimer)}}
   }else{
@@ -65,8 +67,10 @@ if(!process.env.MEDIASCOPE_STARTUP_RESULT)await loadStartup();
 function send(res,status,data){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data))}
 async function body(req,limit=16384){const chunks=[];let size=0;for await(const b of req){size+=b.length;if(size>limit)throw Error('请求过大');chunks.push(b)}return JSON.parse(Buffer.concat(chunks).toString('utf8')||'{}')}
 function analysisTargets(input){
-  for(const key of ['frameAnalysis','bitrate','complexity'])if(input[key]!==undefined&&typeof input[key]!=='boolean')throw Error('分析目标选项无效');
+  for(const key of ['frameAnalysis','bitrate','complexity','repeatAnalysis','freezeDetection'])if(input[key]!==undefined&&typeof input[key]!=='boolean')throw Error('分析目标选项无效');
   const targets={frames:input.frameAnalysis!==false,bitrate:input.bitrate!==false,complexity:input.complexity===true};
+  if(input.repeatAnalysis===true)targets.repeat=true;
+  if(input.freezeDetection===true&&!targets.repeat)throw Error('持续静止候选需要选择重复帧与时间诊断');
   if(!Object.values(targets).some(Boolean))throw Error('请至少选择一个分析目标');
   if(input.bitrateWindowMs!==undefined&&![100,1000].includes(input.bitrateWindowMs))throw Error('码率窗口必须为 100 ms 或 1 秒');
   return targets;
@@ -88,7 +92,7 @@ function normalizeInputPaths(input){
 function portableInput(input){const copy=structuredClone(input);delete copy.enqueue;return copy}
 function validatePlanInput(value){
  if(!value||typeof value!=='object'||Array.isArray(value)||!['inspect','analyze','compare','trial'].includes(value.type))throw Error('计划任务类型无效');
- const keys={inspect:['type','file'],analyze:['type','file','stream','frameAnalysis','bitrate','complexity','sitiWorkers','sitiDevice','sitiSceneStarts','sitiSettings','bitrateWindowMs'],compare:['type','reference','candidate','refStream','candidateStream','comparisonMode','timingMode','metrics','vmafModel','confirm','timingConfirmed','playbackConfirmed','chromaConfirmed','chromaAssumptions'],trial:['type','file','stream','start','duration','encoder','depthMode','presets','cpuUsed','crfs','metrics','vmafModel','keepFiles','exportDirectory']}[value.type];
+ const keys={inspect:['type','file'],analyze:['type','file','stream','frameAnalysis','bitrate','complexity','repeatAnalysis','freezeDetection','sitiWorkers','sitiDevice','sitiSceneStarts','sitiSettings','bitrateWindowMs'],compare:['type','reference','candidate','refStream','candidateStream','comparisonMode','timingMode','metrics','vmafModel','confirm','timingConfirmed','playbackConfirmed','chromaConfirmed','chromaAssumptions'],trial:['type','file','stream','start','duration','encoder','depthMode','presets','cpuUsed','crfs','metrics','vmafModel','keepFiles','exportDirectory']}[value.type];
  if(Object.keys(value).some(key=>!keys.includes(key)))throw Error('计划任务包含未知参数');
  const input=structuredClone(value);normalizeInputPaths(input);
  const index=v=>Number.isSafeInteger(v)&&v>=0;
@@ -132,7 +136,7 @@ function createJob(input){
   if(closing||dataCleaning)throw Error('软件正在退出或清理本地数据，无法提交新任务');
   const queuedAt=new Date().toISOString();
   const targets=input.type==='analyze'?analysisTargets(input):null;
-  const description=input.type==='analyze'?`视频轨道 ${input.stream==null?'自动':`#${input.stream}`} · ${[targets.frames?'逐帧 / GOP':null,targets.bitrate?'区间码率':null,targets.complexity?'SI/TI':null].filter(Boolean).join(' · ')}`
+  const description=input.type==='analyze'?`视频轨道 ${input.stream==null?'自动':`#${input.stream}`} · ${[targets.frames?'逐帧 / GOP':null,targets.bitrate?'区间码率':null,targets.complexity?'SI/TI':null,targets.repeat?'重复帧 / 时间诊断':null].filter(Boolean).join(' · ')}`
     :input.type==='compare'?`轨道 #${input.refStream} → #${input.candidateStream} · ${(input.metrics||[]).join(' / ').toUpperCase()}`
     :input.type==='trial'?`${input.start??0}–${Number(input.start??0)+Number(input.duration??0)} 秒 · ${input.encoder} · CRF ${(input.crfs||[]).join(', ')}`
     :'容器与轨道信息';
@@ -180,7 +184,7 @@ async function execute(job,input){
     }else if(job.type==='analyze'){
       const targets=analysisTargets(input),needsFrames=targets.frames||targets.complexity,needsPackets=targets.frames||targets.bitrate;
       const bitrateWindowMs=input.bitrateWindowMs??100;
-      const phaseCount=1+Number(needsFrames)+Number(needsPackets)+Number(targets.complexity);let phaseIndex=1;
+      const phaseCount=1+Number(needsFrames)+Number(needsPackets)+Number(targets.complexity)+Number(!!targets.repeat);let phaseIndex=1;
       const info=await stage('读取文件',c=>probe(input.file,c),{phaseIndex:1,phaseCount});
       if(input.stream==null)input.stream=info.raw.streams.find(s=>s.codec_type==='video')?.index;
       const stream=video(info,input.stream);
@@ -203,7 +207,9 @@ async function execute(job,input){
         }
       }
       let content=null;if(targets.complexity)content=await stage('测量 SI/TI 内容复杂度',c=>complexity(input.file,stream,c,frames),{phaseIndex:++phaseIndex,phaseCount});
+      const repeatAnalysis=targets.repeat?await stage('原生重复帧与时间诊断',c=>analyzeRepeats(input.file,stream,c,{freeze:input.freezeDetection===true}),{phaseIndex:++phaseIndex,phaseCount}):null;
       result={...info,metadata:metadataSummary(info),stream:Number(input.stream),analysisTargets:targets,
+        ...(repeatAnalysis?{repeatAnalysis}:{}),
         ...(frames?{summary:summarize(frames),frames}:{}),
         ...(tracks?{packets:tracks.find(t=>t.index===stream.index),tracks,overheadBytes:info.size-tracks.reduce((s,t)=>s+t.bytes,0)}:{}),
         ...(coding?{coding}:{}),content,warnings:[
@@ -268,7 +274,7 @@ const server=http.createServer(async(req,res)=>{
       if(req.method==='POST'&&url.pathname==='/api/desktop/shutdown'){
         send(res,200,{ok:true});void shutdown();return;
       }
-      if(req.method==='POST'&&startup.state!=='ready'&&['/api/jobs','/api/probe','/api/queue','/api/plans/import'].includes(url.pathname)){
+      if(req.method==='POST'&&startup.state!=='ready'&&['/api/jobs','/api/probe','/api/queue','/api/plans/import','/api/repeat/preview'].includes(url.pathname)){
         send(res,503,{error:startup.message});return;
       }
       if(req.method==='GET'&&url.pathname==='/api/plans'){
@@ -313,6 +319,16 @@ const server=http.createServer(async(req,res)=>{
         }finally{probes.delete(controller)}
         return;
       }
+      if(req.method==='POST'&&url.pathname==='/api/repeat/preview'){
+        const input=await body(req);
+        if(closing||repeatPreviewActive){send(res,409,{error:closing?'软件正在退出':'已有原帧复核正在运行'});return}
+        const controller=new AbortController();
+        repeatPreviewActive=true;probes.add(controller);
+        const disconnect=()=>{if(!res.writableEnded)controller.abort()};res.once('close',disconnect);
+        try{send(res,200,await repeatPreview(input,{signal:AbortSignal.any([controller.signal,AbortSignal.timeout(120000)]),commands:[]}))}
+        finally{repeatPreviewActive=false;probes.delete(controller);res.off('close',disconnect)}
+        return;
+      }
       const retry=url.pathname.match(/^\/api\/jobs\/([a-f0-9-]+)\/retry$/);
       if(req.method==='POST'&&retry){
         if(startup.state!=='ready'){send(res,503,{error:startup.message});return}
@@ -346,6 +362,8 @@ const server=http.createServer(async(req,res)=>{
     files['/timing.js']='timing.js';
     files['/analysis-limits.js']='analysis-limits.js';
     files['/report-codec.js']='report-codec.js';
+    files['/repeat-model.js']='repeat-model.js';
+    files['/repeat-view.js']='repeat-view.js';
     files['/bd-rate.js']='bd-rate.js';
     files['/bd-reference.js']='bd-reference.js';
     files['/bd-trial.js']='bd-trial.js';

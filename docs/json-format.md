@@ -12,7 +12,9 @@
 
 结果保留原有生成时间、`producer.applicationVersion`、素材与轨道信息、工具版本、命令及耗时、指标配置、逐帧与逐包数据、汇总、原始证据、警告、不可用/失败/资源受限状态。重新导出只更新外层生成信息，不覆盖每份结果的来源。`type` 为 `inspect`、`analyze`、`compare` 或 `trial`；前两者归入文件分析功能。
 
-按目标运行的 `analyze` 报告增加 `analysisTargets: {frames, bitrate, complexity}`，三项均为布尔值且至少一项为真。`frames` 或 `complexity` 开启时保存核验显示帧及汇总；`frames` 开启时保存编码结构。`frames` 或 `bitrate` 开启时保存轨道包统计及所选轨道引用；仅选 SI/TI 时不保存这些包字段。关闭 `bitrate` 时各轨道 `bins` 为空且不保存 `bitrateCurve`；开启时遵循原窗口协议。未选项目不以空图或失败结果代替。无 `analysisTargets` 的旧报告继续要求原完整分析字段。计划使用 `frameAnalysis`、`bitrate` 与原有 `complexity` 开关；前两项缺省时按原完整分析兼容，界面新建计划会显式保存选择。
+按目标运行的 `analyze` 报告增加 `analysisTargets: {frames, bitrate, complexity}`，三项均为布尔值；选择重复帧时另加 `repeat: true`，未选时省略，全部目标至少一项为真。`frames` 或 `complexity` 开启时保存核验显示帧及汇总；`frames` 开启时保存编码结构。`frames` 或 `bitrate` 开启时保存轨道包统计及所选轨道引用；仅选 SI/TI 或重复帧时不保存这些包字段。关闭 `bitrate` 时各轨道 `bins` 为空且不保存 `bitrateCurve`；开启时遵循原窗口协议。未选项目不以空图或失败结果代替。无 `analysisTargets` 的旧报告继续要求原完整分析字段。计划使用 `frameAnalysis`、`bitrate`、`complexity`、`repeatAnalysis` 与 `freezeDetection` 开关；前两项缺省时按原完整分析兼容，后两项缺省为关闭；持续静止必须同时选择重复帧。
+
+`repeatAnalysis` 使用方法 `configurationVersion: 1`，保存实际原生格式、源文件身份摘要、逐帧样本 SHA-256、源帧与哈希输出的独立时间字段、精确比较计数与段、时间间隔与候选网格，以及可选持续静止事件。导入重新计算并核对派生量，不接受部分指纹冒充完整结果。方法未支持时保存原因；未选择则无此字段。旧报告不补造该项。详见[重复帧测量规则](repeat-analysis.md)。
 
 `timing` 为所含结果的计算耗时汇总，读取时核对一致性。各指标自己的配置版本、实施解释、模型和工具版本继续保留，不等于重复的文件版本。原始日志字符串逐字保留；原始 JSON 对象的属性顺序和排版不承诺与工具输出文本相同。
 
@@ -23,6 +25,9 @@
 | 路径 | 编号规则/上限 |
 | --- | --- |
 | `report.frames` | 每行一个原显示帧；最多 2,000,000 行 |
+| `report.repeatAnalysis.frames` | 第 i 行的 `frame` 固定为 i；最多 2,000,000 行 |
+| `report.repeatAnalysis.exact.runs` | 连续相邻精确重复段；最多 2,000,000 行 |
+| `report.repeatAnalysis.timeline.intervals` | 整数 tick 间隔及次数；最多 2,000,000 行 |
 | `report.content.points` | 第 i 行的 `frame` 固定为 i，省略重复编号 |
 | `report.content.scenes` | 第 i 行的 `index` 固定为 i；最多 2048 行 |
 | `report.coding.packets` | 第 i 行的 `index` 固定为 i；最多 500,000 行 |
