@@ -1039,10 +1039,6 @@ canvas.frames-canvas {
   font-size: 12px;
 }
 
-.chart-help p {
-  margin: 8px 0;
-}
-
 .task {
   position: sticky;
   top: 8px;
