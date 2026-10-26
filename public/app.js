@@ -1120,7 +1120,7 @@ function renderMedia(r) {
     ])}</div>`;
     html += section(
       "帧结构与 GOP",
-      `<p class="hint">显示顺序视图。I / P / B 是预测类型；IDR / CRA / BLA 是码流访问类型，二者不混用。GOP 以随机访问/关键帧区间呈现，不据此猜测开放或闭合。</p><div class="row"><label for="frame-axis">大小图横轴</label><select id="frame-axis"><option value="time">呈现时间（s）</option><option value="frame">显示帧序号</option></select><button id="frame-full" class="secondary">查看全片</button></div><p class="hint" id="frame-axis-note"></p><div id="gop-overview"></div><div class="pager"><button id="gop-prev" class="secondary">上一 GOP</button><label>GOP #<input id="gop-index" type="number" min="0" max="${gops.length - 1}" value="0"></label><button id="gop-next" class="secondary">下一 GOP</button><span id="gop-info"></span></div><div id="frame-plot"></div><div id="frame-detail" class="frame-detail"></div><details><summary>逐帧列表 / CSV</summary><div class="pager"><button id="prev" class="secondary">上一页</button><span id="page"></span><button id="next" class="secondary">下一页</button><button id="csv" class="secondary">导出帧 CSV</button></div><div id="frames"></div></details>`,
+      `<p class="hint">显示顺序视图。I / P / B 是预测类型；IDR / CRA / BLA 是码流访问类型，二者不混用。GOP 以随机访问/关键帧区间呈现，不据此猜测开放或闭合。</p><div id="gop-overview"></div><div class="pager"><button id="gop-prev" class="secondary">上一 GOP</button><label>GOP #<input id="gop-index" type="number" min="0" max="${gops.length - 1}" value="0"></label><button id="gop-next" class="secondary">下一 GOP</button><span id="gop-info"></span></div><div id="frame-plot"><label>坐标<select id="frame-axis" aria-label="帧大小图 X 轴坐标"><option value="time">呈现时间（s）</option><option value="frame">显示帧序号</option></select></label></div><p class="hint" id="frame-axis-note"></p><div id="frame-detail" class="frame-detail"></div><details><summary>逐帧列表 / CSV</summary><div class="pager"><button id="prev" class="secondary">上一页</button><span id="page"></span><button id="next" class="secondary">下一页</button><button id="csv" class="secondary">导出帧 CSV</button></div><div id="frames"></div></details>`,
     );
     }
     if (r.content?.available) {
@@ -1195,7 +1195,7 @@ function renderMedia(r) {
         const previous = bitratePlots.get(id);
         previous?.dispose?.();
         if (previous) { const i = charts.indexOf(previous); if (i >= 0) charts.splice(i, 1); }
-        bitratePlots.set(id, draw(id, scalePlotData(data, {y: scale}), {unit: scale.unit, intervals: true, describe: p => `[${quantityNumber(p[2].start, 6)}, ${quantityNumber(p[2].end, 6)}) s · ${formatBitrate(p[2].mbps * 1e6)}${p[2].bytes == null ? '' : ` · ${p[2].bytes} B`}`}));
+        bitratePlots.set(id, draw(id, scalePlotData(data, {y: scale}), {unit: scale.unit, yKey:'bitrate', yFactor:scale.divisor, intervals: true, describe: p => `[${quantityNumber(p[2].start, 6)}, ${quantityNumber(p[2].end, 6)}) s · ${formatBitrate(p[2].mbps * 1e6)}${p[2].bytes == null ? '' : ` · ${p[2].bytes} B`}`}));
         if (t.bitrateCurve?.status === "unavailable") $("#" + id).textContent = "不可计算";
       };
       drawBitrate();
@@ -1294,11 +1294,11 @@ function initFrames(r) {
     ribbon = draw("frame-plot", time ? tdata : fdata, {
       unit: `关联包大小（${frameScale.unit}）`, axis: time ? '呈现时间 s' : '显示帧', frames: !time, stems: time,
       xEnd: time ? frameTimeRange(r.frames)?.[1] : undefined, initial: range ?? undefined,
+      xControl: axisPicker.closest('label'),
+      onReset: () => {fullView = true;},
       onPick: detail,
       describe: p => `帧 ${p[3]} · ${fmt(p[2].t, 6)} s · ${p[2].type} / ${p[2].special ?? "未解析"} · ${formatBytes(p[2].bytes)}`,
     });
-    const reset = $("#frame-plot [data-op=reset]");
-    if (reset) {const original = reset.onclick;reset.onclick = () => {fullView = true;original();};}
   };
   const overview = gopOverview($("#gop-overview"), gops, r.frames.length, (i) =>
     select(i),
@@ -1322,7 +1322,7 @@ function initFrames(r) {
   select(0, false);
   drawFrames();
   axisPicker.onchange = drawFrames;
-  $("#frame-full").onclick = () => {fullView = true;drawFrames();};
+
   let page = 0;
   const drawPage = () => {
     $("#page").textContent =
@@ -1701,7 +1701,7 @@ function renderTrial(r) {
   );
   html += section(
     "码率—质量与编码成本",
-    `<div class="two"><label>横轴<select id="rd-axis"><option value="videoMbps">视频平均码率（${bitScale.unit}）</option><option value="videoBytes">视频包体积（${byteScale.unit}）</option><option value="encodeSeconds">编码耗时（s）</option><option value="encodeFps">编码速度（frame/s）</option></select></label><label>纵轴指标<select id="rd-metric">${metrics.map((m) => `<option value="${m}">${esc(metricLabels[m])}</option>`).join("")}</select></label></div><div id="rd"></div><p class="hint">码率—质量图：同等质量时越靠左越省码率，同等码率时越高越好；需比较同一参考片段及指标域。成本图仅显示散点：相同质量下比较编码时间或速度。体积与码率仅计视频包。PSNR 为 MSE 域汇总，SSIM / VMAF 为逐帧均值。</p>`,
+    `<div id="rd"><label>指标<select id="rd-axis" aria-label="码率质量图 X 轴指标"><option value="videoMbps">视频平均码率（${bitScale.unit}）</option><option value="videoBytes">视频包体积（${byteScale.unit}）</option><option value="encodeSeconds">编码耗时（s）</option><option value="encodeFps">编码速度（frame/s）</option></select></label><label>指标<select id="rd-metric" aria-label="码率质量图 Y 轴指标">${metrics.map((m) => `<option value="${m}">${esc(metricLabels[m])}</option>`).join("")}</select></label></div><p class="hint">码率—质量图：同等质量时越靠左越省码率，同等码率时越高越好；需比较同一参考片段及指标域。成本图仅显示散点：相同质量下比较编码时间或速度。体积与码率仅计视频包。PSNR 为 MSE 域汇总，SSIM / VMAF 为逐帧均值。</p>`,
   );
   html += section(
     "BD-rate · 同等质量下的平均码率差",
@@ -1709,7 +1709,7 @@ function renderTrial(r) {
   );
   html += section(
     "逐帧质量叠加 · 固定位深与 preset，对比 CRF",
-    `<div class="two"><label>固定对比组<select id="trial-group">${groups.map((g, i) => `<option value="${i}">${esc(g)}</option>`).join("")}</select></label><label>纵轴质量指标<select id="trial-frame-metric">${metrics.map((m) => `<option value="${m}">${esc(metricLabels[m])}</option>`).join("")}</select></label></div><div id="trial-crf-select" class="checks"></div><p id="trial-frame-note" class="hint"></p><div id="trial-frames"></div>`,
+    `<div class="plot-controls"><label>固定对比组<select id="trial-group">${groups.map((g, i) => `<option value="${i}">${esc(g)}</option>`).join("")}</select></label></div><div id="trial-crf-select" class="checks"></div><p id="trial-frame-note" class="hint"></p><div id="trial-frames"><label>指标<select id="trial-frame-metric" aria-label="逐帧质量图 Y 轴指标">${metrics.map((m) => `<option value="${m}">${esc(metricLabels[m])}</option>`).join("")}</select></label></div>`,
   );
   html +=
     notices(r.warnings) +
@@ -1796,9 +1796,10 @@ function renderTrial(r) {
       ]),
     );
   };
-  const seriesPlot = (id, x, y) => {
+  const seriesPlot = (id, x, y, controls = {}) => {
     const { data, series } = trialPlotData(rows, x, y);
     return draw(id, scalePlotData(data, {x: scales[x], y: scales[y]}), {
+      ...controls,
       series,
       connect: !["encodeSeconds", "encodeFps"].includes(x),
       unit: labels[y],
@@ -1811,16 +1812,19 @@ function renderTrial(r) {
   seriesPlot("trial-time", "crf", "encodeSeconds");
   seriesPlot("trial-rate", "crf", "videoMbps");
   seriesPlot("trial-ssim", "crf", "ssim");
+  const rdAxis = $("#rd-axis"), rdMetric = $("#rd-metric"), frameMetric = $("#trial-frame-metric");
   let rd, framePlot;
   const update = () => {
     rd?.dispose();
-    rd = seriesPlot("rd", $("#rd-axis").value, $("#rd-metric").value);
+    rd = seriesPlot("rd", rdAxis.value, rdMetric.value, {
+      xControl: rdAxis.closest('label'), yControl: rdMetric.closest('label'),
+    });
   };
   let selectedCrfs = [];
   const updateFrames = () => {
     framePlot?.dispose();
     const group = groups[Number($("#trial-group").value) || 0],
-      metric = $("#trial-frame-metric").value || metrics[0];
+      metric = frameMetric.value || metrics[0];
     const result = trialFramePlotData(
       rows,
       metric,
@@ -1836,13 +1840,9 @@ function renderTrial(r) {
       (result.missing.length
         ? " 未保存逐帧数据的 CRF：" + result.missing.join("、")
         : "");
-    if (!result.data.length) {
-      $("#trial-frames").textContent = selectedCrfs.length
-        ? "该报告未保存所选指标的逐帧数据。"
-        : "请至少选择一个 CRF。";
-      return;
-    }
     framePlot = draw("trial-frames", result.data, {
+      yControl: frameMetric.closest('label'),
+      emptyMessage: selectedCrfs.length ? "该报告未保存所选指标的逐帧数据。" : "请至少选择一个 CRF。",
       series: result.series,
       markers: false,
       height: 440,

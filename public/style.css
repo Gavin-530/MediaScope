@@ -552,7 +552,7 @@ input[type="checkbox"] {
   transform: translateY(-2px);
 }
 
-.card span {
+.card > span {
   display: block;
   color: var(--muted);
   font-size: 11px;
@@ -810,16 +810,23 @@ footer {
   }
 }
 
-:root {
-  --chart-height: 230px;
-}
-
 .plot-controls {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px 16px;
   flex-wrap: wrap;
   margin: 12px 0;
+}
+
+.plot-actions,
+.plot-range,
+.plot-x-bounds,
+.plot-y-controls,
+.plot-y-bounds {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
 }
 
 .plot-controls button {
@@ -832,10 +839,11 @@ footer {
   align-items: center;
   gap: 5px;
   margin: 0;
+  white-space: nowrap;
 }
 
 .plot-controls input {
-  width: 100px !important;
+  width: 90px !important;
   padding: 6px !important;
   font-size: 11px;
 }
@@ -917,7 +925,7 @@ h4 {
 }
 
 .plot-controls + canvas {
-  height: 230px;
+  height: var(--chart-height);
 }
 
 @media (max-width: 760px) {
@@ -943,9 +951,6 @@ h4 {
   }
 }
 
-.plot-controls + canvas.frames-canvas {
-  height: 180px;
-}
 
 .file-row {
   display: flex;
@@ -972,7 +977,7 @@ h4 {
 }
 
 .plot-legend + canvas {
-  height: 230px;
+  height: var(--chart-height);
 }
 
 .trial-presets {
@@ -1007,12 +1012,14 @@ h4 {
   margin: 12px 0 5px;
 }
 
-.plot-axis-y + canvas {
-  height: 230px;
+.plot-y-status {
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
 }
 
-canvas.frames-canvas {
-  height: 180px;
+.plot-axis-y + canvas {
+  height: var(--chart-height);
 }
 
 .plot-controls select {
@@ -1020,6 +1027,10 @@ canvas.frames-canvas {
   max-width: 170px;
   padding: 5px;
   font-size: 11px;
+}
+
+#frame-axis {
+  width: 11em;
 }
 
 .chart-label {
