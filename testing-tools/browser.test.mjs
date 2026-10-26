@@ -681,6 +681,13 @@ scenario('[analysis] [units] actual multi-audio file, frame scan, GOP, SI/TI and
   const switchFrameCoordinates=async value=>{
     const picker=page.locator('#frame-axis');
     await picker.focus();
+    // A viewport resize updates layout before ResizeObserver redraws the bitmap.
+    // Capture the baseline only after that redraw; keep the switch assertion exact.
+    await page.waitForFunction(()=>{
+      const canvas=document.querySelector('#frame-plot canvas'),dpr=devicePixelRatio||1;
+      return canvas.width===Math.max(1,Math.floor(canvas.clientWidth*dpr))&&
+        canvas.height===Math.floor(canvas.clientHeight*dpr);
+    });
     const geometry=()=>page.locator('#frame-plot').evaluate(host=>{
       const canvas=host.querySelector('canvas'),rect=canvas.getBoundingClientRect(),
         toolbar=host.querySelector('.plot-controls').getBoundingClientRect(),
@@ -740,6 +747,10 @@ scenario('[analysis] [units] actual multi-audio file, frame scan, GOP, SI/TI and
   assert.match(await resultRow.innerText(),/测量 SI\/TI 内容复杂度/);
   assert.deepEqual(parsePortable(JSON.stringify(makePortable({...exported,applicationVersion:exported.producer.applicationVersion}))),exported);
   await page.setViewportSize({width:390,height:844});
+  // The responsive tab font transition changes the document's header height.
+  await page.locator('.header-nav').evaluate(async nav=>{
+    await Promise.all(nav.getAnimations({subtree:true}).map(animation=>animation.finished));
+  });
   await switchFrameCoordinates('time');
   await switchFrameCoordinates('frame');
   assert.equal(await page.locator('#frame-plot').evaluate(el=>{
