@@ -12,11 +12,12 @@ import {propertyValue} from '../public/properties.js';
 import {probe,FF,run} from '../engine.mjs';
 import {metadataSummary} from '../analysis.mjs';
 import {legacyFrameSample} from './helpers/basic-properties.mjs';
-import {formatBytes, byteEvidence, quantityScale} from '../public/units.js';
+import {formatBytes, byteEvidence, quantityScale, quantityNumber} from '../public/units.js';
+import {analysisNotes,analysisNoticeGroups,unconfirmedSceneNote} from '../public/analysis-notes.js';
 import {bitrateView} from '../public/bitrate-model.js';
 import {sitiInputFixture} from './helpers/siti-inputs.mjs';
 import {sitiSceneSummary,SITI_COMPAT_PROFILE} from '../public/siti.js';
-import {trialBdRate,rowLabel} from '../public/trial-model.js';
+import {trialBdRate,rowLabel,metricLabels} from '../public/trial-model.js';
 
 const root=path.resolve('.build/testing-work/browser');
 let browser,media,sequence=0;
@@ -56,14 +57,320 @@ async function importReport(page,file){
   // The async import handler clears the input only after rendering and polling finish.
   await page.waitForFunction(()=>document.querySelector('#import-report').value==='');
 }
+async function observeYAxis(page){
+  // Observe actual canvas labels while forwarding every drawing call unchanged.
+  await page.evaluate(()=>{
+    const labels=new WeakMap(),proto=CanvasRenderingContext2D.prototype,
+      scale=proto.scale,fillText=proto.fillText;
+    window.testYAxisLabels=labels;
+    proto.scale=function(...args){labels.set(this.canvas,[]);return scale.apply(this,args);};
+    proto.fillText=function(text,...args){
+      if(this.textAlign==='right')labels.get(this.canvas)?.push(String(text));
+      return fillText.call(this,text,...args);
+    };
+  });
+}
+async function yAxisLabels(page,host){
+  return page.locator(host+' canvas').evaluate(canvas=>window.testYAxisLabels.get(canvas));
+}
+async function setYBounds(page,host,lo,hi){
+  const mode=page.locator(host+' [data-field="scale"]');
+  if(await mode.inputValue()!=='manual')await mode.selectOption('manual');
+  await page.locator(host+' [data-field="y-min"]').fill(String(lo));
+  await page.locator(host+' [data-field="y-max"]').fill(String(hi));
+  await page.locator(host+' [data-op="apply-y"]').click();
+}
+async function singleRow(locator,count){
+  const boxes=await locator.evaluateAll(elements=>elements.map(el=>{const r=el.getBoundingClientRect();return {top:r.top,width:r.width};}));
+  assert.equal(boxes.length,count);
+  assert.ok(boxes.every(box=>box.width>0)&&Math.max(...boxes.map(box=>box.top))-Math.min(...boxes.map(box=>box.top))<1,'desktop items share one row');
+}
+scenario('[charts] hover readouts keep decimal positions and original text across magnitudes, missing values and infinity',async({page,dir})=>{
+  // Mathematical boundary observations, not manufactured media measurements.
+  const points=[[-10.25,9.85],[-5,77.264674],[0,100.1],[5,1e-10],[10,null],[15,Infinity],[20,0],[25,-3.5],[30,-Infinity]];
+  await page.evaluate(async points=>{
+    const {plot}=await import('/charts.js'),host=document.createElement('section');
+    host.id='hover-readout-contract';document.body.append(host);
+    window.testReadoutPoints=points;window.testReadoutOriginal=JSON.stringify(points);
+    window.testReadoutPlot=plot(host,points,{unit:'SI'});
+  },points);
+  const host=page.locator('#hover-readout-contract'),canvas=host.locator('canvas');
+  await canvas.scrollIntoViewIfNeeded();
+  const box=await canvas.boundingBox();
+  let previous;
+  for(const [x,value] of points){
+    await page.mouse.move(box.x+76+(box.width-101)*(x-points[0][0])/(points.at(-1)[0]-points[0][0]),box.y+40);
+    const fields=host.locator('.chart-field'),values=host.locator('.chart-number');
+    assert.equal(await values.nth(0).textContent(),quantityNumber(x,6));
+    assert.equal(await values.nth(1).textContent(),value===null?'无值':value===Infinity?'∞':value===-Infinity?'−∞':quantityNumber(value,6));
+    const geometry=await fields.evaluateAll(fields=>fields.map(field=>{
+      const number=field.querySelector('.chart-number'),fraction=field.querySelector('.chart-fraction');
+      return {left:field.getBoundingClientRect().left,width:field.getBoundingClientRect().width,decimal:fraction?.getBoundingClientRect().left};
+    }));
+    if(previous)for(let i=0;i<2;i++){
+      assert.ok(Math.abs(geometry[i].left-previous[i].left)<.1,'field anchor must stay fixed');
+      assert.ok(Math.abs(geometry[i].width-previous[i].width)<.1,'reserved field width must include missing and infinite states');
+      if(geometry[i].decimal!==undefined&&previous[i].decimal!==undefined)assert.ok(Math.abs(geometry[i].decimal-previous[i].decimal)<.1,'decimal column must not move');
+    }
+    previous=geometry;
+    if(Number.isFinite(value))assert.equal(await values.nth(1).getAttribute('title'),'未舍入值（当前图表单位）：'+String(value));
+    assert.equal(await host.locator('.chart-exponent:empty').count(),0,'ordinary values reserve no invisible exponent');
+    assert.doesNotMatch(await host.locator('.chart-label').textContent(),/[·|]/,'fields do not use loose separator text');
+  }
+  assert.equal(await page.evaluate(()=>JSON.stringify(window.testReadoutPoints)===window.testReadoutOriginal),true);
+  await page.mouse.move(box.x+76+(box.width-101)*5/40,box.y+40);
+  await host.screenshot({path:path.join(dir,'hover-readout-desktop.png')});
+  await page.setViewportSize({width:390,height:844});
+  await canvas.scrollIntoViewIfNeeded();
+  const narrow=await canvas.boundingBox();await page.mouse.move(narrow.x+100,narrow.y+40);
+  assert.equal(await host.locator('.chart-label').evaluate(el=>el.scrollWidth<=el.clientWidth),true,'readout must wrap without truncating values');
+  await host.screenshot({path:path.join(dir,'hover-readout-mobile.png')});
+  await page.evaluate(async()=>{
+    const {plot}=await import('/charts.js');window.testReadoutPlot.dispose();
+    window.testReadoutPlot=plot(document.querySelector('#hover-readout-contract'),window.testReadoutPoints,{unit:'SI',axis:'片段显示帧序号（从 0 开始）'});
+  });
+  await canvas.scrollIntoViewIfNeeded();
+  const longAxis=await canvas.boundingBox();await page.mouse.move(longAxis.x+100,longAxis.y+40);
+  assert.equal(await host.locator('.chart-label').evaluate(el=>el.scrollWidth<=el.clientWidth),true,'long axis names also wrap without hiding numbers');
+});
+
+scenario('[charts] labeled hover fields stay aligned when frame, type and unit text lengths change',async({page,dir})=>{
+  // Presentation contracts, not manufactured media reports or measurements.
+  const points=[[4.5,1,{frame:540,type:'B',access:'TRAIL_R',bytes:'188.21 kB'}],[34.141667,2,{frame:4097,type:'P',access:'IDR',bytes:'875 B'}],[35,3,{frame:1000000,type:'I',access:'INTRA_ONLY',bytes:'1.256 MB'}]];
+  await page.evaluate(async points=>{
+    const {plot}=await import('/charts.js'),host=document.createElement('section');host.id='hover-fields-contract';document.body.append(host);
+    window.testFieldPlot=plot(host,points,{describe:p=>[
+      {label:'呈现时间（s）',value:p[0],bounds:'x'},
+      {label:'显示帧',value:p[2].frame,digits:0,width:10},
+      {label:'预测类型',value:p[2].type,width:10},
+      {label:'访问类型',value:p[2].access,width:18},
+      {label:'关联包大小',value:p[2].bytes,width:18},
+    ]});
+  },points);
+  const host=page.locator('#hover-fields-contract'),canvas=host.locator('canvas');await canvas.scrollIntoViewIfNeeded();
+  const box=await canvas.boundingBox();let previous;
+  for(const [x,,evidence] of points){
+    await page.mouse.move(box.x+76+(box.width-101)*(x-points[0][0])/(points.at(-1)[0]-points[0][0]),box.y+40);
+    assert.deepEqual(await host.locator('dt').allTextContents(),['呈现时间（s）','显示帧','预测类型','访问类型','关联包大小']);
+    assert.deepEqual(await host.locator('dd').allTextContents(),[quantityNumber(x,6),quantityNumber(evidence.frame,0),evidence.type,evidence.access,evidence.bytes]);
+    assert.doesNotMatch(await host.locator('.chart-label').textContent(),/[·|]/);
+    const geometry=await host.locator('.chart-field').evaluateAll(fields=>fields.map(field=>{
+      const box=field.getBoundingClientRect(),value=field.querySelector('dd').getBoundingClientRect();return {left:box.left,top:box.top+scrollY,width:box.width,valueTop:value.top+scrollY};
+    }));
+    if(previous)assert.deepEqual(geometry,previous,'all field anchors stay fixed across changing text lengths');
+    previous=geometry;
+    await host.screenshot({path:path.join(dir,`hover-fields-${evidence.frame}.png`)});
+  }
+  await page.setViewportSize({width:390,height:844});await canvas.scrollIntoViewIfNeeded();
+  const narrow=await canvas.boundingBox();await page.mouse.move(narrow.x+100,narrow.y+40);
+  assert.equal(await host.locator('.chart-label').evaluate(el=>el.scrollWidth<=el.clientWidth),true);
+  await host.screenshot({path:path.join(dir,'hover-fields-mobile.png')});
+});
+
+scenario('[charts] real canvas count axes retain zero and integer ticks across range modes while continuous axes keep fractions',async({page,dir})=>{
+  await observeYAxis(page);
+  // Explicit mathematical chart inputs exercise the production renderer, not a fabricated media report.
+  await page.evaluate(async()=>{
+    const {plot}=await import('/charts.js');
+    const host=document.createElement('section');host.id='count-axis-contract';document.body.append(host);
+    window.testCountPlot=plot(host,[[0,9,{end:1}],[1,1,{end:2}],[2,0,{end:3}],[3,25,{end:4}]],
+      {integerY:true,intervals:true,unit:'计数',xEnd:4});
+    const continuous=document.createElement('section');continuous.id='continuous-axis-contract';document.body.append(continuous);
+    window.testContinuousPlot=plot(continuous,[[0,.25],[1,.75]],{unit:'连续量'});
+  });
+  const counts='#count-axis-contract';
+  assert.equal(await page.locator(counts+' [data-field="scale"]').inputValue(),'full');
+  const full=await yAxisLabels(page,counts);assert.deepEqual(full,['0','5','10','15','20','25']);
+  const xMode=page.locator(counts+' [data-field="x-scale"]'),
+    xFrom=page.locator(counts+' [data-field="from"]'),xTo=page.locator(counts+' [data-field="to"]');
+  assert.equal(await xMode.inputValue(),'full');
+  assert.equal(await xFrom.isVisible(),false,'X range inputs start collapsed');
+  const compactWidth=(await page.locator(counts+' .plot-range').boundingBox()).width;
+  await xMode.selectOption('manual');assert.equal(await xFrom.isVisible(),true);
+  assert.ok((await page.locator(counts+' .plot-range').boundingBox()).width>compactWidth,'collapsed X controls save actual toolbar space');
+  await xFrom.fill('1');await xTo.fill('3');
+  await page.locator(counts+' [data-op="apply"]').click();
+  assert.equal(await xMode.inputValue(),'manual');assert.equal(await xFrom.isVisible(),true,'applying a custom range keeps its fields open, like Y');
+  assert.equal(await xFrom.inputValue(),'1');assert.equal(await xTo.inputValue(),'3');
+  await xFrom.fill('');await page.locator(counts+' [data-op="apply"]').click();
+  assert.equal(await xFrom.isVisible(),true,'invalid range stays open without moving the viewport');
+  await xMode.selectOption('full');assert.equal(await xFrom.isVisible(),false);
+  assert.equal(await xFrom.inputValue(),'0');assert.equal(await xTo.inputValue(),'4','automatic X restores the full range');
+  await page.locator(counts+' [data-op="in"]').click();
+  await xMode.selectOption('manual');assert.equal(await xFrom.inputValue(),'1');assert.equal(await xTo.inputValue(),'3','custom X starts from the current viewport');
+  await page.locator(counts+' [data-op="reset"]').click();
+  assert.equal(await xMode.inputValue(),'manual');assert.equal(await xFrom.isVisible(),true,'horizontal browsing keeps the selected editor mode');
+  await xMode.selectOption('full');
+  await page.evaluate(()=>window.testCountPlot.setRange(0,1));
+  assert.deepEqual(await yAxisLabels(page,counts),full,'fixed range retains the full-data peak after horizontal zoom');
+  await page.locator(counts+' [data-field="scale"]').selectOption('visible');
+  assert.deepEqual(await yAxisLabels(page,counts),['0','2','4','6','8','10']);
+  await page.locator(counts).screenshot({path:path.join(dir,'count-axis-nine.png')});
+  for(const [start,end] of [[1,2],[2,3]]){
+    await page.evaluate(([a,b])=>window.testCountPlot.setRange(a,b),[start,end]);
+    assert.deepEqual(await yAxisLabels(page,counts),['0','1'],'all-one and all-zero viewports retain distinct integer labels');
+  }
+  await page.evaluate(()=>window.testCountPlot.setRange(.25,.75));
+  assert.deepEqual(await yAxisLabels(page,counts),['0','2','4','6','8','10'],'partially visible intervals still determine the range');
+  await page.locator(counts+' [data-op="reset"]').click();assert.deepEqual(await yAxisLabels(page,counts),full);
+  await page.locator(counts+' [data-field="scale"]').selectOption('full');
+  assert.deepEqual(await yAxisLabels(page,counts),full);
+  const continuous=(await yAxisLabels(page,'#continuous-axis-contract')).map(Number);
+  assert.equal(continuous[0],.75);assert.equal(continuous.at(-1),.25);
+  assert.ok(continuous.some(value=>!Number.isInteger(value)),'continuous measurements must not be rounded into counts');
+  await page.evaluate(()=>{window.testCountPlot.dispose();window.testContinuousPlot.dispose();});
+});
+scenario('[charts] explicit Y bounds clip outliers without changing values and survive redraws, metric changes and unit prefixes',async({page,dir})=>{
+  await observeYAxis(page);
+  // Mathematical observations drive the real renderer; no measured report is replaced.
+  await page.evaluate(async()=>{
+    const {plot}=await import('/charts.js'),host=document.createElement('section');
+    host.id='manual-axis-contract';document.body.append(host);
+    const data=[[0,3],[1,4],[2,1000],[3,5]];
+    window.testManualData=data;window.testManualOriginal=JSON.stringify(data);
+    window.testRedrawY=(options={},points=data)=>{
+      window.testManualPlot?.dispose();
+      window.testManualPlot=plot(host,points,{integerY:true,unit:'计数',...options});
+    };
+    window.testRedrawY();
+  });
+  const host='#manual-axis-contract',mode=page.locator(host+' [data-field="scale"]');
+  assert.equal(await page.locator(host+' [data-field="y-min"]').isVisible(),false,'automatic mode keeps manual fields collapsed');
+  assert.equal(await page.locator(host+' .plot-y-status').textContent(),'');
+  await setYBounds(page,host,3,7);
+  assert.equal(await mode.inputValue(),'manual');
+  assert.deepEqual(await yAxisLabels(page,host),['3','4','5','6','7']);
+  assert.match(await page.locator(host+' .plot-y-status').textContent(),/下限非零.*上方 1 项、下方 0 项/);
+  await page.locator(host+' [data-field="x-scale"]').selectOption('manual');
+  await page.locator(host+' [data-field="from"]').fill('0.4');await page.locator(host+' [data-field="to"]').fill('2.5');
+  await page.locator(host+' [data-op="apply"]').click();
+  assert.deepEqual(await yAxisLabels(page,host),['3','4','5','6','7'],'custom X must preserve locked Y');
+  await page.locator(host+' [data-field="x-scale"]').selectOption('full');
+  assert.equal(await mode.inputValue(),'manual');assert.deepEqual(await yAxisLabels(page,host),['3','4','5','6','7']);
+  await singleRow(page.locator(host+' .plot-controls > div'),3);
+  const pixels=await page.locator(host+' canvas').evaluate(canvas=>{
+    const pixels=canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data,
+      factor=canvas.width/canvas.clientWidth;let painted=0,overflow=0;
+    for(let y=0;y<canvas.height;y++)for(let x=0;x<canvas.width;x++){
+      const i=(y*canvas.width+x)*4;
+      if(pixels[i]===16&&pixels[i+1]===185&&pixels[i+2]===129&&pixels[i+3]){
+        painted++;if(y<12*factor||y>180*factor)overflow++;
+      }
+    }
+    return {painted,overflow};
+  });
+  assert.ok(pixels.painted>0);assert.equal(pixels.overflow,0,'data strokes must not paint into axis-label margins');
+  await page.locator(host).screenshot({path:path.join(dir,'manual-y-outlier.png')});
+  await page.locator(host+' [data-op="in"]').click();
+  assert.deepEqual(await yAxisLabels(page,host),['3','4','5','6','7']);
+  await page.locator(host+' [data-op="reset"]').click();
+  assert.deepEqual(await yAxisLabels(page,host),['3','4','5','6','7'],'horizontal reset must not unlock Y');
+  await page.locator(host+' [data-field="y-min"]').fill('');
+  await page.locator(host+' [data-op="apply-y"]').click();
+  assert.match(await page.locator(host+' .plot-y-status').textContent(),/范围未应用/);
+  assert.deepEqual(await yAxisLabels(page,host),['3','4','5','6','7']);
+  await setYBounds(page,host,7,3);
+  assert.match(await page.locator(host+' .plot-y-status').textContent(),/范围未应用/);
+  await mode.selectOption('full');
+  assert.equal(await page.locator(host+' [data-field="y-min"]').isVisible(),false);
+  assert.equal(await page.locator(host+' [data-field="y-min"]').getAttribute('aria-invalid'),null);
+  assert.equal(await page.locator(host+' [data-field="y-max"]').getAttribute('aria-invalid'),null);
+  await setYBounds(page,host,2.5,8.5);
+  assert.equal(await page.locator(host+' [data-field="y-min"]').inputValue(),'2.5');
+  assert.equal(await page.locator(host+' [data-field="y-max"]').inputValue(),'8.5');
+  assert.ok((await yAxisLabels(page,host)).map(Number).every(Number.isInteger));
+  await page.evaluate(()=>window.testRedrawY({},[[0,0],[3,10000]]));
+  assert.equal(await mode.inputValue(),'manual');
+  assert.equal(await page.locator(host+' [data-field="y-max"]').inputValue(),'8.5','redrawing different curves cannot enlarge a locked range');
+  await page.evaluate(()=>window.testRedrawY({integerY:false,unit:'连续量'},[[0,.25],[3,.75]]));
+  assert.equal(await mode.inputValue(),'full','unrelated metrics must not inherit count bounds');
+  await page.evaluate(()=>window.testRedrawY());
+  assert.equal(await mode.inputValue(),'manual');
+  assert.equal(await page.locator(host+' [data-field="y-min"]').inputValue(),'2.5');
+  await mode.selectOption('full');
+  assert.equal(await mode.inputValue(),'full');
+  const automatic=await yAxisLabels(page,host);
+  await mode.selectOption('manual');
+  await page.evaluate(()=>window.testRedrawY({},[[0,0],[3,1]]));
+  assert.deepEqual(await yAxisLabels(page,host),automatic,'lock-current freezes the displayed automatic range');
+  await page.evaluate(()=>window.testRedrawY({integerY:false,unit:'kbit/s',yKey:'rate',yFactor:1000},[[0,3],[3,5]]));
+  await setYBounds(page,host,1,4);
+  await page.evaluate(()=>window.testRedrawY({integerY:false,unit:'Mbit/s',yKey:'rate',yFactor:1000000},[[0,.003],[3,.005]]));
+  assert.equal(await mode.inputValue(),'manual');
+  assert.equal(await page.locator(host+' [data-field="y-min"]').inputValue(),'0.001');
+  assert.equal(await page.locator(host+' [data-field="y-max"]').inputValue(),'0.004','prefix changes preserve the same physical bounds');
+  assert.equal(await page.evaluate(()=>JSON.stringify(window.testManualData)===window.testManualOriginal),true);
+  await page.evaluate(()=>window.testManualPlot.dispose());
+});
+scenario('[charts] bars and stems use the data zero baseline within arbitrary Y view ranges',async({page,dir})=>{
+  // Mathematical chart inputs, not a fabricated media report.
+  await page.evaluate(async()=>{
+    const {plot}=await import('/charts.js');
+    const data=[[0,2,{type:'P'}],[1,0,{type:'P'}],[2,4,{type:'P'}]];
+    window.testBaselineData=data;window.testBaselineOriginal=JSON.stringify(data);
+    window.testBaselinePlots=[];
+    for(const frames of [true,false]){
+      const host=document.createElement('section');host.id=frames?'baseline-bars':'baseline-stems';document.body.append(host);
+      window.testBaselinePlots.push(plot(host,data,{frames,stems:!frames,xEnd:3,unit:'包大小'}));
+    }
+  });
+  for(const host of ['#baseline-bars','#baseline-stems']){
+    for(const [lo,hi] of [[-2,6],[1,5],[-6,-2]]){
+      await setYBounds(page,host,lo,hi);
+      const pixels=await page.locator(host+' canvas').evaluate((canvas,[lo,hi])=>{
+        const data=canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data,
+          factor=canvas.width/canvas.clientWidth,base=canvas.clientHeight-50,
+          zero=base-(0-lo)/(hi-lo)*(base-12);
+        let painted=0,negativeRegion=0;
+        for(let y=Math.ceil(12*factor);y<Math.floor(base*factor);y++)for(let x=0;x<canvas.width;x++){
+          const i=(y*canvas.width+x)*4;
+          if(data[i]===118&&data[i+1]===169&&data[i+2]===237&&data[i+3]){
+            painted++;if(y>(zero+1)*factor)negativeRegion++;
+          }
+        }
+        return {painted,negativeRegion};
+      },[lo,hi]);
+      assert.equal(pixels.negativeRegion,0,'nonnegative data must not paint below zero');
+      if(hi<0)assert.equal(pixels.painted,0,'an entirely negative viewport contains no positive bars or stems');
+      else assert.ok(pixels.painted>0,'visible positive data remains drawn');
+      if(lo===-2)await page.locator(host).screenshot({path:path.join(dir,host.slice(1)+'-negative-axis.png')});
+    }
+  }
+  assert.equal(await page.evaluate(()=>JSON.stringify(window.testBaselineData)===window.testBaselineOriginal),true);
+  await page.evaluate(()=>window.testBaselinePlots.forEach(plot=>plot.dispose()));
+});
+scenario('[charts] [comparison] actual anticorrelated video retains negative SSIM in the graph and exported report',async({page,app,dir})=>{
+  await observeYAxis(page);
+  const reference=path.join(dir,'checker.nut'),candidate=path.join(dir,'inverted-checker.nut');
+  for(const [file,expression] of [[reference,'255*mod(X+Y,2)'],[candidate,'255*(1-mod(X+Y,2))']])
+    await run(FF,['-v','error','-y','-f','lavfi','-i',`nullsrc=size=32x32:rate=4:duration=1,format=gray,geq=lum='${expression}'`,'-c:v','ffv1','-level','3','-pix_fmt','gray',file]);
+  await page.locator('[data-mode="compare"]').click();
+  await page.locator('#reference').fill(reference);await page.locator('#candidate').fill(candidate);await page.locator('#confirm').check();
+  const {report}=await runTask(page,app,'#compare'),ssim=report.metrics.ssim;
+  assert.ok(ssim.pooled<0&&ssim.values.every(value=>value<0&&value>=-1),'FFmpeg reports negative SSIM for actual opposite sample patterns');
+  assert.ok(report.metrics.psnr.values.every(value=>value===0),'maximum opposite integer samples produce zero PSNR');
+  assert.ok((await yAxisLabels(page,'#metric-ssim')).map(Number).some(value=>value<0));
+  await setYBounds(page,'#metric-ssim',-1,0);
+  await page.locator('#metric-ssim').screenshot({path:path.join(dir,'negative-ssim.png')});
+  const exported=await download(page,'#compare-export',path.join(dir,'negative-ssim.json'));
+  assert.deepEqual(exported.results[0].report.metrics.ssim,ssim,'signed scores survive chart view changes and export');
+  await writeFile(path.join(dir,'report.json'),JSON.stringify(report));
+});
+async function repeatPosition(page,time){
+  const canvas=page.locator('#repeat-overview canvas'),box=await canvas.boundingBox(),lo=Number(await page.locator('#repeat-overview [data-field="from"]').inputValue()),hi=Number(await page.locator('#repeat-overview [data-field="to"]').inputValue());
+  return {x:76+(time-lo)/(hi-lo)*(box.width-101),y:70};
+}
+function repeatField(page,label){return page.locator('#repeat-overview .chart-field').filter({has:page.getByText(label,{exact:true})}).locator('dd');}
 scenario('[repeat-analysis] independent target displays actual runs, original timing, verified preview, RGB difference and portable evidence',async({page,app,dir})=>{
   const file=path.join(dir,'duplicates.nut');
   await run(FF,['-v','error','-y','-f','lavfi','-i','color=size=128x96:rate=24:duration=3','-c:v','rawvideo',file]);
   await preview(page,file);await page.locator('#frame-analysis').uncheck();
-  await page.locator('#repeat-enabled').check();assert.equal(await page.locator('#repeat-options').isVisible(),true);await page.locator('#freeze-enabled').check();
+  await page.locator('#repeat-enabled').check();assert.equal(await page.locator('#repeat-options').isVisible(),true);await enableFreeze(page);
   const {report}=await runTask(page,app,'#enqueue-analyze');assert.equal(report.repeatAnalysis.exact.duplicates,71);assert.equal(report.repeatAnalysis.exact.comparisons,71);
-  const host=page.locator('#repeat-result');assert.match(await host.textContent(),/精确重复次数/);assert.match(await host.textContent(),/N−1/);
+  const host=page.locator('#repeat-result');assert.match(await host.textContent(),/精确重复/);assert.match(await host.textContent(),/N−1/);
   assert.equal(await page.locator('#frame-plot').count(),0);assert.equal(await page.locator('#bitrate').count(),0);
+  assert.equal(await host.locator('.repeat-cards > .card').count(),3);
+  await host.locator('#repeat-evidence > summary').click();await host.locator('[data-rows="runs"] tbody tr').waitFor();
   await host.locator('[data-rows="runs"] [data-frame="0"]').click();assert.equal(await page.locator('#repeat-frame').inputValue(),'0');
   await page.locator('#repeat-frame').fill('1');await page.locator('#repeat-preview').click();
   await page.waitForFunction(()=>document.querySelector('#repeat-preview-images')?.querySelectorAll('img').length===2&&document.querySelector('#repeat-preview-images canvas'));
@@ -71,10 +378,187 @@ scenario('[repeat-analysis] independent target displays actual runs, original ti
   const difference=await page.locator('#repeat-preview-images canvas').evaluate(c=>{const a=c.getContext('2d').getImageData(0,0,c.width,c.height).data;let max=0;for(let i=0;i<a.length;i++)if(i%4!==3)max=Math.max(max,a[i]);return max;});assert.equal(difference,0);
   const pending=page.waitForEvent('download');await host.locator('[data-csv="runs"]').click();const csv=await pending;const csvFile=path.join(dir,'runs.csv');await csv.saveAs(csvFile);assert.match(await readFile(csvFile,'utf8'),/next-original-pts|last-ffprobe-duration|unknown/);
   const exported=path.join(dir,'repeat-report.json');const portable=await download(page,'#inspect-export',exported);assert.deepEqual(portable.results[0].report.repeatAnalysis,report.repeatAnalysis);
-  await importReport(page,exported);assert.match(await page.locator('#repeat-result').textContent(),/精确重复次数/);
-  assert.deepEqual(await page.locator('#repeat-result [data-rows="runs"] tbody tr').count(),1);
+  await importReport(page,exported);assert.match(await page.locator('#repeat-result').textContent(),/精确重复/);
+  assert.equal(await host.locator('[data-rows="runs"] tbody tr').count(),0);
+  await host.locator('#repeat-evidence > summary').click();await host.locator('[data-rows="runs"] tbody tr').waitFor();
+  assert.equal(await host.locator('[data-rows="runs"] tbody tr').count(),1);
   await writeFile(path.join(dir,'report.json'),JSON.stringify(report));
 });
+scenario('[repeat-analysis] empty and single-frame results explain what was measured without empty tables or success labels',async({page,app,dir})=>{
+  await preview(page,media.sitiSource);await page.locator('#frame-analysis').uncheck();
+  await page.locator('#repeat-enabled').check();await enableFreeze(page);
+  const {report}=await runTask(page,app,'#enqueue-analyze');
+  assert.equal(report.repeatAnalysis.exact.duplicates,0);assert.equal(report.repeatAnalysis.freeze.segments.length,0);
+  const host=page.locator('#repeat-result');
+  await host.locator('#repeat-evidence > summary').click();await host.locator('[data-rows="runs"] p').waitFor();
+  assert.match(await host.locator('[data-rows="runs"]').textContent(),/未发现相邻帧/);
+  assert.equal(await host.locator('[data-rows="runs"] table').count(),0);
+  assert.match(await host.locator('#repeat-freeze-details > summary').textContent(),/未检出/);
+  assert.equal(await host.locator('#repeat-freeze-track').count(),0,'empty results do not invent a time distribution');
+  await host.locator('#repeat-freeze-details > summary').click();
+  await host.locator('[data-rows="segments"] p').waitFor();
+  assert.match(await host.locator('[data-rows="segments"]').textContent(),/持续至少 2 s.*不排除更短/);
+  assert.equal(await host.locator('[data-page="segments:1"]').isVisible(),false);
+  const pending=page.waitForEvent('download');await host.locator('[data-csv="segments"]').click();
+  const file=path.join(dir,'empty-segments.csv');await(await pending).saveAs(file);
+  const csv=await readFile(file,'utf8');assert.match(csv,/"start","end","duration","detectedAtFrame","endDetectedAtFrame"/);assert.equal(csv.trim().split('\r\n').length,1);
+  const single=path.join(dir,'single.nut');
+  await run(FF,['-v','error','-y','-f','lavfi','-i','color=size=128x96:rate=24','-frames:v','1','-c:v','rawvideo',single]);
+  await preview(page,single);const result=await runTask(page,app,'#enqueue-analyze');assert.equal(result.report.repeatAnalysis.frames.length,1);
+  assert.match(await host.locator('#repeat-summary').innerText(),/仅有一帧，无法比较相邻画面或计算相邻间隔/);
+  assert.match(await host.locator('.repeat-cards > .card').nth(1).innerText(),/比例不可计算/);
+  await host.locator('#repeat-evidence > summary').click();await host.locator('[data-rows="runs"] p').waitFor();
+  assert.match(await host.locator('[data-rows="runs"]').textContent(),/仅有一帧/);
+  await host.locator('[data-rows="intervals"] p').waitFor();
+  assert.match(await host.textContent(),/仅有一帧，无法比较相邻画面或计算相邻间隔/);
+  assert.equal(await host.locator('[data-rows="intervals"] table').count(),0);
+  assert.equal(await host.locator('[data-page="intervals:1"]').isVisible(),false);
+  // Presentation-only status fixtures, not media measurements or importable reports.
+  const statusMessages=await page.evaluate(async original=>{
+    const {repeatHTML}=await import('/repeat-view.js');
+    const cases=[
+      {...original,timeBase:null,freeze:{status:'unavailable',reason:'时间证据不足'}},
+      {...original,timeline:{...original.timeline,status:'partial'},freeze:{status:'failed',reason:'检测进程退出'}},
+    ];
+    return cases.map(value=>{
+      const doc=new DOMParser().parseFromString(repeatHTML(value),'text/html');
+      return {summary:doc.querySelector('#repeat-summary').textContent,freeze:doc.querySelector('#repeat-freeze').textContent};
+    });
+  },report.repeatAnalysis);
+  assert.match(statusMessages[0].summary,/缺少有效时间基/);
+  assert.match(statusMessages[1].summary,/时间戳有缺失或非递增/);
+  assert.match(statusMessages[0].freeze,/无法判断.*时间证据不足/);
+  assert.match(statusMessages[1].freeze,/检测失败.*检测进程退出/);
+});
+scenario('[repeat-analysis] closed freeze candidates show upstream start, end and duration without changing event evidence',async({page,app,dir})=>{
+  const file=path.join(dir,'closed-freeze.nut');
+  await run(FF,['-v','error','-y','-f','lavfi','-i','color=size=128x96:rate=24:duration=3','-f','lavfi','-i','testsrc2=size=128x96:rate=24:duration=1','-filter_complex','[0:v][1:v]concat=n=2:v=1:a=0','-c:v','rawvideo',file]);
+  await preview(page,file);await page.locator('#frame-analysis').uncheck();await page.locator('#repeat-enabled').check();await enableFreeze(page);
+  const {report}=await runTask(page,app,'#enqueue-analyze'),segment=report.repeatAnalysis.freeze.segments[0];assert.ok(segment.end!==null&&segment.duration!==null);
+  const host=page.locator('#repeat-result');
+  assert.equal(await host.locator('#repeat-evidence').evaluate(el=>el.open),false);
+  await host.locator('#repeat-overview canvas').hover({position:await repeatPosition(page,1)});
+  assert.equal(await repeatField(page,'开始（s）').innerText(),segment.start);
+  assert.equal(await repeatField(page,'结束（s）').innerText(),segment.end);
+  assert.equal(await repeatField(page,'持续（s）').innerText(),segment.duration);
+  await host.locator('#repeat-freeze-details > summary').click();
+  await host.locator('[data-rows="segments"] tbody tr').first().waitFor();
+  assert.deepEqual((await host.locator('[data-rows="segments"] tbody tr').first().locator('td').allTextContents()).slice(0,4),[segment.start,segment.end,segment.duration,String(segment.detectedAtFrame)]);
+  await host.locator('#repeat-freeze').screenshot({path:path.join(dir,'repeat-results-expanded.png')});
+});
+scenario('[repeat-analysis] eight real static candidates share the existing count plot, retain actual time boundaries and preserve review and exports',async({page,app,dir})=>{
+  const raw=path.join(dir,'eight-static.raw'),file=path.join(dir,'eight-static.nut');
+  const frames=Array.from({length:128},(_,frame)=>Buffer.alloc(32*32,frame%16<12?40+40*(Math.floor(frame/16)%2):frame%2?220:160));
+  await writeFile(raw,Buffer.concat(frames));
+  await run(FF,['-v','error','-y','-f','rawvideo','-pixel_format','gray','-video_size','32x32','-framerate','4','-i',raw,'-c:v','rawvideo',file]);
+  await preview(page,file);await page.locator('#frame-analysis').uncheck();await page.locator('#repeat-enabled').check();await enableFreeze(page);
+  const {report}=await runTask(page,app,'#enqueue-analyze'),r=report.repeatAnalysis;
+  assert.equal(r.freeze.status,'complete',r.freeze.reason);assert.equal(r.freeze.segments.length,8);
+  const host=page.locator('#repeat-result'),body=host.locator(':scope > .report-section-body'),canvas=host.locator('#repeat-overview canvas'),candidates=host.locator('#repeat-freeze'),rows=candidates.locator('[data-rows="segments"] tbody tr');
+  assert.equal(await host.locator('canvas').count(),1,'candidates reuse the existing duplicate-count canvas');
+  assert.equal(await host.locator('svg').count(),0);assert.equal(await rows.count(),0);
+  assert.match(await canvas.getAttribute('aria-label'),/原始时间/);
+  assert.equal(Number(await host.locator('#repeat-overview [data-field="to"]').inputValue()),31.75,'the endpoint is the last observed PTS');
+  for(let i=0;i<r.freeze.segments.length;i++){
+    const segment=r.freeze.segments[i],position=await repeatPosition(page,(Number(segment.start)+Number(segment.end))/2);
+    await canvas.hover({position});
+    assert.equal(await repeatField(page,'静止候选').innerText(),String(i+1)+' / 8');
+    assert.deepEqual(await Promise.all(['开始（s）','结束（s）','持续（s）'].map(label=>repeatField(page,label).innerText())),[segment.start,segment.end,segment.duration]);
+    assert.equal(await repeatField(page,'精确重复次数').innerText(),'1');
+  }
+  const inside=await repeatPosition(page,1.5),outside=await repeatPosition(page,3.5);
+  const alpha=await canvas.evaluate((el,positions)=>{const c=el.getContext('2d'),d=el.width/el.clientWidth;return positions.map(p=>c.getImageData(Math.floor(p.x*d),Math.floor(p.y*d),1,1).data[3]);},[inside,outside]);
+  assert.ok(alpha[0]>alpha[1],'candidate intervals are drawn behind the original curve');
+  await canvas.hover({position:outside});assert.equal(await repeatField(page,'静止候选').innerText(),'无');assert.equal(await repeatField(page,'精确重复次数').innerText(),'0');
+  await page.locator('#toggle-island').click();
+  await host.screenshot({path:path.join(dir,'eight-static-integrated.png')});
+  await body.locator(':scope > summary').click();assert.equal((await host.innerText()).trim(),'重复帧与时间诊断');
+  await body.locator(':scope > summary').click();
+  await canvas.click({position:await repeatPosition(page,29.5)});
+  assert.equal(await host.locator('#repeat-review').evaluate(el=>el.open),true);
+  assert.equal(await host.locator('#repeat-frame').inputValue(),String(r.freeze.segments[7].detectedAtFrame));
+  await candidates.locator('#repeat-freeze-details > summary').click();await rows.first().waitFor();assert.equal(await rows.count(),8);
+  for(let i=0;i<r.freeze.segments.length;i++){
+    const segment=r.freeze.segments[i];assert.deepEqual((await rows.nth(i).locator('td').allTextContents()).slice(0,4),[segment.start,segment.end,segment.duration,String(segment.detectedAtFrame)]);
+  }
+  const csvPending=page.waitForEvent('download');await candidates.locator('[data-csv="segments"]').click();
+  const csvFile=path.join(dir,'eight-static.csv');await(await csvPending).saveAs(csvFile);assert.equal((await readFile(csvFile,'utf8')).trim().split('\r\n').length,9);
+  const exported=path.join(dir,'report.json'),portable=await download(page,'#inspect-export',exported);assert.deepEqual(portable.results[0].report,report);
+  await importReport(page,exported);assert.equal(await rows.count(),0);assert.equal(await host.locator('canvas').count(),1);
+  await host.locator('#repeat-overview [data-field="x-scale"]').selectOption('manual');
+  await host.locator('#repeat-overview [data-field="from"]').fill('28.25');await host.locator('#repeat-overview [data-field="to"]').fill('28.75');await host.locator('#repeat-overview [data-op="apply"]').click();
+  assert.equal(Number(await host.locator('#repeat-overview [data-field="to"]').inputValue())-Number(await host.locator('#repeat-overview [data-field="from"]').inputValue()),.5,'time coordinates retain subsecond inspection');
+  await canvas.hover({position:await repeatPosition(page,28.5)});assert.equal(await repeatField(page,'静止候选').innerText(),'8 / 8');
+  await page.setViewportSize({width:390,height:844});assert.equal(await host.evaluate(el=>el.scrollWidth<=el.clientWidth),true);
+  await host.screenshot({path:path.join(dir,'eight-static-integrated-mobile.png')});
+});
+scenario('[repeat-analysis] low-change candidate shading never adds to exact duplicate counts',async({page,app,dir})=>{
+  const raw=path.join(dir,'changing-16.raw'),file=path.join(dir,'changing-16.nut'),frames=[];
+  for(let i=0;i<48;i++){const frame=Buffer.alloc(32*32*2);for(let j=0;j<frame.length;j+=2)frame.writeUInt16LE(i,j);frames.push(frame);}
+  await writeFile(raw,Buffer.concat(frames));await run(FF,['-v','error','-y','-f','rawvideo','-pixel_format','gray16le','-video_size','32x32','-framerate','12','-i',raw,'-c:v','rawvideo',file]);
+  await preview(page,file);await page.locator('#frame-analysis').uncheck();await page.locator('#repeat-enabled').check();await enableFreeze(page);
+  const {report}=await runTask(page,app,'#enqueue-analyze'),r=report.repeatAnalysis;
+  assert.equal(r.exact.duplicates,0);assert.equal(r.freeze.status,'complete',r.freeze.reason);assert.equal(r.freeze.segments.length,1);
+  await page.locator('#repeat-overview canvas').hover({position:await repeatPosition(page,1)});
+  assert.equal(await repeatField(page,'精确重复次数').innerText(),'0');assert.equal(await repeatField(page,'静止候选').innerText(),'1 / 1');assert.equal(await repeatField(page,'结束（s）').innerText(),'未报告（开放）');
+});
+scenario('[table-scrolling] actual frame records scroll under fixed headers, page independently and export every row',async({page,app,dir})=>{
+  const file=path.join(dir,'long-list.nut');await run(FF,['-v','error','-y','-f','lavfi','-i','testsrc2=size=32x32:rate=24:duration=6','-c:v','rawvideo',file]);
+  await preview(page,file);const {report}=await runTask(page,app,'#enqueue-analyze');assert.equal(report.frames.length,144);
+  await page.getByText('逐帧列表 / CSV',{exact:true}).click();
+  const viewport=page.locator('#frames > .table-wrap'),header=viewport.locator('th').first();await viewport.scrollIntoViewIfNeeded();
+  const initial=await header.boundingBox(),height=(await viewport.boundingBox()).height;
+  assert.ok(height<=421);assert.equal(await viewport.locator('tbody tr').count(),100);
+  await viewport.hover();await page.mouse.wheel(0,700);await page.waitForFunction(()=>document.querySelector('#frames > .table-wrap').scrollTop>100);
+  assert.ok(Math.abs((await header.boundingBox()).y-initial.y)<2,'column titles remain at the scroll region top');
+  await viewport.screenshot({path:path.join(dir,'frame-list-scrolling.png')});
+  await page.locator('#next').click();assert.equal(await viewport.locator('tbody tr').count(),44);assert.equal(await viewport.evaluate(el=>el.scrollTop),0);
+  const pending=page.waitForEvent('download');await page.locator('#csv').click();const out=path.join(dir,'all-frames.csv');await(await pending).saveAs(out);
+  const lines=(await readFile(out,'utf8')).trim().split('\n');assert.equal(lines.length,145);assert.equal(lines.at(-1).split(',')[0],'143');
+  await page.setViewportSize({width:390,height:844});assert.ok((await viewport.boundingBox()).height<=421);assert.equal(await page.locator('#inspect-details').evaluate(el=>el.scrollWidth<=el.clientWidth),true);
+});
+scenario('[repeat-analysis] default analysis exposes one evidence panel and omits unrequested freeze screening',async({page,app,dir})=>{
+  await preview(page,media.sitiSource);await page.locator('#frame-analysis').uncheck();await page.locator('#repeat-enabled').check();
+  assert.equal(await page.locator('#freeze-enabled').isVisible(),false,'optional screening stays in collapsed advanced options');
+  const {report}=await runTask(page,app,'#enqueue-analyze');assert.equal(report.repeatAnalysis.freeze.status,'not-requested');
+  const host=page.locator('#repeat-result');
+  assert.deepEqual(await host.locator('#repeat-evidence > summary, #repeat-review > summary').allTextContents(),['检测明细与导出','原帧复核']);
+  const layout=await host.evaluate(el=>{
+    const heading=el.querySelector('h3').getBoundingClientRect(),canvas=el.querySelector('#repeat-overview canvas').getBoundingClientRect();
+    return {beforeCanvas:canvas.top-heading.top,numberFont:getComputedStyle(el.querySelector('.repeat-cards strong')).fontSize};
+  });
+  await writeFile(path.join(dir,'repeat-default-layout.json'),JSON.stringify(layout));
+  assert.ok(parseFloat(layout.numberFont)>=23,'primary measured values keep their original visual prominence');
+  assert.ok(layout.beforeCanvas<230,'normal metadata and method paragraphs do not push the chart down');
+  const spread=await host.locator('.repeat-cards > .card').evaluateAll(cards=>cards.map(card=>card.getBoundingClientRect().left));
+  const stripWidth=(await host.locator('.repeat-cards').boundingBox()).width;
+  assert.ok(spread[2]-spread[0]>stripWidth*.6,'statistics use the available horizontal space');
+  assert.equal(await host.locator('#repeat-freeze').count(),0);assert.doesNotMatch(await host.textContent(),/静止筛查|持续静止候选|本次未选择/);
+  assert.equal(await host.locator('#repeat-summary').isVisible(),false,'zero duplicates are already explicit in the primary statistic');
+  assert.equal(await host.locator('.repeat-cards > .card').nth(1).locator('strong').textContent(),'0 次');
+  assert.doesNotMatch(await host.locator('#repeat-summary').innerText(),/比较 11/);
+  assert.equal(await host.locator('#repeat-review').evaluate(el=>el.open),false);
+  await host.evaluate(el=>scrollTo(0,Math.max(0,scrollY+el.querySelector('h3').getBoundingClientRect().top-360)));
+  const top=await host.evaluate(el=>{
+    const section=el.getBoundingClientRect(),heading=el.querySelector('h3').getBoundingClientRect(),canvas=el.querySelector('#repeat-overview canvas').getBoundingClientRect();
+    return {x:section.left,y:heading.top,width:section.width,height:canvas.top-heading.top};
+  });
+  await page.screenshot({path:path.join(dir,'repeat-default-top.png'),clip:top});
+  await host.screenshot({path:path.join(dir,'repeat-results-default.png')});
+  await page.setViewportSize({width:390,height:844});
+  assert.equal(await host.locator('#repeat-interpretation').isVisible(),false);
+  assert.match(await host.locator('.repeat-cards > .card').nth(1).locator('span').first().getAttribute('title'),/不能据此认定录制故障/);
+  assert.equal(await host.evaluate(el=>el.scrollWidth>el.clientWidth),false,'collapsed technical content does not overflow the narrow result');
+  await page.locator('#toggle-island').click();
+  await host.locator('.repeat-cards').screenshot({path:path.join(dir,'repeat-summary-mobile.png')});
+  await host.screenshot({path:path.join(dir,'repeat-results-default-mobile.png')});
+  await page.setViewportSize({width:1440,height:900});
+  await host.locator('#repeat-evidence > summary').click();await host.locator('[data-rows="frames"] tbody tr').first().waitFor();
+  assert.equal(await host.locator('[data-rows="frames"] tbody tr').count(),12);
+});
+async function enableFreeze(page){
+  await page.locator('#repeat-options > details > summary').click();await page.locator('#freeze-enabled').check();
+}
 async function preview(page,file=media.source){
   const response=page.waitForResponse(r=>r.url().endsWith('/api/probe')&&r.request().method()==='POST');
   await page.locator('#file').fill(file);
@@ -103,11 +587,154 @@ async function download(page,button,file){
   const stamp=downloaded.suggestedFilename().match(/(\d{8}T\d{6}Z)(?:-\d+)?\.json$/)[1];
   const instant=Date.parse(stamp.replace(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/,'$1-$2-$3T$4:$5:$6Z'));
   assert.ok(Math.abs(Date.now()-instant)<60000,'download filename must represent UTC regardless of the browser timezone');
-  await downloaded.saveAs(file);const text=await readFile(file,'utf8');assert.equal(text.includes('\n'),false);
+  await downloaded.saveAs(file);const text=await readFile(file,'utf8');assert.equal(text.includes('\n'),false);assert.equal(JSON.parse(text).formatVersion,'0.4');
   const decoded=parsePortable(text);assert.equal(downloaded.suggestedFilename(),portableFilename(decoded.results,decoded.plans,stamp));return decoded;
 }
 async function analyze(page,app){await preview(page);await page.locator('#bitrate-enabled').check();return runTask(page,app,'#enqueue-analyze')}
+scenario('[section-folding] all result panels fold natively and preserve charts, warnings, navigation and exported evidence',async({page,app,dir})=>{
+  await preview(page,media.sitiSource);await page.locator('#complexity').check();
+  await page.locator('#bitrate-enabled').check();await page.locator('#repeat-enabled').check();
+  const {report,job}=await runTask(page,app,'#enqueue-analyze');assert.equal(report.content.available,true,report.content.reason);
+  const root=page.locator('#inspect-details'),panels=root.locator(':scope > .section > .report-section-body');
+  assert.equal(await panels.count(),await root.locator(':scope > .section').count());
+  assert.ok(await panels.count()>=7);
+  assert.ok(await panels.evaluateAll(items=>items.every(item=>item.open===(item.id!=='audio-packets-optional'))));
+  const frame=root.locator(':scope > .section').filter({has:page.getByRole('heading',{name:'帧结构与 GOP',exact:true})});
+  const frameBody=frame.locator(':scope > .report-section-body'),canvas=await frame.locator('#frame-plot canvas').elementHandle();
+  await frame.locator('#frame-plot [data-field="x-scale"]').selectOption('manual');
+  await frame.locator('#frame-plot [data-field="from"]').fill('0.2');await frame.locator('#frame-plot [data-field="to"]').fill('0.6');
+  await frame.locator('#frame-plot [data-op="apply"]').click();await setYBounds(page,'#frame-plot',.1,2);
+  const view=()=>frame.locator('#frame-plot [data-field]').evaluateAll(items=>items.map(item=>[item.dataset.field,item.value]));
+  const before=await view();
+  for(let i=0;i<await panels.count();i++)if(await panels.nth(i).evaluate(el=>el.open))await panels.nth(i).locator(':scope > summary').click();
+  assert.ok((await panels.evaluateAll(items=>items.map(item=>item.open))).every(open=>!open));
+  assert.ok(await frame.evaluate(el=>el.getBoundingClientRect().height<70),'a folded panel uses compact vertical padding');
+  assert.equal(await frame.locator('h3').evaluate(el=>getComputedStyle(el).fontSize),'15px','folding keeps the original heading size');
+  assert.equal(await frame.locator('#frame-plot canvas').isVisible(),false);
+  const siti=root.locator(':scope > .section').filter({has:page.getByRole('heading',{name:'SI/TI 内容复杂度',exact:true})});
+  assert.equal(await siti.locator('#siti-scene-note').isVisible(),false,'scene context follows the hidden SI/TI result');
+  assert.ok(await panels.evaluateAll(items=>items.every(item=>item.querySelector(':scope > summary').textContent===item.querySelector(':scope > summary > h3').textContent)),'major headings contain only the panel name');
+  const closedHeights=await panels.evaluateAll(items=>items.map(item=>item.parentElement.getBoundingClientRect().height));
+  assert.ok(Math.max(...closedHeights)-Math.min(...closedHeights)<2,'normal folded panels use the same compact row height');
+  await page.setViewportSize({width:1440,height:1400});
+  await root.screenshot({path:path.join(dir,'report-panels-collapsed.png')});
+  await page.locator('.floating-nav a').filter({hasText:'帧结构与 GOP'}).click();
+  assert.equal(await frameBody.evaluate(el=>el.open),true,'sidebar navigation expands the target');
+  await page.waitForFunction(()=>{
+    const canvas=document.querySelector('#frame-plot canvas');return canvas.clientWidth>100&&canvas.width===Math.floor(canvas.clientWidth*devicePixelRatio)&&canvas.height===Math.floor(canvas.clientHeight*devicePixelRatio);
+  });
+  assert.equal(await canvas.evaluate(el=>el===document.querySelector('#frame-plot canvas')),true,'expansion reuses the original chart');
+  assert.deepEqual(await view(),before,'locked Y and custom X survive folding');
+  await siti.locator(':scope > .report-section-body > summary').focus();await page.keyboard.press('Enter');
+  assert.equal(await siti.locator('.report-section-body').evaluate(el=>el.open),true);
+  assert.equal(await siti.locator('#si canvas').isVisible(),true);
+  assert.equal(await siti.locator('#siti-scene-note').isVisible(),true,'scene limitation remains visible whenever SI/TI results are shown');
+  await page.locator('[data-mode="compare"]').click();await page.locator('[data-mode="inspect"]').click();
+  await page.locator(`[data-result-open="${job.id}"]`).click();
+  assert.equal(await frameBody.evaluate(el=>el.open),true);
+  assert.equal(await root.locator('.basic-info-body').evaluate(el=>el.open),false,'same-report selection and tabs keep fold state');
+  const file=path.join(dir,'report.json'),exported=await download(page,'#inspect-export',file);assert.deepEqual(exported.results[0].report,report);
+  await importReport(page,file);assert.ok(await panels.evaluateAll(items=>items.every(item=>item.open===(item.id!=='audio-packets-optional'))),'a newly opened report restores default panel states');
+  await page.locator('[data-mode="compare"]').click();await page.locator('#reference').fill(media.sitiSource);
+  await page.locator('#candidate').fill(media.sitiSource);await page.locator('#confirm').check();await runTask(page,app,'#compare');
+  assert.equal(await page.locator('#compare-details > .section > .report-section-body').count(),await page.locator('#compare-details > .section').count());
+});
+
+scenario('[report-layout] current report remains identifiable across views, imports, removal and native basic-info folding',async({page,app,dir})=>{
+  const first=await analyze(page,app),button=id=>page.locator(`[data-result-open="${id}"]`);
+  assert.equal(await button(first.job.id).getAttribute('aria-current'),'true');
+  assert.equal(await button(first.job.id).textContent(),'正在查看');
+  assert.equal(await page.locator('#result-list .is-current-report').count(),1);
+  assert.match(await page.locator('#inspect-report-context').textContent(),new RegExp(path.basename(media.source).replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
+  const basic=page.locator('.basic-info-body'),canvas=await page.locator('#frame-plot canvas').elementHandle();
+  assert.equal(await basic.evaluate(el=>el.open),true);
+  await basic.locator(':scope > summary').click();
+  assert.equal(await page.locator('[data-track-main]').isVisible(),false);
+  assert.equal(await basic.locator(':scope > summary').isVisible(),true);
+  await button(first.job.id).click();
+  assert.equal(await canvas.evaluate(el=>el===document.querySelector('#frame-plot canvas')),true,'reopening the current report preserves chart state');
+  assert.equal(await basic.evaluate(el=>el.open),false,'reopening the current report preserves its folded basic information');
+  await page.locator('[data-mode="compare"]').click();
+  assert.equal(await page.locator('#result-list [aria-current="true"]').count(),0);
+  await page.locator('[data-mode="inspect"]').click();
+  assert.equal(await button(first.job.id).getAttribute('aria-current'),'true');
+  assert.equal(await basic.evaluate(el=>el.open),false);
+  await basic.locator(':scope > summary').focus();await page.keyboard.press('Enter');
+  assert.equal(await basic.evaluate(el=>el.open),true,'native disclosure remains keyboard accessible');
+  const frameSection=page.locator('#inspect-details > .section').filter({has:page.locator('h3',{hasText:'帧结构与 GOP'})});
+  assert.equal(await page.locator('#inspect-details > .cards').count(),0);
+  assert.deepEqual(await frameSection.locator('.report-metrics dt').allTextContents(),['显示帧数','视频包数据量','GOP / 关键帧区间','非递增时间戳']);
+  assert.deepEqual(await frameSection.locator('.report-metrics dd').allTextContents(),[String(first.report.frames.length),formatBytes(first.report.packets.bytes),String(first.report.coding.gops.length),String(first.report.summary.nonIncreasing)]);
+  assert.ok((await frameSection.locator('.report-metrics').boundingBox()).height<60);
+  await frameSection.locator('.report-metrics').screenshot({path:path.join(dir,'frame-metrics-compact.png')});
+  await page.locator('#bitrate-enabled').uncheck();const second=await runTask(page,app,'#enqueue-analyze');
+  assert.equal(await button(first.job.id).getAttribute('aria-current'),null);
+  assert.equal(await button(second.job.id).getAttribute('aria-current'),'true','same filenames do not confuse the selected result');
+  await button(first.job.id).click();
+  await page.waitForFunction(id=>document.querySelector('#inspect-result').dataset.reportOwner===id,first.job.id);
+  assert.equal(await button(first.job.id).getAttribute('aria-current'),'true');
+  const exported=await download(page,'#inspect-export',path.join(dir,'layout-roundtrip.json'));assert.deepEqual(exported.results[0].report,first.report);
+  await importReport(page,path.join(dir,'layout-roundtrip.json'));
+  const current=page.locator('#result-list [aria-current="true"]');let importedId=await current.getAttribute('data-result-open');
+  assert.ok(importedId.startsWith('imported-'));
+  assert.equal(await page.locator('#inspect-result').getAttribute('data-report-owner'),importedId);
+  await page.locator('#import-results-mode').selectOption('replace');
+  await importReport(page,path.join(dir,'layout-roundtrip.json'));
+  const replacedId=importedId;importedId=await current.getAttribute('data-result-open');
+  assert.notEqual(importedId,replacedId);assert.equal(await button(replacedId).count(),0);
+  assert.equal(await page.locator('#inspect-result').getAttribute('data-report-owner'),importedId);
+  await page.locator('#result-list').screenshot({path:path.join(dir,'current-report.png')});
+  await page.locator('.basic-info-body > summary').click();
+  await page.locator('[data-basic-info]').screenshot({path:path.join(dir,'basic-info-collapsed.png')});
+  await page.setViewportSize({width:390,height:844});
+  assert.equal(await frameSection.locator('.report-metrics').evaluate(el=>el.scrollWidth<=el.clientWidth),true);
+  await page.locator(`[data-result-remove="${importedId}"]`).click();
+  assert.equal(await page.locator('#result-list [aria-current="true"]').count(),0);
+  assert.equal(await page.locator('#inspect-result').isVisible(),false);
+});
+scenario('[analysis-notes] measured methods collapse by module while current scene warnings and exported evidence remain intact',async({page,app,dir})=>{
+  await preview(page,media.sitiSource);
+  await page.locator('#complexity').check();await page.locator('#bitrate-enabled').check();
+  const {report}=await runTask(page,app,'#enqueue-analyze');
+  assert.equal(report.content.available,true,report.content.reason);
+  const groups=analysisNoticeGroups(report);
+  assert.ok(groups.siti.length>=5);assert.equal(groups.frames.length,2);assert.equal(groups.bitrate.length,1);assert.equal(groups.metadata.length,1);
+  for(const text of [...groups.siti,...groups.frames,...groups.bitrate,...groups.metadata]){
+    const paragraph=page.locator('#inspect-details p').filter({hasText:text});
+    assert.ok(await paragraph.count()>0,'fixed explanation must remain available');
+    assert.equal(await paragraph.first().isVisible(),false,'fixed explanation starts collapsed');
+  }
+  for(const text of groups.sitiWarnings.filter(text=>text!==unconfirmedSceneNote))assert.equal(await page.locator('#inspect-details .notice').filter({hasText:text}).isVisible(),true);
+  const siti=page.locator('#inspect-details > .section').filter({has:page.locator('h3',{hasText:'SI/TI 内容复杂度'})});
+  assert.equal(await siti.locator('#siti-scene-note').innerText(),'场景边界未确认，TI 可能含剪辑点影响。');
+  assert.equal(await siti.locator('p').filter({hasText:unconfirmedSceneNote}).isVisible(),false,'the complete scene explanation starts in method details');
+  await siti.locator('.analysis-explanation > summary').click();
+  assert.equal(await siti.locator('p').filter({hasText:analysisNotes.siti[0]}).isVisible(),true);
+  assert.equal(await siti.locator('p').filter({hasText:unconfirmedSceneNote}).isVisible(),true);
+  await siti.locator('.analysis-explanation > summary').click();
+  const exported=await download(page,'#inspect-export',path.join(dir,'report.json'));
+  assert.deepEqual(exported.results[0].report,report,'presentation cannot rewrite notes, warnings, numerical values or report evidence');
+  await importReport(page,path.join(dir,'report.json'));
+  assert.equal(await page.locator('#inspect-details p').filter({hasText:analysisNotes.siti[0]}).isVisible(),false);
+  await siti.screenshot({path:path.join(dir,'analysis-notes-collapsed.png')});
+  const untimed=path.join(dir,'without-packet-timestamps.h264');
+  await run(FF,['-v','error','-y','-i',media.sitiSource,'-map','0:v','-c:v','copy','-bsf:v','h264_mp4toannexb',untimed]);
+  await page.locator('#complexity').uncheck();
+  await preview(page,untimed);
+  const limited=await runTask(page,app,'#enqueue-analyze');
+  assert.equal(limited.report.packets.bitrateCurve.status,'unavailable');
+  assert.equal(await page.locator('#bitrate-optional').evaluate(el=>el.open),false);
+  for(const reason of limited.report.packets.bitrateCurve.reasons){
+    assert.equal(await page.locator('#inspect-details .notice').filter({hasText:`窗口码率不可计算：${reason}`}).isVisible(),true,'actual limitations remain visible while curves are collapsed');
+  }
+});
 scenario('[analysis-targets] automatic preview and independent targets follow the queue workflow and survive import',async({page,app,dir})=>{
+  await singleRow(page.locator('.analysis-target-grid > .analysis-target'),4);
+  await page.locator('.analysis-target-grid').screenshot({path:path.join(dir,'analysis-targets-desktop.png')});
+  await page.setViewportSize({width:390,height:844});
+  assert.equal(await page.locator('.analysis-target-grid').evaluate(el=>el.scrollWidth<=el.clientWidth),true);
+  await page.locator('.analysis-target-grid').screenshot({path:path.join(dir,'analysis-targets-mobile.png')});
+  await page.setViewportSize({width:1440,height:900});
   assert.equal(await page.locator('#frame-analysis').isChecked(),true);
   assert.equal(await page.locator('#bitrate-enabled').isChecked(),false);
   assert.equal(await page.locator('#complexity').isChecked(),false);
@@ -223,7 +850,9 @@ scenario('[bitrate-window] [units] calculation selection and display aggregation
   await page.locator('#bitrate canvas').scrollIntoViewIfNeeded();
   const canvasBox=await page.locator('#bitrate canvas').boundingBox();
   await page.mouse.move(canvasBox.x+76+(canvasBox.width-101)*0.25,canvasBox.y+40);
-  assert.match(await page.locator('#bitrate .chart-label').textContent(),/\[[^\]]+, [^\]]+\) s.* B/,'tooltip reports interval boundaries and bytes');
+  assert.match(await page.locator('#bitrate .chart-label dt').first().textContent(),/测量区间（s）/);
+  assert.match(await page.locator('#bitrate .chart-label dd').first().textContent(),/^\[[^\]]+, [^\]]+\)$/,'tooltip reports exact interval boundaries');
+  assert.equal(await page.locator('#bitrate .chart-field').filter({hasText:'包负载（B）'}).count(),1,'tooltip retains the byte evidence');
   assert.equal(await page.locator('#bitrate .plot-axis-y').textContent(),'纵轴：'+rateUnit);
   await page.locator('#bitrate [data-op="in"]').click();
   assert.equal(await page.locator('#bitrate .plot-axis-y').textContent(),'纵轴：'+rateUnit,'zoom does not change units');
@@ -349,7 +978,7 @@ scenario('[basic-properties] actual preview omits automatic sampling and preserv
   assert.deepEqual((await download(page,'#inspect-export',path.join(dir,'legacy-samples-restored.json'))).results[0].report,legacy);
   const old=structuredClone(report);old.schema='MediaScope/0.1';delete old.pixelFormats;delete old.frameSampleRead;delete old.frameSample;delete old.frameSampleScope;
   const oldFile=path.join(dir,'properties-old.json');await writeFile(oldFile,JSON.stringify(old));await importReport(page,oldFile);
-  // A legacy file is rejected; the last valid 0.4 report remains visible.
+  // An unsupported early wrapper is rejected; the last valid report remains visible.
   const oldSaved=await download(page,'#inspect-export',path.join(dir,'properties-old-restored.json'));
   assert.deepEqual(oldSaved.results[0].report,legacy);
 });
@@ -426,7 +1055,10 @@ scenario('[analysis] GPU SI/TI selection preserves the P.910 SDR method and disp
   assert.equal(report.content.execution.method,SITI_COMPAT_PROFILE);
   if(capability.available)assert.equal(report.content.execution.validation.selfTest,'passed');
   assert.equal(report.content.points.length,report.frames.length);
-  assert.match(await page.locator('#inspect-details').innerText(),capability.available?/GPU ·/:/CPU ·/);
+  const method=page.locator('#inspect-details > .section').filter({has:page.locator('h3',{hasText:'SI/TI 内容复杂度'})}).locator('.analysis-explanation');
+  assert.equal(await method.evaluate(el=>el.open),false);
+  await method.locator(':scope > summary').click();
+  assert.match(await method.innerText(),capability.available?/GPU ·/:/CPU ·/);
   assert.match(await page.locator('#inspect-details').innerText(),/siti-tools 0\.6\.0/);
 });
 
@@ -447,7 +1079,10 @@ scenario('[analysis] SI/TI confirmed scenes exclude boundary TI and export separ
   const {report}=await runTask(page,app,'#enqueue-analyze');
   assert.deepEqual(report.content.sceneAnalysis.starts,[0,6,11]);assert.equal(report.content.si,null);assert.equal(report.content.ti,null);
   assert.deepEqual(report.content.points.filter(p=>p.ti===null).map(p=>p.frame),[0,6,11]);assert.equal(report.content.scenes.at(-1).ti,null);
-  const details=page.locator('#inspect-details');assert.match(await details.innerText(),/按用户确认/);assert.match(await details.innerText(),/1–6/);assert.match(await details.innerText(),/7–11/);
+  const details=page.locator('#inspect-details');
+  const method=details.locator(':scope > .section').filter({has:page.locator('h3',{hasText:'SI/TI 内容复杂度'})}).locator('.analysis-explanation');
+  assert.equal(await method.evaluate(el=>el.open),false);await method.locator(':scope > summary').click();
+  assert.match(await method.innerText(),/按用户确认/);assert.match(await details.innerText(),/1–6/);assert.match(await details.innerText(),/7–11/);
   assert.equal(await details.locator('#si canvas').count(),1);assert.equal(await details.locator('#ti canvas').count(),1);
   const exported=await download(page,'#inspect-export',path.join(dir,'scene-export.json'));assert.deepEqual(exported.results[0].report,report);
   await importReport(page,path.join(dir,'scene-export.json'));assert.match(await details.innerText(),/12–12/);
@@ -460,8 +1095,14 @@ scenario('[analysis] [units] actual multi-audio file, frame scan, GOP, SI/TI and
   await page.locator('#bitrate-enabled').check();await page.locator('#complexity').check();await page.locator('#siti-workers').selectOption('8');
   assert.equal(await page.locator('#siti-device').inputValue(),'cpu');
   const {report}=await runTask(page,app,'#enqueue-analyze');
-  assert.deepEqual(await page.locator('#inspect-details > .section > h3').allTextContents(),['文件基本信息','帧结构与 GOP','SI/TI 内容复杂度','音轨包大小时间分布','音视频码率统计（可选曲线）','体积构成']);
-  assert.equal(await page.locator('#inspect-details > .cards .card').count(),4);
+  assert.deepEqual(await page.locator('#inspect-details > .section > .report-section-body > summary > h3').allTextContents(),['文件基本信息','帧结构与 GOP','SI/TI 内容复杂度','音轨包大小时间分布','音视频码率统计','体积构成']);
+  assert.equal(await page.locator('#inspect-details .report-metrics > div').count(),4);
+  const cardFonts=await page.locator('#inspect-details .report-metrics dd').evaluateAll(values=>values.map(value=>{
+    const style=getComputedStyle(value.querySelector('span')??value);
+    return [style.fontFamily,style.fontSize,style.fontWeight,style.color];
+  }));
+  assert.ok(cardFonts.every(font=>JSON.stringify(font)===JSON.stringify(cardFonts[0])),'unit-bearing values use the same font and color as the other summary values');
+  await page.locator('#inspect-details .report-metrics').screenshot({path:path.join(dir,'summary-uniform-font.png')});
   assert.equal(report.frames.length,12);assert.equal(report.tracks.filter(s=>s.type==='audio').length,2);
   assert.equal(report.content.points.length,report.frames.length);
   assert.equal(report.content.execution.requestedWorkers,8);
@@ -474,21 +1115,60 @@ scenario('[analysis] [units] actual multi-audio file, frame scan, GOP, SI/TI and
   assert.equal(await fileSize.getAttribute('title'),byteEvidence(report.size));
   const frameUnit=quantityScale(report.frames.map(f=>f.bytes)).unit;
   assert.equal(await page.locator('#frame-plot .plot-axis-y').textContent(),`纵轴：关联包大小（${frameUnit}）`);
+  const switchFrameCoordinates=async value=>{
+    const picker=page.locator('#frame-axis');
+    await picker.focus();
+    // A viewport resize updates layout before ResizeObserver redraws the bitmap.
+    // Capture the baseline only after that redraw; keep the switch assertion exact.
+    await page.waitForFunction(()=>{
+      const canvas=document.querySelector('#frame-plot canvas'),dpr=devicePixelRatio||1;
+      return canvas.width===Math.max(1,Math.floor(canvas.clientWidth*dpr))&&
+        canvas.height===Math.floor(canvas.clientHeight*dpr);
+    });
+    const geometry=()=>page.locator('#frame-plot').evaluate(host=>{
+      const canvas=host.querySelector('canvas'),rect=canvas.getBoundingClientRect(),
+        toolbar=host.querySelector('.plot-controls').getBoundingClientRect(),
+        coordinate=host.querySelector('#frame-axis').getBoundingClientRect(),
+        yControls=host.querySelector('.plot-y-controls').getBoundingClientRect();
+      return {width:rect.width,height:rect.height,top:rect.top+scrollY,
+        bitmapWidth:canvas.width,bitmapHeight:canvas.height,
+        toolbarHeight:toolbar.height,coordinateWidth:coordinate.width,yControlsLeft:yControls.left};
+    });
+    const before=await geometry(),scroll=await page.evaluate(()=>scrollY),
+      mode=await page.locator('#frame-plot [data-field="x-scale"]').inputValue();
+    await picker.selectOption(value);
+    assert.deepEqual(await geometry(),before,'coordinate changes preserve the canvas and toolbar geometry');
+    assert.equal(await page.evaluate(()=>scrollY),scroll,'coordinate changes must not move the page');
+    assert.equal(await picker.evaluate(el=>document.activeElement===el),true,'coordinate choice retains keyboard focus');
+    assert.equal(await page.locator('#frame-plot [data-field="x-scale"]').inputValue(),mode,'coordinate changes preserve the expanded input mode');
+    await page.locator('#frame-plot').screenshot({path:path.join(dir,`frame-coordinate-${value}-${page.viewportSize().width}.png`)});
+  };
   assert.equal(await page.locator('#frame-axis').inputValue(),'time');
+  assert.equal(await page.locator('#frame-plot .plot-range #frame-axis').count(),1,'coordinate choice belongs to the shared X controls');
+  assert.equal(await page.locator('#frame-full').count(),0,'full view uses the shared toolbar action');
+  await singleRow(page.locator('#frame-plot .plot-controls > div'),3);
+  await page.locator('#frame-plot .plot-controls').screenshot({path:path.join(dir,'frame-axis-controls.png')});
   assert.match(await page.locator('#frame-plot canvas').getAttribute('aria-label'),/呈现时间 s/);
   assert.equal(Number(await page.locator('#frame-plot [data-field="to"]').inputValue()),1);
   assert.ok(!(await page.locator('#inspect-details').innerText()).includes('MiB'));
-  assert.equal(await page.locator('#gop-index').inputValue(),'0');
+  assert.equal(await page.locator('#gop-index').inputValue(),'');
+  await page.locator('#gop-next').click();assert.equal(await page.locator('#gop-index').inputValue(),'0');
   assert.equal(report.coding.gops.length,2);
   await page.locator('#gop-next').click();assert.equal(await page.locator('#gop-index').inputValue(),'1');
   assert.match(await page.locator('#gop-info').textContent(),/帧 6–11/);
   assert.equal(Number(await page.locator('#frame-plot [data-field="from"]').inputValue()),.5);
-  await page.locator('#frame-axis').selectOption('frame');
+  await switchFrameCoordinates('frame');
   const plot=page.locator('#frame-plot'),span=async()=>Number(await plot.locator('[data-field="to"]').inputValue())-Number(await plot.locator('[data-field="from"]').inputValue());
   assert.equal(await span(),6);await plot.locator('[data-op="in"]').click();assert.ok(await span()<6);
   await plot.locator('[data-op="reset"]').click();assert.equal(await span(),12);
+  await switchFrameCoordinates('time');
+  assert.equal(Number(await plot.locator('[data-field="from"]').inputValue()),0);
+  assert.equal(Number(await plot.locator('[data-field="to"]').inputValue()),1,'full view survives a coordinate change after focusing a GOP');
+  await switchFrameCoordinates('frame');
+  await plot.locator('[data-field="x-scale"]').selectOption('manual');
   await plot.locator('[data-field="from"]').fill('3');await plot.locator('[data-field="to"]').fill('7');
   await plot.locator('[data-op="apply"]').click();assert.equal(await span(),4);
+  assert.equal(await plot.locator('[data-field="from"]').isVisible(),true);
   await page.getByText('逐帧列表 / CSV',{exact:true}).click();
   const csvDownload=page.waitForEvent('download');await page.locator('#csv').click();
   const csvFile=path.join(dir,'actual-frames.csv');await(await csvDownload).saveAs(csvFile);
@@ -504,6 +1184,19 @@ scenario('[analysis] [units] actual multi-audio file, frame scan, GOP, SI/TI and
   assert.match(await resultRow.innerText(),/完整扫描视频帧/);
   assert.match(await resultRow.innerText(),/测量 SI\/TI 内容复杂度/);
   assert.deepEqual(parsePortable(JSON.stringify(makePortable({...exported,applicationVersion:exported.producer.applicationVersion}))),exported);
+  await page.setViewportSize({width:390,height:844});
+  // The responsive tab font transition changes the document's header height.
+  await page.locator('.header-nav').evaluate(async nav=>{
+    await Promise.all(nav.getAnimations({subtree:true}).map(animation=>animation.finished));
+  });
+  await switchFrameCoordinates('time');
+  await switchFrameCoordinates('frame');
+  assert.equal(await page.locator('#frame-plot').evaluate(el=>{
+    const bounds=el.getBoundingClientRect();
+    return [...el.querySelectorAll('.plot-controls button,.plot-controls input,.plot-controls select')]
+      .filter(item=>item.getClientRects().length).every(item=>{const r=item.getBoundingClientRect();return r.left>=bounds.left&&r.right<=bounds.right;});
+  }),true,'integrated frame axis controls fit narrow screens');
+  await page.locator('#frame-plot .plot-controls').screenshot({path:path.join(dir,'frame-axis-controls-mobile.png')});
 });
 
 scenario('[comparison] user confirmation gates actual lossless identity and lossy candidate measurement',async({page,app,dir})=>{
@@ -601,7 +1294,7 @@ scenario('[comparison] VMAF undeclared signal computes, displays unknown range, 
   await saveImportFixture(path.join(dir,'report.json'),trial.report);
 });
 
-scenario('[trial] [units] real x264 trial encodes both CRFs, preserves frame metrics and cleans generated video',async({page,app,dir})=>{
+scenario('[trial] [units] [charts] real x264 trial encodes both CRFs, preserves frame metrics and cleans generated video',async({page,app,dir})=>{
   await page.locator('[data-mode="trial"]').click();await page.locator('#trial-file').fill(media.source);
   await page.locator('#trial-duration').fill('1');await page.locator('#trial-encoder').selectOption('libx264');
   await page.locator('[name="trial-preset"][value="medium"]').uncheck();await page.locator('[name="trial-preset"][value="ultrafast"]').check();
@@ -612,16 +1305,41 @@ scenario('[trial] [units] real x264 trial encodes both CRFs, preserves frame met
   assert.ok(report.rows[0].videoBytes>report.rows[1].videoBytes);
   assert.equal(await page.locator('#trial-sample-table tbody tr').first().locator('td').nth(4).innerText(),report.rows[0].metrics.psnr.officialSummary.pooled.toLocaleString('zh-CN',{maximumFractionDigits:6}));
   assert.ok(await page.locator('#trial-frames canvas').isVisible());
+  assert.equal(await page.locator('#rd .plot-range #rd-axis').count(),1);
+  assert.equal(await page.locator('#rd .plot-y-controls #rd-metric').count(),1);
+  assert.equal(await page.locator('#trial-frames .plot-y-controls #trial-frame-metric').count(),1);
+  await page.locator('#rd .plot-controls').screenshot({path:path.join(dir,'rd-axis-controls.png')});
+  await page.locator('#trial-frames .plot-controls').screenshot({path:path.join(dir,'trial-axis-controls.png')});
+  await setYBounds(page,'#trial-frames',40,50);
+  await page.locator('[name="plot-crf"][value="38"]').uncheck();
+  assert.equal(await page.locator('#trial-frames [data-field="scale"]').inputValue(),'manual');
+  assert.equal(await page.locator('#trial-frames [data-field="y-min"]').inputValue(),'40');
+  await page.locator('[name="plot-crf"][value="20"]').uncheck();
+  assert.equal(await page.locator('#trial-frames .plot-y-controls #trial-frame-metric').isVisible(),true,'empty data keeps the metric selector usable');
+  await page.locator('#trial-frame-metric').selectOption('ssim');
+  assert.match(await page.locator('#trial-frames').innerText(),/至少选择一个 CRF/);
+  await page.locator('#trial-frame-metric').selectOption('psnr');
+  await page.locator('[name="plot-crf"][value="38"]').check();
+  assert.equal(await page.locator('#trial-frames [data-field="y-max"]').inputValue(),'50','restoring a curve after deselecting all retains locked bounds');
+  await page.locator('#trial-frame-metric').selectOption('ssim');
+  assert.equal(await page.locator('#trial-frames [data-field="scale"]').inputValue(),'full');
+  await page.locator('#trial-frame-metric').selectOption('psnr');
+  assert.equal(await page.locator('#trial-frames [data-field="scale"]').inputValue(),'manual');
+  assert.equal(await page.locator('#trial-frames [data-field="y-max"]').inputValue(),'50');
   await page.locator('#trial-psnr canvas').hover({position:{x:60,y:50}});
-  assert.ok((await page.locator('#trial-psnr .chart-label').innerText()).includes(report.rows[0].metrics.psnr.pooled.toLocaleString('zh-CN',{maximumFractionDigits:6})), 'quality tooltips retain their original precision');
+  assert.equal(await page.locator('#trial-psnr .chart-field').filter({hasText:metricLabels.psnr}).locator('dd').textContent(),report.rows[0].metrics.psnr.pooled.toLocaleString('zh-CN',{maximumFractionDigits:6}), 'quality fields retain their complete original precision');
   const unit=quantityScale(report.rows.map(r=>r.videoBytes)).unit;
   await page.locator('#rd-axis').selectOption('videoBytes');
+  await page.locator('#rd-metric').selectOption('ssim');
+  assert.equal(await page.locator('#rd-axis').inputValue(),'videoBytes','changing Y retains the selected X metric');
+  await page.locator('#rd-metric').selectOption('psnr');
   assert.match(await page.locator('#rd canvas').getAttribute('aria-label'),new RegExp(`视频包体积（${unit}）`));
   await page.locator('#rd [data-op="in"]').click();
   assert.match(await page.locator('#rd canvas').getAttribute('aria-label'),new RegExp(`视频包体积（${unit}）`));
   const exported=await download(page,'#trial-export',path.join(dir,'units-trial.json'));
   assert.deepEqual(exported.results[0].report,report);
   await importReport(page,path.join(dir,'units-trial.json'));
+  assert.equal(await page.locator('#trial-frames [data-field="scale"]').inputValue(),'full','an imported report starts a new view without borrowing old bounds');
   await page.locator('#rd-axis').selectOption('videoBytes');
   assert.match(await page.locator('#rd canvas').getAttribute('aria-label'),new RegExp(`视频包体积（${unit}）`));
   await page.locator('#trial-crfs').fill('0');
@@ -725,7 +1443,13 @@ scenario('[bd-rate] reference mode uses measured Y and elementary bitrate, expor
   assert.equal(await page.locator('#bd-plot canvas').count(),1);
   assert.match(await page.locator('#bd-plot-note').innerText(),/PSNR-Y 帧均值/);
   const exported=await download(page,'#bd-export',path.join(dir,'bd-reference.json'));
-  const saved=exported.results[0].report.bdRateComparisons[0];assert.deepEqual(saved.result,expected);
+  // Check lossless export against a recomputation in the producing JS engine.
+  // Chromium and Node Math.exp can differ in the last binary digit; the fixed
+  // independent numerical references are checked by bd-rate.test.mjs.
+  const browserExpected=await page.evaluate(async({rows,groups})=>{
+    const {trialBdRate}=await import('/trial-model.js');return trialBdRate(rows,groups[0],groups[1],'psnr');
+  },{rows:report.rows,groups});
+  const saved=exported.results[0].report.bdRateComparisons[0];assert.deepEqual(saved.result,browserExpected);
   assert.equal(saved.profile,'reference');
   await importReport(page,path.join(dir,'bd-reference.json'));
   assert.equal(await page.locator('#bd-profile').inputValue(),'reference');
@@ -740,11 +1464,70 @@ scenario('[bd-rate] reference mode uses measured Y and elementary bitrate, expor
   await writeFile(path.join(dir,'report.json'),JSON.stringify(report));
 });
 
+scenario('[gop-view] full and custom frame viewports never retain an unrelated GOP highlight or stale hover record',async({page,app,dir})=>{
+  const file=path.join(dir,'four-gops.mp4');
+  await run(FF,['-v','error','-y','-f','lavfi','-i','testsrc2=size=64x48:rate=12:duration=4','-c:v','libx264','-g','12','-keyint_min','12','-sc_threshold','0','-bf','2',file]);
+  await preview(page,file);const {report}=await runTask(page,app,'#enqueue-analyze');
+  assert.equal(report.frames.length,48);assert.equal(report.coding.gops.length,4);
+  const strip=page.locator('#gop-overview canvas'),plot=page.locator('#frame-plot'),index=page.locator('#gop-index'),info=page.locator('#gop-info');
+  const alphas=()=>strip.evaluate((canvas,gops)=>{const c=canvas.getContext('2d'),d=canvas.width/canvas.clientWidth;return gops.map(g=>c.getImageData(Math.floor((g.start+g.count/2)/48*canvas.width),Math.floor(10*d),1,1).data[3]);},report.coding.gops);
+  const timeFull=async()=>{
+    assert.equal(await index.inputValue(),'');assert.equal(await info.innerText(),'主图：全片');
+    assert.equal(await page.locator('#gop-overview .chart-label').textContent(),'');
+    assert.match(await strip.getAttribute('aria-label'),/未定位单个 GOP/);
+    assert.equal(Number(await plot.locator('[data-field="from"]').inputValue()),0);
+    assert.ok(Math.abs(Number(await plot.locator('[data-field="to"]').inputValue())-4)<.001);
+    assert.ok((await alphas()).every(alpha=>alpha===255),'full view shows every GOP without singling one out');
+  };
+  const focus=async i=>{
+    const box=await strip.boundingBox(),g=report.coding.gops[i];
+    await strip.click({position:{x:(g.start+g.count/2)/48*box.width,y:16}});
+    assert.equal(await index.inputValue(),String(i));assert.match(await strip.getAttribute('aria-label'),new RegExp('当前定位 GOP '+i));
+    const opacity=await alphas();assert.equal(opacity[i],255);assert.ok(opacity.some(alpha=>alpha<200));
+  };
+  await timeFull();await setYBounds(page,'#frame-plot',.1,4);
+  const y=async()=>Promise.all(['scale','y-min','y-max'].map(field=>plot.locator('[data-field="'+field+'"]').inputValue())),locked=await y();
+  await focus(2);assert.match(await info.innerText(),/帧 24–35/);
+  await plot.locator('[data-op="reset"]').click();await timeFull();assert.deepEqual(await y(),locked);
+  await focus(1);await plot.locator('canvas').dblclick({position:{x:150,y:70}});await timeFull();
+  await focus(3);await plot.locator('[data-field="x-scale"]').selectOption('manual');await plot.locator('[data-field="x-scale"]').selectOption('full');await timeFull();
+  await focus(2);await plot.locator('[data-op="in"]').click();
+  assert.equal(await index.inputValue(),'');assert.equal(await info.innerText(),'主图：自定义范围');assert.ok((await alphas()).every(alpha=>alpha===255));
+  await plot.locator('[data-op="reset"]').click();await timeFull();
+  await focus(2);await plot.locator('[data-field="x-scale"]').selectOption('manual');
+  await plot.locator('[data-field="from"]').fill('1.1');await plot.locator('[data-field="to"]').fill('2.2');await plot.locator('[data-op="apply"]').click();
+  assert.equal(await index.inputValue(),'');assert.equal(await info.innerText(),'主图：自定义范围');
+  const box=await strip.boundingBox();await strip.hover({position:{x:box.width*.9,y:16}});
+  assert.match(await page.locator('#gop-overview .chart-label').innerText(),/3/);
+  await plot.locator('[data-op="reset"]').hover();assert.equal(await page.locator('#gop-overview .chart-label').textContent(),'','leaving a hover does not leave a false focused GOP');
+  await plot.locator('[data-op="reset"]').click();await timeFull();
+  await page.locator('#gop-next').click();assert.equal(await index.inputValue(),'0');assert.equal(await page.locator('#gop-prev').isDisabled(),true);
+  await page.locator('#gop-next').click();assert.equal(await index.inputValue(),'1');
+  await index.fill('3');await index.press('Tab');await page.locator('#frame-axis').selectOption('frame');
+  assert.equal(await index.inputValue(),'3');assert.equal(Number(await plot.locator('[data-field="from"]').inputValue()),36);assert.equal(Number(await plot.locator('[data-field="to"]').inputValue()),48);
+  await plot.locator('[data-op="reset"]').click();assert.equal(await index.inputValue(),'');assert.equal(Number(await plot.locator('[data-field="to"]').inputValue()),48);
+  await page.locator('#frame-axis').selectOption('time');await timeFull();assert.deepEqual(await y(),locked);
+  await index.fill('2');await index.press('Tab');await index.fill('');await index.press('Tab');await timeFull();
+  await page.locator('#toggle-island').click();await page.locator('#gop-overview').locator('..').screenshot({path:path.join(dir,'gop-full-view.png')});
+  const exported=await download(page,'#inspect-export',path.join(dir,'report.json'));assert.deepEqual(exported.results[0].report,report);
+});
 scenario('[packet-distribution] actual audio packets, optional rates and frame axes survive export/import with legacy fallback',async({page,app,dir})=>{
   const {report}=await analyze(page,app);
   assert.equal(await page.locator('#frame-plot canvas').count(),1,'video reuses the existing graph');
+  const frameReadout=page.locator('#frame-plot .chart-label'),frameCanvas=page.locator('#frame-plot canvas');
+  await frameCanvas.hover({position:{x:76,y:40}});
+  const frameUnit=quantityScale(report.frames.map(f=>f.bytes)).unit;
+  assert.deepEqual(await frameReadout.locator('dt').allTextContents(),['呈现时间（s）','显示帧','预测类型','访问类型',`关联包大小（${frameUnit}）`]);
+  assert.equal(await frameReadout.locator('dd').nth(0).textContent(),quantityNumber(report.frames[0].t,6));
+  assert.equal(await frameReadout.locator('dd').nth(1).textContent(),'0');
+  assert.equal(await frameReadout.locator('dd').nth(4).locator('[title]').getAttribute('title'),byteEvidence(report.frames[0].bytes));
+  assert.doesNotMatch(await frameReadout.textContent(),/[·|]/,'real frame evidence has no duplicated axis prefix or loose separators');
+  await frameReadout.screenshot({path:path.join(dir,'real-frame-readout.png')});
   assert.equal(await page.locator('#bitrate-optional').evaluate(el=>el.open),false);
   assert.equal(await page.locator('#audio-packets-optional').evaluate(el=>el.open),false);
+  assert.equal(await page.locator('#audio-packets-optional').getAttribute('class'),'report-section-body');
+  assert.equal(await page.locator('#audio-packets-optional > summary').innerText(),'音轨包大小时间分布');
+  assert.equal(await page.getByText('展开音轨包大小时间分布',{exact:true}).count(),0,'one disclosure controls the whole audio packet section');
   assert.equal(await page.locator('#audio-packets-1 canvas').isVisible(),false);
   await page.locator('#audio-packets-optional > summary').click();
   for(const track of report.tracks.filter(t=>t.type==='audio')){
@@ -761,9 +1544,16 @@ scenario('[packet-distribution] actual audio packets, optional rates and frame a
     assert.deepEqual(rows.slice(1).map(row=>row.split(',').slice(1,5)),d.packets.map(row=>row.map(v=>v??'')));
   }
   await page.locator('#frame-axis').selectOption('frame');assert.match(await page.locator('#frame-plot canvas').getAttribute('aria-label'),/显示帧/);
+  await frameCanvas.hover({position:{x:76,y:40}});
+  assert.deepEqual(await frameReadout.locator('dt').allTextContents(),['显示帧','呈现时间（s）','预测类型','访问类型',`关联包大小（${frameUnit}）`]);
   await page.locator('#frame-axis').selectOption('time');
+  await page.locator('#gop-next').click();assert.equal(await page.locator('#gop-index').inputValue(),'0');
   await page.locator('#gop-next').click();assert.match(await page.locator('#frame-detail').innerText(),/6/);
-  await page.locator('#frame-full').click();assert.equal(Number(await page.locator('#frame-plot [data-field="from"]').inputValue()),0);
+  await page.locator('#frame-plot [data-field="x-scale"]').selectOption('manual');
+  await page.locator('#frame-plot [data-field="x-scale"]').selectOption('full');
+  assert.equal(Number(await page.locator('#frame-plot [data-field="from"]').inputValue()),0);
+  await page.locator('#frame-axis').selectOption('frame');
+  assert.equal(Number(await page.locator('#frame-plot [data-field="to"]').inputValue()),report.frames.length,'automatic X also clears GOP focus before changing coordinate types');
   const file=path.join(dir,'packets-export.json'),exported=await download(page,'#inspect-export',file);
   assert.deepEqual(exported.results[0].report,report);
   await importReport(page,file);
@@ -803,6 +1593,11 @@ scenario('[portable-invalid] damaged real export is rejected and the currently v
   await page.waitForFunction(()=>document.querySelector('#task-label')?.textContent==='任务未完成');
   const after=await download(page,'#inspect-export',path.join(dir,'after-rejection.json'));
   assert.deepEqual(after.results[0].report,report);
+  const future=JSON.parse(await readFile(file,'utf8'));future.formatVersion='0.6';
+  const futureFile=path.join(dir,'future-version.json');await writeFile(futureFile,JSON.stringify(future));await importReport(page,futureFile);
+  await page.waitForFunction(()=>document.querySelector('#task-label')?.textContent==='任务未完成');
+  assert.match(await page.locator('#task-message').innerText(),/不支持的 JSON 格式或版本/);
+  assert.deepEqual((await download(page,'#inspect-export',path.join(dir,'after-future-rejection.json'))).results[0].report,report);
 });
 
 scenario('[queue-plans] GUI captures actual inputs; plan export/import preserves order while remaining paused',async({page,app,dir})=>{

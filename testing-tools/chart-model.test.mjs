@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import {writeFile} from 'node:fs/promises';
 import {trialFramePlotData,rowLabel,sortTrialRows} from '../public/trial-model.js';
-import {finiteSegments,extent,visiblePoints} from '../public/charts.js';
+import {finiteSegments,extent,countTicks,validYRange,visiblePoints} from '../public/charts.js';
 import {makeMedia} from './helpers/real-media.mjs';
 import {trial} from '../analysis.mjs';
 let rows,times;
@@ -37,6 +37,27 @@ test('[contract] geometry never bridges missing or infinite inputs',()=>{
  assert.deepEqual(finiteSegments(points),[[[0,1]],[[2,3]],[[4,5],[5,6]]]);
  assert.deepEqual(extent(points),[1,6]);assert.deepEqual(extent([[0,null]]),[0,1]);
  assert.deepEqual(visiblePoints([[0,1],[1,2],[1,3],[2,4]],1,1),[[1,2],[1,3]]);
+});
+test('[charts] count ticks cover integer observations without fractional labels or a truncated baseline',()=>{
+ // Mathematical count-axis contracts, not fabricated video measurements.
+ assert.deepEqual(countTicks(0),[0,1]);assert.deepEqual(countTicks(1),[0,1]);
+ assert.deepEqual(countTicks(9),[0,2,4,6,8,10]);
+ assert.deepEqual(countTicks(25),[0,5,10,15,20,25]);
+ assert.deepEqual(countTicks(7,3),[3,4,5,6,7]);
+ assert.deepEqual(countTicks(8.5,2.5).filter(value=>value>=2.5&&value<=8.5),[4,6,8]);
+ for(const maximum of [...Array.from({length:2049},(_,i)=>i),10000,1000000,2000000]){
+  const ticks=countTicks(maximum);
+  assert.equal(ticks[0],0);assert.ok(ticks.at(-1)>=maximum);
+  assert.ok(ticks.length>=2&&ticks.length<=6);
+  assert.ok(ticks.every(Number.isSafeInteger));
+  for(let i=1;i<ticks.length;i++)assert.ok(ticks[i]>ticks[i-1]);
+ }
+ assert.deepEqual(extent([[0,1],[1,1]],true),[0,1]);
+ assert.deepEqual(extent([[0,.25],[1,.75]]),[.25,.75],'continuous measurements keep their fractional range');
+});
+test('[charts] explicit Y bounds accept finite ordered ranges and reject missing, equal, reversed or overflowing ranges',()=>{
+ for(const range of [[3,7],[.25,.75],[-5,-1],[0,1e-10]])assert.equal(validYRange(...range),true);
+ for(const range of [[NaN,1],[0,Infinity],[0,0],[2,1],[-Number.MAX_VALUE,Number.MAX_VALUE]])assert.equal(validYRange(...range),false);
 });
 test('sorts real trial bytes and scores without mutating the source report',()=>{
  const original=structuredClone(rows),bytes=sortTrialRows(rows,'videoBytes','asc'),psnr=sortTrialRows(rows,'psnr','desc');

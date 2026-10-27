@@ -172,7 +172,7 @@ function evidenceHTML(r) {
   return html;
 }
 
-export function basicInfoHTML(r) {
+export function basicInfoHTML(r, {readingNotes = []} = {}) {
   const streams = r.raw.streams;
   const selected = streams.find(s=>s.index===r.stream) ?? streams.find(s=>s.codec_type==='video'&&s.disposition?.attached_pic!==1) ?? streams[0];
   const track = trackHTML(r,selected);
@@ -188,7 +188,7 @@ export function basicInfoHTML(r) {
   const fileExtra = pairs([['mtime','文件修改时间',r.mtime ?? '未保存'],probeSize]);
   const containerOther = remainingHTML(f,new Set(['filename','format_name','size','duration','bit_rate','start_time','tags']));
   const chapters = r.raw.chapters ?? [];
-  return `<section class="section basic-info" data-basic-info><h3>文件基本信息</h3><p class="path">${esc(r.file)}</p>${main}${statuses(r)}` +
+  return `<section class="section basic-info" data-basic-info><details class="basic-info-body" open><summary><h3>文件基本信息</h3></summary><p class="path">${esc(r.file)}</p>${main}` +
     `<div class="property-track-picker">${streams.length>1 ? `<label>轨道属性<select data-basic-track aria-label="选择基本属性轨道">${streams.map(s=>`<option value="${s.index}"${s===selected?' selected':''}>${esc(trackName(s))}</option>`).join('')}</select></label>` : ''}</div>` +
     `<div data-track-main aria-live="polite">${track.main}</div>` +
     `<details class="basic-info-extra"><summary>全部属性</summary><div data-track-extra>${track.extra}</div><h4>文件与容器详情</h4>${fileExtra}${containerOther}` +
@@ -196,7 +196,7 @@ export function basicInfoHTML(r) {
     (chapters.length ? raw(chapters,`章节 · ${chapters.length} 项`) : '<p class="hint">本次工具未报告章节。</p>') +
     remainingHTML(r.raw,new Set(['format','streams','chapters'])) +
     '<p class="hint">轨道属性来自 FFprobe 解复用、解析与解码器；时长、码率和基础帧率可能包含估计。色彩标签不证明实际色彩正确，基础 / 平均帧率不能判定全片 CFR/VFR，位深不用于推断 HDR。未知字段保留原值。</p></details>' +
-    `<details class="basic-info-evidence"><summary>${r.frameSampleRead?.status==='not-requested'?'读取与原始记录':'读取核对与原始记录'}</summary>${evidenceHTML(r)}</details></section>`;
+    `<details class="basic-info-evidence"><summary>${r.frameSampleRead?.status==='not-requested'?'读取与原始记录':'读取核对与原始记录'}</summary>${readingNotes.map(text=>`<p class="hint">${esc(text)}</p>`).join('')}${evidenceHTML(r)}</details></details>${statuses(r)}</section>`;
 }
 
 export function initBasicInfo(host, r) {

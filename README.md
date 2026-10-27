@@ -155,3 +155,7 @@ SDR 和逆 sRGB 按固定上游归一化 EOTF 后仿射映射至 300 / 0.1 cd/m�
 - [FFmpeg trace_headers](https://ffmpeg.org/ffmpeg-bitstream-filters.html#trace_005fheaders)
 - [FFmpeg 分析滤镜](https://ffmpeg.org/ffmpeg-filters.html)
 - [AV1 规范](https://aomediacodec.github.io/av1-spec/)
+
+## 报告浏览
+
+结果列表和已结束任务会突出标记当前页签正在显示的报告，“查看报告”同步显示为“正在查看”；报告标题下显示对应文件名，完整路径可悬停核对。标记跟随查看、切换页签、导入和移除更新，与导出勾选状态分开。结果页各大板块点击标题可独立折叠；音轨包大小时间分布默认收起，由标题一次展开，其余主要板块默认展开。再次打开已显示的报告保留图表视图和各板块的折叠状态。长表格在固定高度区域内滚动，表头固定，CSV 仍导出全部记录。

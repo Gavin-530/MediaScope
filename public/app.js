@@ -1,4 +1,5 @@
 import {bitrateView} from "./bitrate-model.js";
+import {analysisNoticeGroups,unconfirmedSceneNote} from './analysis-notes.js';
 import {timingSummary, formatElapsedSeconds, recordedSeconds} from "./timing.js";
 import {audioPacketPoints, packetSeconds, frameTimePoints, frameTimeRange} from "./distribution-model.js";
 import {formatBytes, formatBitrate, byteEvidence, byteLimit, quantityScale, quantityNumber, scalePlotData} from "./units.js";
@@ -264,6 +265,26 @@ function resultItems() {
     ...importedResults,
   ];
 }
+function syncReportSelection() {
+  const owner = reportOwners[activeMode];
+  document.querySelectorAll('[data-result-open], [data-job][data-action="report"]').forEach(button => {
+    const selected = !!owner && (button.dataset.resultOpen || button.dataset.job) === owner;
+    button.closest('.queue-item')?.classList.toggle('is-current-report', selected);
+    const label = selected ? '正在查看' : '查看报告';
+    if (button.textContent !== label) button.textContent = label;
+    if (selected) button.setAttribute('aria-current', 'true');
+    else button.removeAttribute('aria-current');
+  });
+  for (const mode of modes) {
+    const r = reports[mode], context = document.querySelector('#' + mode + '-report-context');
+    document.querySelector('#' + mode + '-result').dataset.reportOwner = reportOwners[mode] ?? '';
+    const file = r?.file || r?.source?.file || r?.reference?.file;
+    const other = r?.candidate?.file;
+    const text = file ? `当前报告：${fileName(file)}${other ? ' → ' + fileName(other) : ''}` : '';
+    if (context.textContent !== text) context.textContent = text;
+    context.title = file ? file + (other ? ' → ' + other : '') : '';
+  }
+}
 function renderResultList() {
   const items = resultItems(),
     available = new Set(items.map((x) => x.id));
@@ -288,7 +309,7 @@ function renderResultList() {
   const summary = timingSummary(items.map(x => x.report?.timing || x.job?.timing));
   $("#result-timing-total").textContent = items.length ? `累计计算耗时：${formatElapsedSeconds(summary.totalComputeSeconds)} · ${summary.recordedResults} 项已记录${summary.missingResults ? `，${summary.missingResults} 项未记录` : ""}（不含排队、保存和页面渲染）` : "";
   const signature = JSON.stringify(items.map((x) => [x.id, x.job?.status, x.report?.timing || x.job?.timing]));
-  if (signature === resultView) return;
+  if (signature === resultView) {syncReportSelection();return;}
   resultView = signature;
   $("#result-list").innerHTML =
     items
@@ -311,6 +332,7 @@ function renderResultList() {
         return `<div class="queue-item"><input class="portable-check" type="checkbox" data-result-select="${esc(x.id)}" aria-label="选择结果 ${esc(label)}" ${selectedResults.has(x.id) ? "checked" : ""}><div class="queue-item-main"><strong>${esc(label)}</strong><span class="queue-state">${esc(type)} · ${r ? "已导入" : "已完成"}</span><p class="queue-path">${esc(file)}${other ? " → " + esc(other) : ""}</p>${timingHTML}</div><div class="queue-actions"><button class="secondary" data-result-open="${esc(x.id)}">查看报告</button><button class="secondary" data-result-remove="${esc(x.id)}">移除</button></div></div>`;
       })
       .join("") || '<p class="hint">暂无已完成结果。</p>';
+  syncReportSelection();
 }
 $("#queue-list").onchange = (e) => {
   const id = e.target.dataset?.planSelect;
@@ -343,6 +365,8 @@ $("#result-list").onclick = async (e) => {
   const id = e.target.closest?.("[data-result-open]")?.dataset.resultOpen;
   if (!id) return;
   try {
+    const loaded = modes.find(mode => reportOwners[mode] === id && reports[mode]);
+    if (loaded) {switchMode(loaded);return;}
     const item = resultItems().find((x) => x.id === id);
     if (!item) throw Error("结果已不可用");
     render(item.report || (await api("jobs/" + id + "/report")), true, id);
@@ -355,8 +379,12 @@ async function queueAction(event) {
   if (!button) return;
   button.disabled = true;
   try {
-    if (button.dataset.action === "report")
-      render(await api("jobs/" + button.dataset.job + "/report"), true, button.dataset.job);
+    if (button.dataset.action === "report") {
+      const loaded = modes.find(mode => reportOwners[mode] === button.dataset.job && reports[mode]);
+      if (loaded) switchMode(loaded);
+      else render(await api("jobs/" + button.dataset.job + "/report"), true, button.dataset.job);
+      button.disabled = false;
+    }
     else if (button.dataset.action === "retry")
       await api("jobs/" + button.dataset.job + "/retry", {
         method: "POST",
@@ -514,6 +542,7 @@ function switchMode(mode) {
       .querySelector("#" + name + "-result")
       .classList.toggle("hidden", name !== mode || !reports[name]);
   }
+  syncReportSelection();
   updateNav();
 }
 document
@@ -988,7 +1017,7 @@ $("#import-report").onchange = async (e) => {
         report: item.report,
       }));
       if (($("#import-results-mode").value || "append") === "replace") {
-        for (const item of importedResults) selectedResults.delete(item.id);
+        for (const item of importedResults) {selectedResults.delete(item.id);removedReportIds.add(item.id);}
         importedResults = [];
       }
       importedResults.push(...incoming);
@@ -1041,8 +1070,30 @@ function cards(items) {
 function section(title, html) {
   return `<section class="section"><h3>${esc(title)}</h3>${html}</section>`;
 }
+function makeSectionsCollapsible(root) {
+  for (const panel of root.querySelectorAll('.section')) {
+    const existing = panel.querySelector(':scope > .basic-info-body, :scope > .report-section-body');
+    if (existing) {
+      existing.classList.add('report-section-body');
+      for (const node of [...panel.childNodes]) if (node!==existing) existing.append(node);
+      continue;
+    }
+    const heading = panel.querySelector(':scope > h3');
+    if (!heading) continue;
+    const details = document.createElement('details'), summary = document.createElement('summary');
+    details.className = 'report-section-body'; details.open = true;
+    summary.append(heading); details.append(summary);
+    for (const node of [...panel.childNodes]) {
+      details.append(node);
+    }
+    panel.prepend(details);
+  }
+}
 function table(headers, rows) {
   return `<div class="table-wrap"><table><thead><tr>${headers.map((v) => `<th>${esc(v)}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((v) => `<td>${cellHTML(v)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+}
+function metricStrip(items) {
+  return `<dl class="report-metrics">${items.map(([label,value])=>`<div><dt>${esc(label)}</dt><dd>${cellHTML(value)}</dd></div>`).join('')}</dl>`;
 }
 function raw(data, title = "展开证据 / 原始数据") {
   return `<details><summary>${esc(title)}</summary><pre>${esc(JSON.stringify(data, null, 2))}</pre></details>`;
@@ -1050,6 +1101,10 @@ function raw(data, title = "展开证据 / 原始数据") {
 function notices(items) {
   return (items || []).map((w) => `<p class="notice">${esc(w)}</p>`).join("");
 }
+function explanation(title, html) {
+  return html ? `<details class="analysis-explanation"><summary>${esc(title)}</summary>${html}</details>` : '';
+}
+const hintNotes = items => items.map(text => `<p class="hint">${esc(text)}</p>`).join('');
 function draw(id, data, options) {
   const host = $("#" + id);
   if (host) {
@@ -1074,6 +1129,7 @@ function render(r, activate = true, owner = null) {
     if (r.type === "compare") renderComparison(r);
     else if (r.type === "trial") renderTrial(r);
     else renderMedia(r);
+    makeSectionsCollapsible($("#details"));
     reports[mode] = r;
     reportOwners[mode] = owner;
     $("#" + mode + "-result").dataset.reportOwner = owner ?? "";
@@ -1085,6 +1141,7 @@ function render(r, activate = true, owner = null) {
   }
 }
 function renderMedia(r) {
+  const notes = analysisNoticeGroups(r);
   const frameEnabled = r.analysisTargets?.frames !== false,
     bitrateEnabled = r.analysisTargets?.bitrate !== false;
   const displayControl = (curve, id) => curve ? `<div class="bitrate-display-control"><label for="${id}">显示窗口</label><select id="${id}">${curve.windowMs === 100 ? '<option value="100">100 ms</option>' : ''}<option value="1000">1 秒</option></select></div>` : '';
@@ -1113,24 +1170,24 @@ function renderMedia(r) {
     $("#trial-stream").value = r.stream ?? videos[0]?.index ?? 0;
   }
   cards([]);
-  let html = basicInfoHTML(r);
+  let html = basicInfoHTML(r, {readingNotes: notes.metadata});
   if(r.repeatAnalysis)html+=repeatHTML(r.repeatAnalysis);
   else if(r.type==='analyze')html+='<p class="hint">本次未计算重复帧与时间诊断。选择该分析目标后重新运行可取得证据。</p>';
   if (r.type === "analyze" || r.frames) {
     if (r.frames && frameEnabled) {
     const gops = r.coding?.gops || legacyGops(r.frames);
-    html += `<div class="cards">${cardsHTML([
-      ["显示帧数", r.frames.length],
-      ["视频包数据量", size(r.packets.bytes)],
-      ["GOP / 关键帧区间", gops.length],
-      ["非递增时间戳", r.summary.nonIncreasing],
-    ])}</div>`;
     html += section(
       "帧结构与 GOP",
-      `<p class="hint">显示顺序视图。I / P / B 是预测类型；IDR / CRA / BLA 是码流访问类型，二者不混用。GOP 以随机访问/关键帧区间呈现，不据此猜测开放或闭合。</p><div class="row"><label for="frame-axis">大小图横轴</label><select id="frame-axis"><option value="time">呈现时间（s）</option><option value="frame">显示帧序号</option></select><button id="frame-full" class="secondary">查看全片</button></div><p class="hint" id="frame-axis-note"></p><div id="gop-overview"></div><div class="pager"><button id="gop-prev" class="secondary">上一 GOP</button><label>GOP #<input id="gop-index" type="number" min="0" max="${gops.length - 1}" value="0"></label><button id="gop-next" class="secondary">下一 GOP</button><span id="gop-info"></span></div><div id="frame-plot"></div><div id="frame-detail" class="frame-detail"></div><details><summary>逐帧列表 / CSV</summary><div class="pager"><button id="prev" class="secondary">上一页</button><span id="page"></span><button id="next" class="secondary">下一页</button><button id="csv" class="secondary">导出帧 CSV</button></div><div id="frames"></div></details>`,
+      metricStrip([
+        ['显示帧数',r.frames.length],['视频包数据量',size(r.packets.bytes)],
+        ['GOP / 关键帧区间',gops.length],['非递增时间戳',r.summary.nonIncreasing],
+      ]) + `<div id="gop-overview"></div><div class="pager"><button id="gop-prev" class="secondary">上一 GOP</button><label>GOP #<input id="gop-index" type="number" min="0" max="${gops.length - 1}" value="0"></label><button id="gop-next" class="secondary">下一 GOP</button><span id="gop-info"></span></div><div id="frame-plot"><label>坐标<select id="frame-axis" aria-label="帧大小图 X 轴坐标"><option value="time">呈现时间（s）</option><option value="frame">显示帧序号</option></select></label></div><p class="notice hidden" id="frame-axis-warning"></p><div id="frame-detail" class="frame-detail"></div>` +
+      explanation('GOP 与帧大小的读取说明', '<p class="hint">显示顺序视图。I / P / B 是预测类型；IDR / CRA / BLA 是码流访问类型，二者不混用。GOP 以随机访问/关键帧区间呈现，不据此猜测开放或闭合。</p><p class="hint" id="frame-axis-note"></p>' + hintNotes(notes.frames)) +
+      '<details><summary>逐帧列表 / CSV</summary><div class="pager"><button id="prev" class="secondary">上一页</button><span id="page"></span><button id="next" class="secondary">下一页</button><button id="csv" class="secondary">导出帧 CSV</button></div><div id="frames"></div></details>',
     );
     }
     if (r.content?.available) {
+      const sceneNotes=notes.sitiWarnings.filter(text=>text===unconfirmedSceneNote);
       if(r.content.execution?.gpuFallbackReason){sitiGpuCheck=null;$("#siti-device-status").textContent='该任务 GPU 执行失败，实际使用 CPU；可重新检查 GPU。';}
       const e = r.content.execution,
         execution = e
@@ -1138,14 +1195,17 @@ function renderMedia(r) {
           : "";
       html += section(
         "SI/TI 内容复杂度",
-        execution + (e?.configuration?`<p class="hint">计算流程：${esc(e.configuration.profile)}；${e.configuration.configurationVersion===8?`siti-tools 0.6.0 · PQ 域 · 固定尺度 ${e.configuration.outputMultiplier}`:'历史计算口径，保留原值'}。输入 ${esc(e.configuration.input?.source?.pixelFormat??'')} · ${esc(e.configuration.inputDomain??'SDR')} · ${e.configuration.inputBitDepth}-bit · ${e.configuration.inputRange==='tv'?'有限范围':'全范围'}。</p>`:'') +
-          (e?.configuration?.display?`<p class="hint">参考显示模型：峰值 ${fmt(e.configuration.display.whiteCdM2)}、黑位 ${fmt(e.configuration.display.blackCdM2,4)} cd/m²；gamma ${fmt(e.configuration.display.gamma,6)}。</p>`:'') +
+        (sceneNotes.length?'<p class="hint" id="siti-scene-note">场景边界未确认，TI 可能含剪辑点影响。</p>':'') +
+          notices(notes.sitiWarnings.filter(text=>text!==unconfirmedSceneNote)) + notices([e?.gpuFallbackReason ? `GPU 已回退 CPU：${e.gpuFallbackReason}` : null,e?.fallbackReason ? `执行方式已回退：${e.fallbackReason}` : null].filter(Boolean)) +
+          (e?.configuration?`<p class="hint">计算口径：${e.configuration.configurationVersion===8?`siti-tools 0.6.0 · PQ 域 · 固定尺度 ${esc(e.configuration.outputMultiplier)}`:`历史计算口径，保留原值（版本 ${esc(e.configuration.configurationVersion)}）`}。</p>`:'') +
           (r.content.scenes?.length>1?table(
             ["场景", "显示帧（从 1 计）", "SI 均值", "SI P95", "SI 最大值", "TI 均值", "TI P95", "TI 最大值"],
             r.content.scenes.map(s=>[s.index+1,`${s.startFrame+1}–${s.endFrame+1}`,fmt(s.si.mean),fmt(s.si.p95),fmt(s.si.max),fmt(s.ti?.mean),fmt(s.ti?.p95),fmt(s.ti?.max)]),
           ):"") +
           [["SI", r.content.si], ["TI", r.content.ti]].map(([metric, stats]) => `<div class="siti-chart-heading"><h4>${metric}</h4>${r.content.scenes?.length > 1 ? "" : `<dl>${[["均值", stats?.mean], ["P95", stats?.p95], ["最大值", stats?.max]].map(([name, value]) => `<div><dt>${name}</dt><dd>${fmt(value)}</dd></div>`).join("")}</dl>`}</div><div id="${metric.toLowerCase()}"></div>`).join("") +
-          notices(r.content.notes),
+          explanation('计算方法与限制', execution +
+            (e?.configuration?`<p class="hint">计算流程：${esc(e.configuration.profile)}。输入 ${esc(e.configuration.input?.source?.pixelFormat??'')} · ${esc(e.configuration.inputDomain??'SDR')} · ${e.configuration.inputBitDepth}-bit · ${e.configuration.inputRange==='tv'?'有限范围':'全范围'}。</p>`:'') +
+            (e?.configuration?.display?`<p class="hint">参考显示模型：峰值 ${fmt(e.configuration.display.whiteCdM2)}、黑位 ${fmt(e.configuration.display.blackCdM2,4)} cd/m²；gamma ${fmt(e.configuration.display.gamma,6)}。</p>`:'') + hintNotes([...sceneNotes,...notes.siti])),
       );
     } else if (r.content) html += notices([r.content.reason])+sitiAttemptsHTML(r.content.attempts);
     if (r.coding?.codec === "av1")
@@ -1154,17 +1214,22 @@ function renderMedia(r) {
         `<p>新编码帧 ${r.coding.counts.encoded} · 隐藏帧 ${r.coding.counts.hidden} · SHOW_EXISTING ${r.coding.counts.showExisting} · 显示事件 ${r.coding.counts.shown}</p><p class="hint">按码流编码顺序列出所有帧头事件，包含 KEY / INTER / INTRA_ONLY / SWITCH、隐藏帧和 SHOW_EXISTING。H=隐藏、S=显示已有帧、V=新帧直接显示。点击色带查看结构字段、刷新掩码与参考槽。OBU 负载字节不一定等于完整图像大小。</p><div id="av1-plot"></div><label>编码事件 #<input id="av1-index" type="number" min="0" max="${r.coding.events.length - 1}" value="0"></label><div id="av1-detail"></div>${raw(r.coding.sequences, "AV1 序列头（去重）")}`,
       );
     const audio = (r.tracks || []).filter((t) => t.type === "audio");
-    if (audio.length && frameEnabled) html += section("音轨包大小时间分布", `<details id="audio-packets-optional"><summary>展开音轨包大小时间分布</summary>${audio.map(audioPacketHTML).join("")}</details>`);
+    if (audio.length && frameEnabled) html += `<section class="section"><details class="report-section-body" id="audio-packets-optional"><summary><h3>音轨包大小时间分布</h3></summary>${audio.map(audioPacketHTML).join("")}</details></section>`;
     if (r.packets) {
-    let bitrateHTML = `<h4>${r.packets.bitrateCurve ? "视频包负载码率（PTS 归属）" : "视频码率 · 1 秒窗口（旧报告）"}</h4>${displayControl(r.packets.bitrateCurve, "bitrate-display")}${r.packets.bitrateCurve ? `<p class="hint">计算窗口 ${r.packets.bitrateCurve.windowMs} ms；整包按起始 PTS 归属，跨窗口包不拆分，首尾使用实际时长。边界归属可使恒定码率产生波动，短尾窗口偏差可能更大；不代表采样码率或传输瞬时码率。${r.packets.bitrateCurve.status === "ok" ? "" : esc(r.packets.bitrateCurve.reasons.join("；"))}</p>` : ""}<div id="bitrate"></div><p class="hint">缺少时间戳 ${r.packets.missing} 包。放大不改变统计窗口。</p>`;
+    const bitrateWarnings = bitrateEnabled ? [r.packets, ...audio].flatMap(t => {
+      const track = t === r.packets ? `视频 #${r.stream}` : `音轨 #${t.index}`;
+      return [...(t.bitrateCurve?.status === 'unavailable' ? t.bitrateCurve.reasons.map(reason => `${track} 窗口码率不可计算：${reason}`) : []),
+        ...(t.missing ? [`${track}：缺少时间戳 ${t.missing} 包。`] : [])];
+    }) : [];
+    let bitrateHTML = `<h4>${r.packets.bitrateCurve ? "视频包负载码率（PTS 归属）" : "视频码率 · 1 秒窗口（旧报告）"}</h4>${displayControl(r.packets.bitrateCurve, "bitrate-display")}${r.packets.bitrateCurve ? `<p class="hint">计算窗口 ${r.packets.bitrateCurve.windowMs} ms。</p>` : ""}<div id="bitrate"></div>`;
     if (audio.length)
       bitrateHTML += audio
           .map(
             (t) =>
-              `<h4>音轨 #${t.index} · ${esc(t.codec)} · 窗口码率</h4>${displayControl(t.bitrateCurve, `audio-${t.index}-display`)}${t.bitrateCurve ? '<p class="hint">整包按起始 PTS 归属，跨窗口包不拆分；恒定 PCM 也可能波动，短尾窗口偏差可能更大。曲线不代表采样码率或传输瞬时码率。</p>' : ''}<div id="audio-${t.index}"></div>${t.bitrateCurve?.status === "unavailable" ? `<p class="hint">不可计算：${esc(t.bitrateCurve.reasons.join("；"))}</p>` : ""}`,
+              `<h4>音轨 #${t.index} · ${esc(t.codec)} · 窗口码率</h4>${displayControl(t.bitrateCurve, `audio-${t.index}-display`)}<div id="audio-${t.index}"></div>`,
           )
           .join("");
-    html += section("音视频码率统计（可选曲线）", table(["轨道", "全程平均（原有独立口径）"], [[`视频 #${r.stream}`, rate(r.packets.averageMbps)], ...audio.map(t => [`音轨 #${t.index} · ${t.codec}`, t.averageMbps == null ? "不可计算" : rate(t.averageMbps)])]) + (bitrateEnabled ? `<details id="bitrate-optional"><summary>展开音视频窗口码率曲线</summary>${bitrateHTML}</details>` : '<p class="hint">本次未选择区间码率曲线。</p>'));
+    html += section("音视频码率统计", table(["轨道", "全程平均（原有独立口径）"], [[`视频 #${r.stream}`, rate(r.packets.averageMbps)], ...audio.map(t => [`音轨 #${t.index} · ${t.codec}`, t.averageMbps == null ? "不可计算" : rate(t.averageMbps)])]) + notices(bitrateWarnings) + (bitrateEnabled ? `<details id="bitrate-optional"><summary>展开音视频窗口码率曲线</summary>${bitrateHTML}</details>` : '<p class="hint">本次未选择区间码率曲线。</p>') + explanation('码率统计说明', hintNotes(notes.bitrate) + (bitrateEnabled && r.packets.bitrateCurve ? '<p class="hint">整包按起始 PTS 归属，跨窗口包不拆分，首尾使用实际时长；恒定 PCM 也可能波动，短尾窗口偏差可能更大。曲线不代表采样码率或传输瞬时码率。放大不改变统计窗口。</p>' : '')));
     }
     if (r.tracks)
       html += section(
@@ -1182,7 +1247,7 @@ function renderMedia(r) {
         ) +
           '<p class="hint">差额按文件大小减去所有轨道包大小计算；特殊容器的重复引用可能使其为负，不等同于精确 box 大小。PCM 多音轨的体积不能算作视频可压缩空间。</p>',
       );
-    html += notices(r.warnings);
+    html += notices(notes.warnings);
   }
   $("#details").innerHTML = html;
   initBasicInfo($("#details"), r);
@@ -1203,7 +1268,11 @@ function renderMedia(r) {
         const previous = bitratePlots.get(id);
         previous?.dispose?.();
         if (previous) { const i = charts.indexOf(previous); if (i >= 0) charts.splice(i, 1); }
-        bitratePlots.set(id, draw(id, scalePlotData(data, {y: scale}), {unit: scale.unit, intervals: true, describe: p => `[${quantityNumber(p[2].start, 6)}, ${quantityNumber(p[2].end, 6)}) s · ${formatBitrate(p[2].mbps * 1e6)}${p[2].bytes == null ? '' : ` · ${p[2].bytes} B`}`}));
+        bitratePlots.set(id, draw(id, scalePlotData(data, {y: scale}), {unit: scale.unit, yKey:'bitrate', yFactor:scale.divisor, intervals: true, describe: p => [
+          {label:'测量区间（s）',value:`[${quantityNumber(p[2].start, 6)}, ${quantityNumber(p[2].end, 6)})`,width:27},
+          {label:`包负载码率（${scale.unit}）`,value:p[1],bounds:'y',digits:3},
+          ...(p[2].bytes == null ? [] : [{label:'包负载（B）',value:p[2].bytes,text:String(p[2].bytes),digits:0,width:20}]),
+        ]}));
         if (t.bitrateCurve?.status === "unavailable") $("#" + id).textContent = "不可计算";
       };
       drawBitrate();
@@ -1252,7 +1321,11 @@ function initAudioPackets(r) {
     const missing = d.count - points.length;
     $(`#${id}-status`).textContent = `时间基 ${d.timeBase ?? '未报告'}；${missing ? `${missing} 个包缺少有效 PTS 或时间基，仅在逐包列表中保留，不回退 DTS。` : '全部包都有可定位的呈现时间。'}`;
     draw(id, scalePlotData(points, {y: scale}), {unit: `包大小（${scale.unit}）`, axis: '呈现时间 s', stems: true,
-      describe: p => `包 ${p[2].index} · PTS ${quantityNumber(p[0], 6)} s · ${formatBytes(p[2].row[3])} · ${byteEvidence(p[2].row[3])}`,
+      describe: p => [
+        {label:'呈现时间（s）',value:p[0],bounds:'x'},
+        {label:'包序号',value:p[2].index,digits:0,width:10},
+        {label:`包大小（${scale.unit}）`,value:p[1],bounds:'y',digits:3,title:byteEvidence(p[2].row[3])},
+      ],
       onPick: p => {$(`#${id}-detail`).innerHTML = table(headers, [fields(p[2].row, p[2].index)]);}
     });
     if (d.packets.length) $(`#${id}-detail`).innerHTML = table(headers, [fields(d.packets[0], 0)]);
@@ -1273,7 +1346,8 @@ function initFrames(r) {
   const gops = r.coding?.gops || legacyGops(r.frames),
     frameScale = quantityScale(r.frames.map(f => f.bytes)),
     fdata = r.frames.map((f, i) => [i, f.bytes == null ? null : f.bytes / frameScale.divisor, f, i]),
-    tdata = frameTimePoints(r.frames).map(p => [p[0], p[1] == null ? null : p[1] / frameScale.divisor, p[2], p[3]]);
+    tdata = frameTimePoints(r.frames).map(p => [p[0], p[1] == null ? null : p[1] / frameScale.divisor, p[2], p[3]]),
+    timeBounds = frameTimeRange(r.frames);
   const detail = (p) => {
     const f = p[2],
       packet = r.coding?.packets?.[f.packetIndex];
@@ -1292,45 +1366,68 @@ function initFrames(r) {
         ],
       ) + raw(packet ?? f, "码流包 / 单帧证据");
   };
-  let ribbon, selected = 0, fullView = true;
+  let ribbon, selected = null;
   const axisPicker = $("#frame-axis");
   const drawFrames = () => {
     if (ribbon) {ribbon.dispose?.();const index = charts.indexOf(ribbon);if (index >= 0) charts.splice(index, 1);}
-    const time = axisPicker.value === 'time', g = gops[selected],
-      range = time ? frameTimeRange(r.frames, ...(fullView ? [] : [g.start, g.end])) : fullView ? [0, r.frames.length] : [g.start, g.end + 1];
+    const time = axisPicker.value === 'time', g = selected===null?null:gops[selected],
+      range = time ? g ? frameTimeRange(r.frames,g.start,g.end) : timeBounds : g ? [g.start, g.end + 1] : [0, r.frames.length];
     $("#frame-axis-note").textContent = time ? `显示帧关联包大小；时间取解码器报告／推定的显示时间，不按帧率估算。每帧一根竖线，密集时同一像素列保留最大高度；包与帧不保证一一对应。${tdata.length < r.frames.length ? ` ${r.frames.length - tdata.length} 帧缺少有效时间，仅在帧序号视图中保留。` : ''}` : '沿用显示帧序号与解码器报告的关联包大小；不据此重复相加估算轨道体积。';
+    const missingTime = time && tdata.length < r.frames.length;
+    $('#frame-axis-warning').textContent = missingTime ? `${r.frames.length - tdata.length} 帧缺少有效时间，仅在帧序号视图中保留。` : '';
+    $('#frame-axis-warning').classList.toggle('hidden', !missingTime);
     ribbon = draw("frame-plot", time ? tdata : fdata, {
       unit: `关联包大小（${frameScale.unit}）`, axis: time ? '呈现时间 s' : '显示帧', frames: !time, stems: time,
-      xEnd: time ? frameTimeRange(r.frames)?.[1] : undefined, initial: range ?? undefined,
+      xEnd: time ? timeBounds?.[1] : undefined, initial: range ?? undefined,
+      xControl: axisPicker.closest('label'),
+      onRangeChange: ({full}) => {selected=null;syncScope(full?'全片':'自定义范围');},
       onPick: detail,
-      describe: p => `帧 ${p[3]} · ${fmt(p[2].t, 6)} s · ${p[2].type} / ${p[2].special ?? "未解析"} · ${formatBytes(p[2].bytes)}`,
+      describe: p => [
+        ...(time ? [
+          {label:'呈现时间（s）',value:p[0],bounds:'x'},
+          {label:'显示帧',value:p[3],digits:0,width:10},
+        ] : [
+          {label:'显示帧',value:p[3],digits:0,width:10},
+          {label:'呈现时间（s）',value:p[2].t,text:String(fmt(p[2].t,6)),bounds:timeBounds??[]},
+        ]),
+        {label:'预测类型',value:p[2].type,width:10},
+        {label:'访问类型',value:p[2].special ?? '未解析',width:18},
+        {label:`关联包大小（${frameScale.unit}）`,value:p[1],bounds:'y',digits:3,title:byteEvidence(p[2].bytes),width:18},
+      ],
     });
-    const reset = $("#frame-plot [data-op=reset]");
-    if (reset) {const original = reset.onclick;reset.onclick = () => {fullView = true;original();};}
   };
   const overview = gopOverview($("#gop-overview"), gops, r.frames.length, (i) =>
     select(i),
   );
   charts.push(overview);
-  const select = (i, focus = true) => {
-    selected = Math.max(0, Math.min(gops.length - 1, Math.round(i) || 0));
-    const g = gops[selected];
-    $("#gop-index").value = selected;
+  const syncScope = (scope) => {
+    const g=selected===null?null:gops[selected];
+    $("#gop-index").value = g?selected:'';
+    $("#gop-index").placeholder = '—';
     $("#gop-info").textContent =
-      `${g.label} · 帧 ${g.start}–${g.end} · ${g.count} 帧${g.boundary ? " · " + g.boundary : ""}`;
-    $("#gop-prev").disabled = selected === 0;
-    $("#gop-next").disabled = selected === gops.length - 1;
-    if (focus) {fullView = false;drawFrames();}
+      g?`${g.label} · 帧 ${g.start}–${g.end} · ${g.count} 帧${g.boundary ? " · " + g.boundary : ""}`:`主图：${scope}`;
+    $("#gop-prev").disabled = selected===null || selected === 0;
+    $("#gop-next").disabled = !gops.length || selected === gops.length - 1;
     overview.select(selected);
+  };
+  const select = (i) => {
+    if(!gops.length)return;
+    selected = Math.max(0, Math.min(gops.length - 1, Math.round(i) || 0));
+    const g=gops[selected];
+    syncScope();drawFrames();
     detail(fdata[g.start]);
   };
   $("#gop-prev").onclick = () => select(selected - 1);
-  $("#gop-next").onclick = () => select(selected + 1);
-  $("#gop-index").onchange = (e) => select(Number(e.target.value));
-  select(0, false);
+  $("#gop-next").onclick = () => select(selected===null?0:selected + 1);
+  $("#gop-index").onchange = (e) => {
+    if(e.target.value!=='')return select(Number(e.target.value));
+    selected=null;syncScope('全片');
+    const range=axisPicker.value==='time'?timeBounds:[0,r.frames.length];
+    if(range)ribbon?.setRange(...range);
+  };
+  syncScope('全片');detail(fdata[0]);
   drawFrames();
-  axisPicker.onchange = drawFrames;
-  $("#frame-full").onclick = () => {fullView = true;drawFrames();};
+  axisPicker.onchange = () => {if(selected===null)syncScope('全片');drawFrames();};
   let page = 0;
   const drawPage = () => {
     $("#page").textContent =
@@ -1432,7 +1529,14 @@ function initFrames(r) {
         onPick: eventDetail,
         describe: (p) => {
           const e = events[p[0]];
-          return `事件 ${e.id} · 包 ${e.packet} · ${e.kind} · ${e.hidden ? "隐藏" : "显示"} · order_hint ${e.orderHint ?? "未知"} · ${formatBytes(e.obuPayloadBytes)}`;
+          return [
+            {label:'编码事件',value:e.id,digits:0,width:10},
+            {label:'包序号',value:e.packet,digits:0,width:10},
+            {label:'访问类型',value:e.kind,width:20},
+            {label:'显示状态',value:e.hidden ? '隐藏' : '显示',width:10},
+            {label:'order_hint',value:e.orderHint ?? '未知',digits:0,width:14},
+            {label:`OBU 负载（${eventScale.unit}）`,value:p[1],bounds:'y',digits:3,title:byteEvidence(e.obuPayloadBytes)},
+          ];
         },
       },
     );
@@ -1709,7 +1813,7 @@ function renderTrial(r) {
   );
   html += section(
     "码率—质量与编码成本",
-    `<div class="two"><label>横轴<select id="rd-axis"><option value="videoMbps">视频平均码率（${bitScale.unit}）</option><option value="videoBytes">视频包体积（${byteScale.unit}）</option><option value="encodeSeconds">编码耗时（s）</option><option value="encodeFps">编码速度（frame/s）</option></select></label><label>纵轴指标<select id="rd-metric">${metrics.map((m) => `<option value="${m}">${esc(metricLabels[m])}</option>`).join("")}</select></label></div><div id="rd"></div><p class="hint">码率—质量图：同等质量时越靠左越省码率，同等码率时越高越好；需比较同一参考片段及指标域。成本图仅显示散点：相同质量下比较编码时间或速度。体积与码率仅计视频包。PSNR 为 MSE 域汇总，SSIM / VMAF 为逐帧均值。</p>`,
+    `<div id="rd"><label>指标<select id="rd-axis" aria-label="码率质量图 X 轴指标"><option value="videoMbps">视频平均码率（${bitScale.unit}）</option><option value="videoBytes">视频包体积（${byteScale.unit}）</option><option value="encodeSeconds">编码耗时（s）</option><option value="encodeFps">编码速度（frame/s）</option></select></label><label>指标<select id="rd-metric" aria-label="码率质量图 Y 轴指标">${metrics.map((m) => `<option value="${m}">${esc(metricLabels[m])}</option>`).join("")}</select></label></div><p class="hint">码率—质量图：同等质量时越靠左越省码率，同等码率时越高越好；需比较同一参考片段及指标域。成本图仅显示散点：相同质量下比较编码时间或速度。体积与码率仅计视频包。PSNR 为 MSE 域汇总，SSIM / VMAF 为逐帧均值。</p>`,
   );
   html += section(
     "BD-rate · 同等质量下的平均码率差",
@@ -1717,7 +1821,7 @@ function renderTrial(r) {
   );
   html += section(
     "逐帧质量叠加 · 固定位深与 preset，对比 CRF",
-    `<div class="two"><label>固定对比组<select id="trial-group">${groups.map((g, i) => `<option value="${i}">${esc(g)}</option>`).join("")}</select></label><label>纵轴质量指标<select id="trial-frame-metric">${metrics.map((m) => `<option value="${m}">${esc(metricLabels[m])}</option>`).join("")}</select></label></div><div id="trial-crf-select" class="checks"></div><p id="trial-frame-note" class="hint"></p><div id="trial-frames"></div>`,
+    `<div class="plot-controls"><label>固定对比组<select id="trial-group">${groups.map((g, i) => `<option value="${i}">${esc(g)}</option>`).join("")}</select></label></div><div id="trial-crf-select" class="checks"></div><p id="trial-frame-note" class="hint"></p><div id="trial-frames"><label>指标<select id="trial-frame-metric" aria-label="逐帧质量图 Y 轴指标">${metrics.map((m) => `<option value="${m}">${esc(metricLabels[m])}</option>`).join("")}</select></label></div>`,
   );
   html +=
     notices(r.warnings) +
@@ -1744,7 +1848,12 @@ function renderTrial(r) {
       const data=[...result.points.anchor.map(p=>[p.rate,p.quality,p,0]),...result.points.test.map(p=>[p.rate,p.quality,p,1])].sort((a,b)=>a[0]-b[0]);
       bdPlot=draw("bd-plot",data,{connect:true,axis:"基本码流码率（kbit/s）",unit:result.qualityDomain,
         series:[{id:0,name:result.anchor,color:"#80e1c4"},{id:1,name:result.test,color:"#76a9ed"}],
-        describe:p=>"CRF "+p[2].crf+" · "+fmt(p[0],6)+" kbit/s · "+fmt(p[1],8)+" dB"});
+        describe:p=>[
+          {label:'对比组',value:p[3]===0?result.anchor:result.test,width:24},
+          {label:'CRF',value:p[2].crf,digits:0,width:8},
+          {label:'基本码流码率（kbit/s）',value:p[0],bounds:'x',text:String(fmt(p[0],6)),width:24},
+          {label:'PSNR-Y（dB）',value:p[1],bounds:'y',digits:8,text:String(fmt(p[1],8)),width:20},
+        ]});
       $("#bd-plot-note").textContent="此图使用本次 BD-rate 的基本码流码率与 PSNR-Y 帧均值。采样点连线辅助审阅，计算采用 PCHIP 积分；请检查共同区间、曲线交叉与采样分布。";
     }
     $("#bd-export").disabled = !result.ok;
@@ -1804,31 +1913,41 @@ function renderTrial(r) {
       ]),
     );
   };
-  const seriesPlot = (id, x, y) => {
+  const seriesPlot = (id, x, y, controls = {}) => {
     const { data, series } = trialPlotData(rows, x, y);
     return draw(id, scalePlotData(data, {x: scales[x], y: scales[y]}), {
+      ...controls,
       series,
       connect: !["encodeSeconds", "encodeFps"].includes(x),
       unit: labels[y],
       axis: labels[x],
-      describe: (p) =>
-        `${rowLabel(p[2])} · CRF ${p[2].crf} · ${labels[x]} ${quantityNumber(p[0], 6)} · ${labels[y]} ${["psnr", "ssim", "vmaf"].includes(y) ? fmt(p[2].metrics[y]?.pooled, 6) : quantityNumber(p[1], 6)} · ${formatBytes(p[2].videoBytes)} · ${rate(p[2].videoMbps)}`,
+      describe: (p) => [
+        {label:'对比组',value:rowLabel(p[2]),width:24},
+        {label:labels[x],value:p[0],bounds:'x',text:quantityNumber(p[0],6),width:20},
+        ...(x==='crf'?[]:[{label:'CRF',value:p[2].crf,digits:0,width:8}]),
+        {label:labels[y],value:p[2].metrics[y]?.pooled ?? p[1],bounds:'y',text:String(["psnr", "ssim", "vmaf"].includes(y) ? fmt(p[2].metrics[y]?.pooled,6) : quantityNumber(p[1],6)),width:20},
+        ...(x==='videoBytes' || y==='videoBytes'?[]:[{label:'视频包体积',value:formatBytes(p[2].videoBytes),title:byteEvidence(p[2].videoBytes)}]),
+        ...(x==='videoMbps' || y==='videoMbps'?[]:[{label:'视频包码率',value:String(rate(p[2].videoMbps))}]),
+      ],
     });
   };
   seriesPlot("trial-psnr", "crf", "psnr");
   seriesPlot("trial-time", "crf", "encodeSeconds");
   seriesPlot("trial-rate", "crf", "videoMbps");
   seriesPlot("trial-ssim", "crf", "ssim");
+  const rdAxis = $("#rd-axis"), rdMetric = $("#rd-metric"), frameMetric = $("#trial-frame-metric");
   let rd, framePlot;
   const update = () => {
     rd?.dispose();
-    rd = seriesPlot("rd", $("#rd-axis").value, $("#rd-metric").value);
+    rd = seriesPlot("rd", rdAxis.value, rdMetric.value, {
+      xControl: rdAxis.closest('label'), yControl: rdMetric.closest('label'),
+    });
   };
   let selectedCrfs = [];
   const updateFrames = () => {
     framePlot?.dispose();
     const group = groups[Number($("#trial-group").value) || 0],
-      metric = $("#trial-frame-metric").value || metrics[0];
+      metric = frameMetric.value || metrics[0];
     const result = trialFramePlotData(
       rows,
       metric,
@@ -1844,13 +1963,9 @@ function renderTrial(r) {
       (result.missing.length
         ? " 未保存逐帧数据的 CRF：" + result.missing.join("、")
         : "");
-    if (!result.data.length) {
-      $("#trial-frames").textContent = selectedCrfs.length
-        ? "该报告未保存所选指标的逐帧数据。"
-        : "请至少选择一个 CRF。";
-      return;
-    }
     framePlot = draw("trial-frames", result.data, {
+      yControl: frameMetric.closest('label'),
+      emptyMessage: selectedCrfs.length ? "该报告未保存所选指标的逐帧数据。" : "请至少选择一个 CRF。",
       series: result.series,
       markers: false,
       height: 440,
@@ -1858,19 +1973,12 @@ function renderTrial(r) {
         ? "相对片段首帧时间（s）"
         : "片段显示帧序号（从 0 开始）",
       unit: labels[metric],
-      describe: (p) =>
-        "CRF " +
-        p[2].crf +
-        " · 帧 " +
-        p[2].frame +
-        " · " +
-        labels[metric] +
-        " " +
-        (p[2].value === "Infinity"
-          ? "∞"
-          : p[2].value == null
-            ? "缺失"
-            : fmt(p[2].value, 6)),
+      describe: (p) => [
+        ...(result.timed?[{label:'片段时间（s）',value:p[0],bounds:'x'}]:[]),
+        {label:'显示帧',value:p[2].frame,digits:0,width:10},
+        {label:'CRF',value:p[2].crf,digits:0,width:8},
+        {label:labels[metric],value:p[2].value,bounds:'y',text:String(p[2].value==='Infinity'?'∞':p[2].value==null?'缺失':fmt(p[2].value,6)),width:20},
+      ],
     });
   };
   const updateGroup = () => {
@@ -1943,6 +2051,10 @@ function updateNav() {
       const a = document.createElement("a");
       a.href = "#" + titleEl.id;
       a.className = "nav-dot";
+      a.addEventListener('click',()=>{
+        const details=titleEl.closest('.report-section-body');
+        if (details) details.open=true;
+      });
       const label = document.createElement("span");
       label.textContent = titleEl.textContent;
       a.appendChild(label);
