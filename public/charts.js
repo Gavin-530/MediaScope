@@ -22,6 +22,43 @@ const n = (x, d = 3) =>
   Number.isFinite(x)
     ? quantityNumber(x, d)
     : "∞";
+// Each labeled field owns its space; text and units cannot move adjacent fields.
+// Numeric columns retain decimal alignment without reserving an unused exponent.
+function readoutField({label, value, bounds = [], digits = 6, text, title, width}) {
+  const field = document.createElement('div'), name = document.createElement('dt'), content = document.createElement('dd');
+  field.className = 'chart-field';
+  if (width) field.style.setProperty('--field-width', width + 'ch');
+  name.textContent = label;
+  field.append(name, content);
+  if (typeof value !== 'number' && value != null) {
+    content.textContent = text ?? String(value);
+    if (title) content.title = title;
+    return field;
+  }
+  const number = document.createElement('span');
+  number.className = 'chart-number';
+  const wholeWidth = Math.max(1, ...bounds.filter(Number.isFinite).map(v => n(v, digits).split(/[.e]/)[0].length));
+  number.style.setProperty('--whole-width', wholeWidth + 'ch');
+  number.style.setProperty('--fraction-width', (digits ? digits + 1 : 0) + 'ch');
+  text ??= value == null ? '无值' : Number.isNaN(value) ? '无效' : value === Infinity ? '∞' : value === -Infinity ? '−∞' : n(value, digits);
+  number.title = title ?? (value == null ? '该位置没有可显示的数值' : '未舍入值（当前图表单位）：' + String(value));
+  const parts = text.match(/^([^e.]+)(\.\d+)?(e[+-]?\d+)?$/i);
+  if (Number.isFinite(value) && parts) {
+    for (let i = 1; i <= 3; i++) {
+      if (i === 3 && !parts[i]) continue;
+      const part = document.createElement('span');
+      part.className = ['chart-whole', 'chart-fraction', 'chart-exponent'][i - 1];
+      part.textContent = parts[i] || '';
+      number.append(part);
+    }
+  } else {
+    const status = document.createElement('span');
+    status.className = 'chart-number-status'; status.textContent = text;
+    number.append(status);
+  }
+  content.append(number);
+  return field;
+}
 function indexAt(data, x) {
   let a = 0,
     b = data.length;
@@ -105,6 +142,7 @@ export function plot(
     describe,
     onPick,
     onReset,
+    onRangeChange,
     xControl,
     yControl,
     emptyMessage = "暂无可绘制的数据",
@@ -119,6 +157,8 @@ export function plot(
     yFactor = 1,
     xEnd,
     height,
+    regions = [],
+    minXSpan = 1,
   } = {},
 ) {
   const focusedControl = document.activeElement,
@@ -182,7 +222,7 @@ export function plot(
   const minimum = data[0][0],
     last = Number.isFinite(xEnd) && xEnd > data.at(-1)[0] ? xEnd : intervals ? data.at(-1)[2].end : data.at(-1)[0] + (frames ? 1 : 0),
     maximum = last > minimum ? last : minimum + 1,
-    minSpan = frames ? 1 : stems ? Math.min(1e-6, (maximum - minimum) / 10) : Math.min(1, (maximum - minimum) / 10);
+    minSpan = frames ? 1 : stems ? Math.min(1e-6, (maximum - minimum) / 10) : Math.min(minXSpan, (maximum - minimum) / 10);
   let a = minimum,
     b = maximum,
     w = 0,
@@ -193,14 +233,15 @@ export function plot(
     right = 25;
   const xValue = (x) =>
     a + ((x - left) / Math.max(1, w - left - right)) * (b - a);
-  const setRange = (lo, hi) => {
+  const setRange = (lo, hi, notify = true) => {
     if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) return;
     const span = Math.min(maximum - minimum, Math.max(minSpan, hi - lo));
     a = Math.max(minimum, Math.min(maximum - span, lo));
-    b = a + span;
+    b = span===maximum-minimum ? maximum : a + span;
     from.value = +a.toFixed(6);
     to.value = +b.toFixed(6);
     draw();
+    if (notify) onRangeChange?.({from:a,to:b,full:a===minimum&&b===maximum});
   };
   const resetRange = () => { onReset?.(); setRange(minimum, maximum); };
   const lockY = (lo, hi) => {
@@ -264,6 +305,22 @@ export function plot(
     }
     c.save();
     c.beginPath();c.rect(left, top, Math.max(0, w - left - right), base - top);c.clip();
+    for (const region of regions) {
+      if (region.end <= a || region.start >= b) continue;
+      const start=px(Math.max(a,region.start)),end=px(Math.min(b,region.end));
+      c.fillStyle='rgba(245,158,11,0.14)';c.fillRect(start,top,end-start,base-top);
+      c.strokeStyle='#d97706';c.lineWidth=1;c.setLineDash(region.open?[4,3]:[]);
+      c.beginPath();c.moveTo(start,top);c.lineTo(end,top);c.moveTo(start,top);c.lineTo(start,base);
+      if (!region.open && region.end <= b) {c.moveTo(end,top);c.lineTo(end,base);}
+      c.stroke();
+      if(region.open){
+        c.save();c.beginPath();c.rect(start,top,end-start,base-top);c.clip();
+        c.strokeStyle='rgba(217,119,6,0.3)';c.setLineDash([]);
+        for(let x=start-(base-top);x<end;x+=12){c.beginPath();c.moveTo(x,base);c.lineTo(x+base-top,top);c.stroke();}
+        c.restore();
+      }
+    }
+    c.setLineDash([]);
     if (frames) {
       const bw = Math.max(1, (w - left - right) / (b - a));
       for (const p of finite) {
@@ -417,18 +474,18 @@ export function plot(
       idx--;
     const p = data[idx],
       atX = series.length ? visiblePoints(data, p[0], p[0]) : [p];
-    label.textContent =
-      axis +
-      " " +
-      n(p[0], 6) +
-      " · " +
-      (atX.length ? atX : [p])
-        .map((point) =>
-          describe
-            ? describe(point)
-            : `${unit} ${point[1] === null ? "缺失 / ∞" : n(point[1], 6)}`,
-        )
-        .join(" | ");
+    label.replaceChildren();
+    for (const point of (atX.length ? atX : [p])) {
+      const row = document.createElement('dl');
+      row.className = 'chart-readout-row';
+      const fields = describe ? describe(point,{x}) : [
+        {label: axis, value: point[0], bounds: 'x'},
+        {label: unit, value: point[1], bounds: 'y'},
+      ];
+      for (const field of fields) row.append(readoutField({...field,
+        bounds: field.bounds === 'x' ? [minimum, maximum] : field.bounds === 'y' ? fullExtent : field.bounds}));
+      label.append(row);
+    }
     return p;
   };
   canvas.onpointerdown = (e) => {
@@ -453,7 +510,7 @@ export function plot(
         xValue(Math.max(d.start, d.end)),
       );
     else {
-      onPick?.(hover(e));
+      onPick?.(hover(e),{x:xValue(e.offsetX)});
       draw();
     }
   };
@@ -518,11 +575,11 @@ export function plot(
     }
   };
   const ro = new ResizeObserver(() => {
-    if (canvas.isConnected) draw();
-    else ro.disconnect();
+    if (!canvas.isConnected) ro.disconnect();
+    else if (canvas.clientWidth && canvas.clientHeight) draw();
   });
   ro.observe(canvas);
-  setRange(...(initial || [minimum, maximum]));
+  setRange(...(initial || [minimum, maximum]), false);
   label.textContent = frames ? "点击帧查看证据。" : "";
   return { setRange, dispose: () => ro.disconnect() };
 }
@@ -532,7 +589,7 @@ export function gopOverview(host, gops, total, onSelect) {
     '<canvas class="gop-canvas" aria-label="GOP 全片概览"></canvas><div class="chart-label"></div>';
   const canvas = host.querySelector("canvas"),
     label = host.querySelector(".chart-label");
-  let selected = 0;
+  let selected = null;
   const draw = () => {
     const w = canvas.clientWidth,
       d = devicePixelRatio || 1;
@@ -545,7 +602,7 @@ export function gopOverview(host, gops, total, onSelect) {
       const x = (g.start / total) * w,
         width = (g.count / total) * w;
       c.fillStyle = colorFor(g.label);
-      c.globalAlpha = g.index === selected ? 1 : 0.45;
+      c.globalAlpha = selected === null || g.index === selected ? 1 : 0.45;
       c.fillRect(x, 6, Math.max(1, width - 1), 35);
       if (width > 65) {
         c.globalAlpha = 1;
@@ -558,24 +615,33 @@ export function gopOverview(host, gops, total, onSelect) {
   const pick = (x) =>
     gops.find((g) => ((g.end + 1) / total) * canvas.clientWidth >= x) ||
     gops.at(-1);
-  canvas.onmousemove = (e) => {
-    const g = pick(e.offsetX);
-    label.textContent = `GOP #${g.index} · ${g.label} · 帧 ${g.start}–${g.end} · ${g.count} 帧`;
+  const describe = (g) => {
+    if (!g) {label.replaceChildren();return;}
+    const row = document.createElement('dl');row.className = 'chart-readout-row';
+    for (const field of [
+      {label:'GOP',value:g.index,digits:0,width:9},
+      {label:'访问类型',value:g.label,width:20},
+      {label:'显示帧区间',value:`${g.start}–${g.end}`,width:20},
+      {label:'帧数',value:g.count,digits:0,width:10},
+    ]) row.append(readoutField(field));
+    label.replaceChildren(row);
   };
+  canvas.onmousemove = (e) => describe(pick(e.offsetX));
+  canvas.onmouseleave = () => describe(gops.find(g=>g.index===selected));
   canvas.onclick = (e) => {
-    selected = pick(e.offsetX).index;
-    draw();
-    onSelect(selected);
+    const g=pick(e.offsetX);if(g)onSelect(g.index);
   };
   const ro = new ResizeObserver(() => {
-    if (canvas.isConnected) draw();
-    else ro.disconnect();
+    if (!canvas.isConnected) ro.disconnect();
+    else if (canvas.clientWidth && canvas.clientHeight) draw();
   });
   ro.observe(canvas);
   draw();
   return {
     select: (i) => {
       selected = i;
+      canvas.setAttribute('aria-label',i===null?'GOP 全片概览；未定位单个 GOP':`GOP 全片概览；当前定位 GOP ${i}`);
+      describe(gops.find(g=>g.index===i));
       draw();
     },
     dispose: () => ro.disconnect(),

@@ -1,7 +1,13 @@
 {
   "schema": 1,
   "features": [
-    {"id":"analysis-targets","purpose":"自动读取文件、独立逐帧/GOP/区间码率/SI-TI目标、设置随勾选收起、统一排队启动、七种组合只运行必要阶段及报告与计划往返","files":["testing-tools/server.test.mjs","testing-tools/browser.test.mjs"],"names":"\\[analysis-targets\\]"},
+    {"id":"gop-view","purpose":"真实多GOP主图的全片/单GOP/自定义范围状态与概览高亮一致，清除过期悬停读数，全览/双击/自动/坐标切换保留纵轴并保持导出原文","files":["testing-tools/browser.test.mjs"],"names":"\\[gop-view\\]"},
+    {"id":"table-scrolling","purpose":"长结果表格限制高度、区域内滚动及固定表头，翻页恢复顶部、窄屏容纳与CSV完整导出","files":["testing-tools/browser.test.mjs"],"names":"\\[table-scrolling\\]"},
+    {"id":"section-folding","purpose":"结果板块原生折叠、简洁统一标题、提示与警告随所属结果展开收起、导航自动展开、图表尺寸及范围/页签状态保留、导出不变","files":["testing-tools/browser.test.mjs"],"names":"\\[section-folding\\]"},
+    {"id":"report-layout","purpose":"当前报告标记随查看/页签/导入/移除同步，重复摘要紧凑、帧统计归入GOP、文件基本信息原生折叠及同一报告视图保留，报告导出不变","files":["testing-tools/browser.test.mjs"],"names":"\\[report-layout\\]"},
+    {"id":"analysis-notes","purpose":"固定说明按模块折叠，场景限制随结果简明展示、完整原文按需展开，未知/变更文字与资源警告保持可见；实际测量报告和导出原文不变","files":["testing-tools/analysis-notes.test.mjs","testing-tools/browser.test.mjs"],"names":"\\[analysis-notes\\]"},
+    {"id":"repeat-analysis","purpose":"原生整数样本精确重复与区间、原始PTS有理数诊断、上游持续静止候选、指纹复核预览/显示差分、独立目标与0.4报告/计划/CSV往返；候选背景融入原图、原始区间读数与精确重复计数独立","files":["testing-tools/repeat.test.mjs","testing-tools/server.test.mjs","testing-tools/browser.test.mjs"],"names":"\\[repeat-analysis\\]"},
+    {"id":"analysis-targets","purpose":"自动读取文件、独立逐帧/GOP/区间码率/SI-TI/重复帧目标、设置随勾选收起、统一排队启动、15种组合只运行必要阶段及报告与计划往返","files":["testing-tools/server.test.mjs","testing-tools/browser.test.mjs"],"names":"\\[analysis-targets\\]|\\[repeat-analysis\\]"},
     {"id":"units","purpose":"十进制容量与码率自适应、规范大小写、图轴单位稳定、原始字节提示及报告精确往返和旧字段兼容","files":["testing-tools/units.test.mjs","testing-tools/browser.test.mjs"],"names":"\\[units\\]"},
     {"id":"basic-properties","purpose":"真实多位深/采样与 RGB/灰度/透明格式、色彩/SAR/旋转/扫描/附加图像；原始证据、抽样状态、解析边界、性能观察及新旧报告浏览器往返","files":["testing-tools/basic-properties.test.mjs","testing-tools/report.test.mjs","testing-tools/browser.test.mjs"],"names":"\\[basic-properties\\]"},
     {"id":"runtime-data","purpose":"结果仅保留在本次内存、任务及退出临时文件回收、重启不恢复、主动 JSON 导出导入、旧资料和独立保存视频保护","files":["testing-tools/runtime-data.test.mjs","testing-tools/runtime-data-browser.test.mjs","testing-tools/desktop-browser.test.mjs"],"names":"\\[runtime-data\\]|owned browser opens"},
@@ -17,7 +23,7 @@
     {"id":"bd-rate","purpose":"固定 JVET 801 项数值；独立整数像素真值与基本码流码率；严格 PSNR-Y/PCHIP、探索兼容、拒算和可复算 JSON；真实界面与基准互换","files":["testing-tools/bd-rate.test.mjs","testing-tools/browser.test.mjs","testing-tools/bd-reference.test.mjs"],"names":"\\[bd-rate\\]"},
     {"id":"queue","purpose":"暂停、继续、取消移除、单项移除与分范围清空、失败后执行、重排队与实际计划导入导出","files":["testing-tools/server.test.mjs","testing-tools/browser.test.mjs"],"names":"queue|cancellation|pausing|requeued|plan export|\\[queue-plans\\]"},
     {"id":"portable-reports","purpose":"统一0.4文件、表格/常量/稀疏字段无损往返、原始证据和生产版本保留、四个命名模板、旧格式与损坏内容拒绝","files":["testing-tools/report.test.mjs","testing-tools/portable.test.mjs","testing-tools/browser.test.mjs"],"names":"^all four actual|^real report parser|^truncating real|^future nonmeasurement|\\[portable-04\\]|\\[portable"},
-    {"id":"charts","purpose":"真实测量值/时间轴、视频与各音轨独立显示窗口、GOP 与缩放/CSV 操作；计数整数刻度与连续量小数、自定义精确上下限、紧凑控件及窄屏排版、超界裁剪提示、非法范围拒绝、曲线/指标/单位切换保持范围、报告导出不变","files":["testing-tools/chart-model.test.mjs","testing-tools/trial.test.mjs","testing-tools/browser.test.mjs"],"names":"\\[charts\\]|chart|sorts real|geometry|\\[bitrate-window\\]|\\[analysis\\]|\\[tab-retention\\]"},
+    {"id":"charts","purpose":"真实测量值/时间轴、视频与各音轨独立显示窗口、GOP 与缩放/CSV 操作；计数整数刻度与连续量小数、自定义精确上下限、紧凑控件及窄屏排版、悬停字段分列与数值/类型/单位长度变化时位置稳定、超界裁剪提示、非法范围拒绝、曲线/指标/单位切换保持范围、报告导出不变","files":["testing-tools/chart-model.test.mjs","testing-tools/trial.test.mjs","testing-tools/browser.test.mjs"],"names":"\\[charts\\]|chart|sorts real|geometry|\\[bitrate-window\\]|\\[analysis\\]|\\[tab-retention\\]"},
     {"id":"performance-correctness","purpose":"共享/分离解码、参考缓存与并行分析结果一致；不推断目标机器吞吐率","files":["testing-tools/performance.test.mjs"],"names":"."},
     {"id":"sidebar","purpose":"异步报告侧边栏目标真实存在；当前版本缺失失败，仅历史对比允许不适用","files":["testing-tools/browser.test.mjs"],"names":"\\[sidebar\\]"},
     {"id":"compact-task","purpose":"实际失败状态不得显示上一任务阶段；当前版本缺失失败，仅历史对比允许不适用","files":["testing-tools/browser.test.mjs"],"names":"\\[compact-task\\]"},

@@ -118,6 +118,17 @@
               <label class="target-toggle"><input id="complexity" type="checkbox" aria-controls="siti-settings" /> SI/TI 内容复杂度</label>
               <p class="hint">测量空间细节与帧间运动变化。</p>
             </div>
+            <div class="analysis-target">
+              <label class="target-toggle"><input id="repeat-enabled" type="checkbox" aria-controls="repeat-options" /> 重复帧与时间诊断</label>
+              <p class="hint">原生样本精确重复、连续段与原始 PTS 间隔。</p>
+            </div>
+          </div>
+          <div id="repeat-options" class="analysis-target-settings hidden">
+            <details>
+              <summary>高级选项</summary>
+              <label><input id="freeze-enabled" type="checkbox" disabled /> 筛查持续静止画面（至少 2 秒）</label>
+              <p class="hint">静止筛查按画面变化阈值生成候选，供人工复核；正常静态画面也可能命中。</p>
+            </details>
           </div>
           <div id="bitrate-options" class="analysis-target-settings hidden">
             <h3>区间码率设置</h3>
@@ -603,6 +614,7 @@
           <h2 id="inspect-result-title">分析结果</h2>
           <button id="inspect-export" class="secondary">导出 JSON 报告</button>
         </div>
+        <p id="inspect-report-context" class="report-context"></p>
         <p class="chart-help">
           拖动框选放大 · 双击全览 · Ctrl＋滚轮缩放 ·
           按钮平移。默认固定纵轴，可切换局部缩放；纵轴可能不从零开始，请读刻度。缺失与无限值保留断点，密集曲线按像素列保留极值。
@@ -615,6 +627,7 @@
           <h2 id="compare-result-title">分析结果</h2>
           <button id="compare-export" class="secondary">导出 JSON 报告</button>
         </div>
+        <p id="compare-report-context" class="report-context"></p>
         <p class="chart-help">
           拖动框选放大 · 双击全览 · Ctrl＋滚轮缩放 ·
           按钮平移。默认固定纵轴，可切换局部缩放；纵轴可能不从零开始，请读刻度。缺失与无限值保留断点，密集曲线按像素列保留极值。
@@ -627,6 +640,7 @@
           <h2 id="trial-result-title">分析结果</h2>
           <button id="trial-export" class="secondary">导出 JSON 报告</button>
         </div>
+        <p id="trial-report-context" class="report-context"></p>
         <p class="chart-help">
           拖动框选放大 · 双击全览 · Ctrl＋滚轮缩放 ·
           按钮平移。默认固定纵轴，可切换局部缩放；纵轴可能不从零开始，请读刻度。缺失与无限值保留断点，密集曲线按像素列保留极值。

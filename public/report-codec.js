@@ -73,6 +73,12 @@ function transformReport(report,encode){
     }
   };
   table(r,'frames');
+  if(r.repeatAnalysis){
+    if(!object(r.repeatAnalysis))fail();
+    r.repeatAnalysis={...r.repeatAnalysis};table(r.repeatAnalysis,'frames','frame');
+    if(r.repeatAnalysis.exact){r.repeatAnalysis.exact={...r.repeatAnalysis.exact};table(r.repeatAnalysis.exact,'runs');}
+    if(r.repeatAnalysis.timeline){r.repeatAnalysis.timeline={...r.repeatAnalysis.timeline};table(r.repeatAnalysis.timeline,'intervals');}
+  }
   if(r.content){
     if(!object(r.content))fail();
     r.content={...r.content};table(r.content,'points','frame');table(r.content,'scenes','index',2048);
