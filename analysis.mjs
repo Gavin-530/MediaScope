@@ -1,4 +1,5 @@
 import {measureSiti} from './siti.mjs';
+import {analysisNotes} from './public/analysis-notes.js';
 import {measureBdPoint} from './bd-measure.mjs';
 import {validateSitiSettings,distribution,sitiSceneSummary,validateSitiSceneStarts} from './public/siti.js';
 export {distribution} from './public/siti.js';
@@ -154,13 +155,10 @@ export async function complexity(file,stream,ctx={},frames=null){
   try{
     const {points,execution}=await measureSiti(file,stream,ctx,frames);
     return {available:true,points,execution,...sitiSceneSummary(points,ctx.sitiSceneStarts),notes:[
-      '采用固定 siti-tools 0.6.0（c537e337）PQ 计算流程，所有输入位深均乘以 255；与原版比较须使用相同输入解释、显示参数和场景。',
-      'SDR／逆 sRGB 按上游归一化 EOTF 后仿射映射至 300 / 0.1 cd/m²。HLG 保留固定上游公式及其分段跳变，使用记录的峰值／黑位；PQ 输入保持 PQ。此为指定版本兼容，不构成严格 P.910 符合性证明。',
-      '原版共同位深为 8/10/12-bit；9/14/16-bit 端点扩展、原生布局、灰度和 RGB 亮度提取属于本软件适配，不能称为原版文件读取支持。',
-      'SI：Sobel 梯度幅值的总体标准差，剔除一像素边界；TI：相邻帧差的总体标准差。场景首帧 TI 为 null，不纳入统计；逐帧值保留未舍入结果。',
+      ...analysisNotes.siti.slice(0,4),
       ctx.sitiSceneStarts?'按用户确认的场景分别统计，不计算跨场景 TI。':'场景边界未确认，全片结果可能含剪辑点 TI；分场景比较须确认边界。',
       ...(execution.configuration.input.deinterlace?['已选择 BWDIF 每帧输出一帧；按输出逐行画面计算，并核验帧数和时间戳。']:[]),
-      'CPU 串行、并行和 GPU 共用输入解释及固定上游计算模型。GPU 指标采用 FP32，HLG RGB 关键前处理保留 FP64；CPU 并行共用一次软件解码并传递相邻原始帧。验证保留未修改上游函数及发布文件结果；这不等于 ITU 官方认证。比较须保持相同显示假设、分辨率、帧率、场景及前处理条件。'
+      analysisNotes.siti[4]
     ]};
   }catch(e){if(ctx.signal?.aborted)throw e;return {available:false,reason:e.message,...(e.sitiPhase?{errorPhase:e.sitiPhase}:{}),...(e.sitiAttempts?{attempts:e.sitiAttempts}:{})}}
 }
