@@ -571,7 +571,7 @@ export function gopOverview(host, gops, total, onSelect) {
     '<canvas class="gop-canvas" aria-label="GOP 全片概览"></canvas><div class="chart-label"></div>';
   const canvas = host.querySelector("canvas"),
     label = host.querySelector(".chart-label");
-  let selected = null;
+  let selected = null, visible = null;
   const draw = () => {
     const w = canvas.clientWidth,
       d = devicePixelRatio || 1;
@@ -584,7 +584,8 @@ export function gopOverview(host, gops, total, onSelect) {
       const x = (g.start / total) * w,
         width = (g.count / total) * w;
       c.fillStyle = colorFor(g.label);
-      c.globalAlpha = selected === null || g.index === selected ? 1 : 0.45;
+      const active = selected === null ? visible === null || visible.has(g.index) : g.index === selected;
+      c.globalAlpha = active ? 1 : 0.45;
       c.fillRect(x, 6, Math.max(1, width - 1), 35);
       if (width > 65) {
         c.globalAlpha = 1;
@@ -620,9 +621,10 @@ export function gopOverview(host, gops, total, onSelect) {
   ro.observe(canvas);
   draw();
   return {
-    select: (i) => {
+    select: (i, visibleGops = null) => {
       selected = i;
-      canvas.setAttribute('aria-label',i===null?'GOP 全片概览；未定位单个 GOP':`GOP 全片概览；当前定位 GOP ${i}`);
+      visible = visibleGops === null ? null : new Set(visibleGops);
+      canvas.setAttribute('aria-label',i!==null?`GOP 全片概览；当前定位 GOP ${i}`:visible===null?'GOP 全片概览；未定位单个 GOP':`GOP 全片概览；自定义范围涉及 ${visible.size} 个 GOP`);
       describe(gops.find(g=>g.index===i));
       draw();
     },

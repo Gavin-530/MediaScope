@@ -1270,13 +1270,14 @@ scenario('[bd-rate] reference mode uses measured Y and elementary bitrate, expor
   await writeFile(path.join(dir,'report.json'),JSON.stringify(report));
 });
 
-scenario('[gop-view] full and custom frame viewports never retain an unrelated GOP highlight or stale hover record',async({page,app,dir})=>{
+scenario('[gop-view] custom frame viewports highlight only intersecting GOPs without stale selection or hover records',async({page,app,dir})=>{
   const file=path.join(dir,'four-gops.mp4');
   await run(FF,['-v','error','-y','-f','lavfi','-i','testsrc2=size=64x48:rate=12:duration=4','-c:v','libx264','-g','12','-keyint_min','12','-sc_threshold','0','-bf','2',file]);
   await preview(page,file);const {report}=await runTask(page,app,'#enqueue-analyze');
   assert.equal(report.frames.length,48);assert.equal(report.coding.gops.length,4);
   const strip=page.locator('#gop-overview canvas'),plot=page.locator('#frame-plot'),index=page.locator('#gop-index'),info=page.locator('#gop-info');
   const alphas=()=>strip.evaluate((canvas,gops)=>{const c=canvas.getContext('2d'),d=canvas.width/canvas.clientWidth;return gops.map(g=>c.getImageData(Math.floor((g.start+g.count/2)/48*canvas.width),Math.floor(10*d),1,1).data[3]);},report.coding.gops);
+  const highlighted=async()=>{const opacity=await alphas();return opacity.flatMap((alpha,i)=>alpha===255?[i]:[]);};
   const timeFull=async()=>{
     assert.equal(await index.inputValue(),'');assert.equal(await info.innerText(),'主图：全片');
     assert.equal(await page.locator('#gop-overview .chart-label').textContent(),'');
@@ -1298,23 +1299,38 @@ scenario('[gop-view] full and custom frame viewports never retain an unrelated G
   await focus(1);await plot.locator('canvas').dblclick({position:{x:150,y:70}});await timeFull();
   await focus(3);await plot.locator('[data-field="x-scale"]').selectOption('manual');await plot.locator('[data-field="x-scale"]').selectOption('full');await timeFull();
   await focus(2);await plot.locator('[data-op="in"]').click();
-  assert.equal(await index.inputValue(),'');assert.equal(await info.innerText(),'主图：自定义范围');assert.ok((await alphas()).every(alpha=>alpha===255));
+  assert.equal(await index.inputValue(),'');assert.equal(await info.innerText(),'主图：自定义范围');assert.deepEqual(await highlighted(),[2]);
+  await plot.locator('[data-op="reset"]').click();await timeFull();
+  const plotBox=await plot.locator('canvas').boundingBox();
+  await page.mouse.move(plotBox.x+76+(plotBox.width-101)*.275,plotBox.y+70);
+  await page.mouse.down();await page.mouse.move(plotBox.x+76+(plotBox.width-101)*.55,plotBox.y+70,{steps:6});await page.mouse.up();
+  assert.equal(await index.inputValue(),'');assert.equal(await info.innerText(),'主图：自定义范围');assert.deepEqual(await highlighted(),[1,2]);
+  assert.match(await strip.getAttribute('aria-label'),/自定义范围涉及 2 个 GOP/);
+  await page.locator('#toggle-island').click();
+  await strip.evaluate(canvas=>canvas.scrollIntoView({block:'center'}));
+  await strip.screenshot({path:path.join(dir,'gop-custom-view.png')});
   await plot.locator('[data-op="reset"]').click();await timeFull();
   await focus(2);await plot.locator('[data-field="x-scale"]').selectOption('manual');
   await plot.locator('[data-field="from"]').fill('1.1');await plot.locator('[data-field="to"]').fill('2.2');await plot.locator('[data-op="apply"]').click();
-  assert.equal(await index.inputValue(),'');assert.equal(await info.innerText(),'主图：自定义范围');
+  assert.equal(await index.inputValue(),'');assert.equal(await info.innerText(),'主图：自定义范围');assert.deepEqual(await highlighted(),[1,2]);
   const box=await strip.boundingBox();await strip.hover({position:{x:box.width*.9,y:16}});
   assert.match(await page.locator('#gop-overview .chart-label').innerText(),/3/);
   await plot.locator('[data-op="reset"]').hover();assert.equal(await page.locator('#gop-overview .chart-label').textContent(),'','leaving a hover does not leave a false focused GOP');
+  assert.deepEqual(await highlighted(),[1,2],'hovering another GOP does not change the viewport highlights');
+  await plot.locator('[data-op="right"]').click();await plot.locator('[data-op="right"]').click();assert.deepEqual(await highlighted(),[2,3]);
   await plot.locator('[data-op="reset"]').click();await timeFull();
   await page.locator('#gop-next').click();assert.equal(await index.inputValue(),'0');assert.equal(await page.locator('#gop-prev').isDisabled(),true);
   await page.locator('#gop-next').click();assert.equal(await index.inputValue(),'1');
   await index.fill('3');await index.press('Tab');await page.locator('#frame-axis').selectOption('frame');
   assert.equal(await index.inputValue(),'3');assert.equal(Number(await plot.locator('[data-field="from"]').inputValue()),36);assert.equal(Number(await plot.locator('[data-field="to"]').inputValue()),48);
   await plot.locator('[data-op="reset"]').click();assert.equal(await index.inputValue(),'');assert.equal(Number(await plot.locator('[data-field="to"]').inputValue()),48);
+  await plot.locator('[data-field="from"]').fill('12');await plot.locator('[data-field="to"]').fill('24');await plot.locator('[data-op="apply"]').click();
+  assert.deepEqual(await highlighted(),[1],'touching a frame boundary does not include adjacent GOPs');
+  await plot.locator('[data-field="from"]').fill('11.5');await plot.locator('[data-field="to"]').fill('24.5');await plot.locator('[data-op="apply"]').click();
+  assert.deepEqual(await highlighted(),[0,1,2],'partially intersecting GOPs are highlighted in frame coordinates too');
   await page.locator('#frame-axis').selectOption('time');await timeFull();assert.deepEqual(await y(),locked);
   await index.fill('2');await index.press('Tab');await index.fill('');await index.press('Tab');await timeFull();
-  await page.locator('#toggle-island').click();await page.locator('#gop-overview').locator('..').screenshot({path:path.join(dir,'gop-full-view.png')});
+  await page.locator('#gop-overview').locator('..').screenshot({path:path.join(dir,'gop-full-view.png')});
   const exported=await download(page,'#inspect-export',path.join(dir,'report.json'));assert.deepEqual(exported.results[0].report,report);
 });
 scenario('[packet-distribution] actual audio packets, optional rates and frame axes survive export/import with legacy fallback',async({page,app,dir})=>{

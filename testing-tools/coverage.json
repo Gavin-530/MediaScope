@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "features": [
-    {"id":"gop-view","purpose":"真实多GOP主图的全片/单GOP/自定义范围状态与概览高亮一致，清除过期悬停读数，全览/双击/自动/坐标切换保留纵轴并保持导出原文","files":["testing-tools/browser.test.mjs"],"names":"\\[gop-view\\]"},
+    {"id":"gop-view","purpose":"真实多GOP主图的全片/单GOP/自定义范围状态与概览高亮一致，拖选/缩放/平移仅点亮时间或帧区间相交的GOP，清除过期悬停读数，全览/双击/自动/坐标切换保留纵轴并保持导出原文","files":["testing-tools/browser.test.mjs"],"names":"\\[gop-view\\]"},
     {"id":"table-scrolling","purpose":"长结果表格限制高度、区域内滚动及固定表头，翻页恢复顶部、窄屏容纳与CSV完整导出","files":["testing-tools/browser.test.mjs"],"names":"\\[table-scrolling\\]"},
     {"id":"section-folding","purpose":"结果板块原生折叠、简洁统一标题、提示与警告随所属结果展开收起、导航自动展开、图表尺寸及范围/页签状态保留、导出不变","files":["testing-tools/browser.test.mjs"],"names":"\\[section-folding\\]"},
     {"id":"report-layout","purpose":"当前报告标记随查看/页签/导入/移除同步，帧统计归入GOP、文件基本信息原生折叠及同一报告视图保留，报告导出不变","files":["testing-tools/browser.test.mjs"],"names":"\\[report-layout\\]"},

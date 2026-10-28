@@ -1339,7 +1339,8 @@ function initFrames(r) {
     frameScale = quantityScale(r.frames.map(f => f.bytes)),
     fdata = r.frames.map((f, i) => [i, f.bytes == null ? null : f.bytes / frameScale.divisor, f, i]),
     tdata = frameTimePoints(r.frames).map(p => [p[0], p[1] == null ? null : p[1] / frameScale.divisor, p[2], p[3]]),
-    timeBounds = frameTimeRange(r.frames);
+    timeBounds = frameTimeRange(r.frames),
+    gopTimeBounds = gops.map(g => frameTimeRange(r.frames, g.start, g.end));
   const detail = (p) => {
     const f = p[2],
       packet = r.coding?.packets?.[f.packetIndex];
@@ -1372,7 +1373,14 @@ function initFrames(r) {
       unit: `关联包大小（${frameScale.unit}）`, axis: time ? '呈现时间 s' : '显示帧', frames: !time, stems: time,
       xEnd: time ? timeBounds?.[1] : undefined, initial: range ?? undefined,
       xControl: axisPicker.closest('label'),
-      onRangeChange: ({full}) => {selected=null;syncScope(full?'全片':'自定义范围');},
+      onRangeChange: ({from,to,full}) => {
+        selected=null;
+        const visible = full ? null : gops.filter((g,i) => {
+          const bounds = time ? gopTimeBounds[i] : [g.start,g.end+1];
+          return bounds && bounds[0] < to && bounds[1] > from;
+        }).map(g => g.index);
+        syncScope(full?'全片':'自定义范围',visible);
+      },
       onPick: detail,
       describe: p => [
         ...(time ? [
@@ -1392,7 +1400,7 @@ function initFrames(r) {
     select(i),
   );
   charts.push(overview);
-  const syncScope = (scope) => {
+  const syncScope = (scope, visible = null) => {
     const g=selected===null?null:gops[selected];
     $("#gop-index").value = g?selected:'';
     $("#gop-index").placeholder = '—';
@@ -1400,7 +1408,7 @@ function initFrames(r) {
       g?`${g.label} · 帧 ${g.start}–${g.end} · ${g.count} 帧${g.boundary ? " · " + g.boundary : ""}`:`主图：${scope}`;
     $("#gop-prev").disabled = selected===null || selected === 0;
     $("#gop-next").disabled = !gops.length || selected === gops.length - 1;
-    overview.select(selected);
+    overview.select(selected,visible);
   };
   const select = (i) => {
     if(!gops.length)return;
