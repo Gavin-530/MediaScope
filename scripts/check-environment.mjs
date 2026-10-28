@@ -46,8 +46,8 @@ try {
     const stream=JSON.parse(run(ffprobe,['-v','error','-show_streams','-of','json',file])).streams[0];
     const {analyzeRepeats}=await import(pathToFileURL(path.join(app,'repeat.mjs')));
     const r=await analyzeRepeats(file,stream,{signal:AbortSignal.timeout(30000)}, {freeze:true});
-    if(r.status!=='complete'||r.exact.duplicates!==11)throw Error('native framehash smoke mismatch');
-    optional.repeatAnalysis={status:'ready',configurationVersion:1};
+    if(r.status!=='complete'||r.configurationVersion!==2||r.exact.duplicates!==11||r.frames[0].equalPrevious!==null||!r.frames.slice(1).every(f=>f.equalPrevious===true&&f.difference===null)||r.differenceSummary.counts.equal!==11||r.constant.segments.length!==1)throw Error('native sample comparison smoke mismatch');
+    optional.repeatAnalysis={status:'ready',configurationVersion:r.configurationVersion};
     optional.freezeDetection=r.freeze.status==='complete'&&r.freeze.events.length===1?{status:'ready'}:{status:'unavailable',reason:r.freeze.reason??'freezedetect smoke mismatch'};
   }catch(e){optional.repeatAnalysis={status:'unavailable',reason:e.message};optional.freezeDetection={status:'unavailable',reason:'原生重复测量能力未通过检查'};}
   // Probe an actual HTTP response before allowing the application pointer to change.

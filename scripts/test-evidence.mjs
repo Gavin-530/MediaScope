@@ -17,6 +17,18 @@ export function measurementFile(relative) {
 }
 
 export const criticalMeasurements = [
+  {testName:'[repeat-analysis] locked NIST SHA256 vectors and exact upstream freezedetect FATE case pass product integration',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/official-vectors\.json$/},
+  {testName:'[repeat-analysis] complete runtime layout intersection matches native upstream or lossless equivalence and every enabled freeze layout',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/layout-coverage\.json$/},
+  {testName:'[repeat-analysis] every code value in every component round trips through equivalent layouts with exact integer difference relations',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/full-code-domain\.json$/},
+  {testName:'[repeat-analysis] CSV includes every record at the exact UTF8 byte limit and rejects one byte beyond it',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/csv-capacity\.json$/},
+  {testName:'[repeat-analysis] native byte budget rejects the first byte over the declared frame limit before decoding',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/byte-budget\.json$/},
+  {testName:'[repeat-analysis] cancellation during interval aggregation and final validation never returns a complete result',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/aggregation-cancel\.json$/},
+  {testName:'[repeat-analysis] direct samples and component block integers match independent oracle for 103 layouts and all corners',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/direct-samples\.json$/},
+  {testName:'[repeat-analysis] constant state uses observed PTS and exact predicate survives a forced digest collision',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/constant-state\.json$/},
+  {testName:'[repeat-analysis] ambiguous source histories remain unclassified and numerical bands are not reuse labels',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/source-ambiguity\.json$/},
+  {testName:'[repeat-analysis] native MSAD cross-check and file identity agree with independent integer evidence',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/msad-identity\.json$/},
+  {testName:'[repeat-analysis] cursor subtitle slow changes noise and scene cuts stay nonzero with independent source-time state',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/content-states\.json$/},
+  {testName:'[repeat-analysis] v2 moving 1080p 4K and exact 8K boundaries preserve evidence and bounded cancellation',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/resource-v2\.json$/},
   {testName:'[repeat-analysis] native integer layouts preserve every plane, alpha, edge and LSB against independent known bytes',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/native-layouts\.json$/},
   {testName:'[repeat-analysis] original PTS, offset and VFR holds agree with separate FFprobe integer evidence',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/timestamps\.json$/},
   {testName:'[repeat-analysis] missing source PTS never borrows generated framehash timestamps',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/missing-pts\.json$/},

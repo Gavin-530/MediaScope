@@ -1,6 +1,7 @@
 // Integer sample fingerprints and original timestamp evidence. No colour conversion,
 // FPS reconstruction, content-origin inference, or approximate duplicate classifier.
 import {MAX_ANALYSIS_FRAMES} from './analysis-limits.js';
+import {differenceConfiguration,differenceSummary,validateDifferenceFrame,SOURCE_CLASSIFICATION} from './repeat-difference.js';
 
 const integer = value => typeof value === 'string' && value.length <= 128 && /^-?\d+$/.test(value);
 const hash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
@@ -50,9 +51,10 @@ export function repeatFrameFormat(name,width,height) {
   return {pixelFormat:name,width,height,depth,storage,endian,alpha,shift,planes,samples,bytes,paddingMask:storage===2?(0xffff^used):0};
 }
 
-function runBoundary(frames,start,end) {
+function* runBoundarySteps(frames,start,end) {
   let valid=integer(frames[start].pts),last=valid?BigInt(frames[start].pts):null;
   for(let i=start+1;i<=end;i++) {
+    if(i%8192===0)yield;
     if(!integer(frames[i].pts)||last===null||BigInt(frames[i].pts)<=last){valid=false;break;}
     last=BigInt(frames[i].pts);
   }
@@ -67,23 +69,47 @@ function runBoundary(frames,start,end) {
   return {startPts:integer(frames[start].pts)?frames[start].pts:null,endPts,endSource};
 }
 
-export function repeatExactSummary(frames) {
+function finish(iterator){let step;do{step=iterator.next();}while(!step.done);return step.value;}
+export function repeatExactSummary(frames,confirmed=false){return finish(repeatExactSummarySteps(frames,confirmed));}
+export function* repeatExactSummarySteps(frames,confirmed=false) {
   let duplicates=0,start=null;
   const runs=[];
-  const close=end=>{runs.push({startFrame:start,endFrame:end,frameCount:end-start+1,extraFrames:end-start,...runBoundary(frames,start,end)});start=null;};
+  const close=function*(end){runs.push({startFrame:start,endFrame:end,frameCount:end-start+1,extraFrames:end-start,...yield* runBoundarySteps(frames,start,end)});start=null;};
   for(let i=1;i<frames.length;i++) {
-    if(frames[i].sha256===frames[i-1].sha256) {duplicates++;if(start===null)start=i-1;}
-    else if(start!==null)close(i-1);
+    if(i%8192===0)yield;
+    if(confirmed?frames[i].equalPrevious:frames[i].sha256===frames[i-1].sha256) {duplicates++;if(start===null)start=i-1;}
+    else if(start!==null)yield* close(i-1);
   }
-  if(start!==null)close(frames.length-1);
+  if(start!==null)yield* close(frames.length-1);
   const comparisons=Math.max(0,frames.length-1);
   return {frames:frames.length,comparisons,duplicates,ratio:comparisons?duplicates/comparisons:null,runs};
 }
 
-export function repeatTimeline(frames,timeBase,rates=[]) {
+// A lower bound from observed source PTS only. A guessed final duration cannot
+// turn a short observation into a confirmed two-second constant interval.
+export function repeatConstantSegments(frames,timeBase,exact){return finish(repeatConstantSegmentsSteps(frames,timeBase,exact));}
+export function* repeatConstantSegmentsSteps(frames,timeBase,exact) {
+  const tb=repeatRational(timeBase),segments=[];let unresolvedRuns=0;
+  for(const run of exact.runs){
+    let valid=!!tb;
+    for(let i=run.startFrame;i<=run.endFrame;i++){
+      if(i%8192===0)yield;
+      if(!integer(frames[i].pts)||i>run.startFrame&&(!integer(frames[i-1].pts)||BigInt(frames[i].pts)<=BigInt(frames[i-1].pts)))valid=false;
+    }
+    if(!valid){unresolvedRuns++;continue;}
+    const observedEndPts=run.endSource==='next-original-pts'?run.endPts:frames[run.endFrame].pts;
+    const observedTicks=BigInt(observedEndPts)-BigInt(run.startPts);
+    if(observedTicks*tb.n>=2n*tb.d)segments.push({...run,observedEndPts,observedTicks:String(observedTicks)});
+  }
+  return {method:'sample-constant-original-pts-v1',minimumSeconds:2,status:!tb||!frames.some(f=>integer(f.pts))?'unavailable':unresolvedRuns?'partial':'complete',unresolvedRuns,segments};
+}
+
+export function repeatTimeline(frames,timeBase,rates=[]){return finish(repeatTimelineSteps(frames,timeBase,rates));}
+export function* repeatTimelineSteps(frames,timeBase,rates=[]) {
   const tb=repeatRational(timeBase),counts=new Map(),longestIntervals=[];
   let missingPts=0,missingIntervals=0,nonIncreasing=0;
   for(let i=0;i<frames.length;i++) {
+    if(i%8192===0)yield;
     if(!integer(frames[i].pts))missingPts++;
     if(i) {
       if(!integer(frames[i].pts)||!integer(frames[i-1].pts)) {missingIntervals++;continue;}
@@ -100,16 +126,18 @@ export function repeatTimeline(frames,timeBase,rates=[]) {
   const intervals=[...counts].sort((a,b)=>BigInt(a[0])<BigInt(b[0])?-1:BigInt(a[0])>BigInt(b[0])?1:0).map(([ticks,count])=>({ticks,count}));
   const unique=[];
   for(const text of rates) {const r=repeatRational(text);if(r&&!unique.some(x=>x.n===r.n&&x.d===r.d))unique.push(r);}
-  const grids=unique.map(rate=>{
+  const grids=[];
+  for(const rate of unique){
     const result={rate:`${rate.n}/${rate.d}`,status:'undetermined',maxError:null};
-    if(!tb||frames.length<2||missingPts||nonIncreasing||tb.n*rate.n>=tb.d*rate.d)return result;
+    if(!tb||frames.length<2||missingPts||nonIncreasing||tb.n*rate.n>=tb.d*rate.d){grids.push(result);continue;}
     let maximum=0n;
     for(let i=1;i<frames.length;i++) {
+      if(i%8192===0)yield;
       const error=abs((BigInt(frames[i].pts)-BigInt(frames[0].pts))*tb.n*rate.n-BigInt(i)*tb.d*rate.d);
       if(error>maximum)maximum=error;
     }
-    return {...result,status:maximum<=tb.n*rate.n?'compatible':'incompatible',maxError:rationalEvidence(maximum,tb.d*rate.n)};
-  });
+    grids.push({...result,status:maximum<=tb.n*rate.n?'compatible':'incompatible',maxError:rationalEvidence(maximum,tb.d*rate.n)});
+  }
   return {status:!tb||missingPts===frames.length?'unavailable':missingPts||nonIncreasing?'partial':'complete',missingPts,missingIntervals,nonIncreasing,intervals,longestIntervals,grids};
 }
 
@@ -135,25 +163,35 @@ function same(a,b) {
   if(!a||!b||typeof a!=='object'||typeof b!=='object'||Array.isArray(a)!==Array.isArray(b))return false;
   const keys=Object.keys(a);return keys.length===Object.keys(b).length&&keys.every(k=>Object.hasOwn(b,k)&&same(a[k],b[k]));
 }
-export function validateRepeatAnalysis(value,stream) {
+export function validateRepeatAnalysis(value,stream){return finish(validateRepeatAnalysisSteps(value,stream));}
+export function* validateRepeatAnalysisSteps(value,stream) {
   const fail=message=>{throw Error(`重复画面报告无效：${message}`);};
-  if(!value||value.configurationVersion!==1||!['complete','unsupported'].includes(value.status)||!value.source||typeof value.source.signature!=='string'||!hash(value.source.signature))fail('配置/来源');
+  if(!value||![1,2].includes(value.configurationVersion)||!['complete','unsupported'].includes(value.status)||!value.source||typeof value.source.signature!=='string'||!hash(value.source.signature))fail('配置/来源');
+  const confirmed=value.configurationVersion===2;
   if(!stream||value.source.stream!==stream.index||value.source.pixelFormat!==stream.pix_fmt||value.source.width!==stream.width||value.source.height!==stream.height)fail('轨道/格式');
   if(value.status==='unsupported') {if(typeof value.reason!=='string'||!value.reason||value.frames!==undefined)fail('不支持状态');return;}
   const format=repeatFrameFormat(value.source.pixelFormat,value.source.width,value.source.height);
-  if(!format||!same(value.sampleFormat,format)||value.algorithm!=='FFmpeg/rawvideo/framehash/SHA256')fail('样本表示');
+  if(!format||!same(value.sampleFormat,format)||value.algorithm!==(confirmed?'native-bytes-equal+FFmpeg/rawvideo/framehash/SHA256':'FFmpeg/rawvideo/framehash/SHA256'))fail('样本表示');
+  if(confirmed&&(!hash(value.source.contentSha256)||!same(value.differenceConfiguration,differenceConfiguration(format))))fail('原生比较配置/内容身份');
   if(!Array.isArray(value.frames)||value.frames.length<1||value.frames.length>MAX_ANALYSIS_FRAMES)fail('显示帧');
   for(const [i,f]of value.frames.entries()) {
+    if(i%8192===0)yield;
     if(!f||f.frame!==i||!hash(f.sha256)||![f.pts,f.bestEffortPts,f.duration].every(x=>x===null||integer(x))||!integer(f.hashPts)||!integer(f.hashDuration)||f.hashBytes!==format.bytes||!['duration','pkt_duration',null].includes(f.durationSource)||(f.duration===null)!==(f.durationSource===null)||!Array.isArray(f.interpretation)||f.interpretation.length!==4||f.interpretation.some(v=>v!==null&&(typeof v!=='string'||v.length>80)))fail(`帧${i}`);
+    if(confirmed){validateDifferenceFrame(f,value.differenceConfiguration,i);if(i&&f.equalPrevious&&f.sha256!==value.frames[i-1].sha256)fail('相等样本摘要不一致');}
   }
   if(value.timeBase!==(repeatRational(stream.time_base)?stream.time_base:null)||!repeatRational(value.hashTimeBase)||!same(value.gridRates,[stream.r_frame_rate,stream.avg_frame_rate].filter(v=>typeof v==='string')))fail('时间基/候选帧率');
-  if(!same(value.exact,repeatExactSummary(value.frames))||!same(value.timeline,repeatTimeline(value.frames,value.timeBase,value.gridRates)))fail('派生计数/区间/时间统计');
+  if(!same(value.exact,yield* repeatExactSummarySteps(value.frames,confirmed))||!same(value.timeline,yield* repeatTimelineSteps(value.frames,value.timeBase,value.gridRates)))fail('派生计数/区间/时间统计');
+  if(confirmed){
+    if(!same(value.differenceSummary,differenceSummary(value.frames))||!same(value.constant,yield* repeatConstantSegmentsSteps(value.frames,value.timeBase,value.exact))||!same(value.sourceClassification,SOURCE_CLASSIFICATION))fail('差异/样本不变区间统计/来源分类资格');
+    if(!Array.isArray(value.tools)||value.tools.length!==3||value.tools.some(t=>!t||!['ffmpeg','ffprobe','node'].includes(t.role)||typeof t.path!=='string'||!t.path||!hash(t.sha256))||new Set(value.tools.map(t=>t.role)).size!==3)fail('工具身份');
+  }
   const freeze=value.freeze;
   if(!freeze||!['not-requested','complete','unsupported','unavailable','failed'].includes(freeze.status))fail('静止状态');
   if(freeze.status==='complete') {
     if(value.timeline.status!=='complete'||freeze.noise!==.001||freeze.durationSeconds!==2||!Array.isArray(freeze.events)||freeze.events.length>value.frames.length*3)fail('静止配置');
     let previous=-1;
     for(const e of freeze.events) {
+      if(e.frame%8192===0)yield;
       if(!e||!Number.isSafeInteger(e.frame)||e.frame<0||e.frame<previous||e.frame>=value.frames.length||!['start','duration','end'].includes(e.kind)||typeof e.value!=='string'||e.value.length>80||!(/^-?\d+(?:\.\d+)?(?:e[+-]?\d+)?$/i.test(e.value))||!Number.isFinite(Number(e.value))||e.kind==='duration'&&Number(e.value)<0||!integer(e.filterPts))fail('静止事件');
       previous=e.frame;
     }

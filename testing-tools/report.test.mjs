@@ -49,7 +49,14 @@ before(async()=>{
 });
 after(async()=>{await app?.stop()});
 test('all four actual report types round trip without altering measurements, tools or command evidence',()=>{
- for(const report of Object.values(reports)){assert.deepEqual(parseReport('\uFEFF'+JSON.stringify(report)),report);const wire=makePortable({results:[{entryId:'real',report}],applicationVersion:report.producer.applicationVersion});assert.deepEqual(parsePortable(JSON.stringify(wire)).results[0].report,report);}
+ for(const report of Object.values(reports)){
+  assert.deepEqual(parseReport('\uFEFF'+JSON.stringify(report)),report);
+  const wire=makePortable({results:[{entryId:'real',report}],applicationVersion:report.producer.applicationVersion});assert.equal(wire.formatVersion,'0.5');
+  for(const formatVersion of ['0.4','0.5']){
+   const restored=parsePortable(JSON.stringify({...wire,formatVersion}));assert.deepEqual(restored.results[0].report,report);
+   assert.deepEqual(makePortable({...restored,applicationVersion:'re-export'}).results,wire.results);
+  }
+ }
  assert.equal(reports.analyze.content.points[0].ti,null);assert.equal(reports.analyze.content.execution.configuration.standard,'ITU-T P.910 (10/2023)');
 });
 test('historical SI/TI reports preserve their original method, settings and measured values',()=>{

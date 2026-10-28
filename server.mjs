@@ -363,6 +363,8 @@ const server=http.createServer(async(req,res)=>{
     files['/analysis-limits.js']='analysis-limits.js';
     files['/report-codec.js']='report-codec.js';
     files['/repeat-model.js']='repeat-model.js';
+    files['/repeat-difference.js']='repeat-difference.js';
+    files['/repeat-csv.js']='repeat-csv.js';
     files['/repeat-view.js']='repeat-view.js';
     files['/bd-rate.js']='bd-rate.js';
     files['/bd-reference.js']='bd-reference.js';

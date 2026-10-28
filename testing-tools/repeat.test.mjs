@@ -6,6 +6,7 @@ import {createHash} from 'node:crypto';
 import {FF,FP,run,probe} from '../engine.mjs';
 import {analyzeRepeats,repeatPreview,verifyRepeatPadding} from '../repeat.mjs';
 import {repeatFrameFormat,repeatExactSummary,repeatTimeline,validateRepeatAnalysis} from '../public/repeat-model.js';
+import {oracleComponents,oracleDifference} from './helpers/repeat-oracle.mjs';
 
 const root=path.resolve('.build/testing-work');let dir;
 before(async()=>{await mkdir(root,{recursive:true});dir=await mkdtemp(path.join(root,'repeat-analysis-'));});
@@ -42,6 +43,64 @@ async function media(c,name=c.format,extra=[]){
   return {file,stream,ctx};
 }
 
+test('[repeat-analysis] changing color metadata preserves native samples, freeze history and preview frame numbering',{timeout:60000},async()=>{
+  // One valid stream contains successive coded sequences with equal integer
+  // samples but changed VUI. These are controlled inputs, not codec FATE vectors.
+  const width=32,height=32,count=72,half=count/2,a=Buffer.alloc(width*height*3);
+  for(let i=0;i<width*height;i++)a.writeUInt16LE(64,i*2);
+  for(let i=width*height;i<width*height*3/2;i++)a.writeUInt16LE(512,i*2);
+  const raw=path.join(dir,'metadata-source.raw');await writeFile(raw,Buffer.concat(Array(half).fill(a)));
+  const cases=[];
+  for(const change of [
+    {name:'range',first:['tv','bt709','bt709','bt709'],second:['pc','bt709','bt709','bt709'],changedField:0},
+    {name:'matrix',first:['tv','bt709','bt709','bt709'],second:['tv','smpte170m','bt709','bt709'],changedField:1},
+    {name:'transfer',first:['tv','bt709','bt709','bt709'],second:['tv','bt709','smpte2084','bt2020'],changedField:2},
+  ]){
+    const commands=[],parts=[];
+    for(const [index,[range,matrix,trc,primaries]]of [change.first,change.second].entries()){
+      const file=path.join(dir,`metadata-${change.name}-${index}.h264`);
+      await run(FF,['-v','error','-y','-noauto_conversion_filters','-f','rawvideo','-pixel_format','yuv420p10le','-video_size',`${width}x${height}`,'-framerate','24','-i',raw,
+        '-vf',`setparams=range=${range}:colorspace=${matrix}:color_trc=${trc}:color_primaries=${primaries}`,
+        '-c:v','libx264','-preset','ultrafast','-qp','0','-g','1','-bf','0','-color_range',range,'-colorspace',matrix,'-color_trc',trc,'-color_primaries',primaries,'-f','h264',file],{commands});
+      parts.push(await readFile(file));
+    }
+    const elementary=path.join(dir,`metadata-${change.name}.h264`),file=path.join(dir,`metadata-${change.name}.nut`);await writeFile(elementary,Buffer.concat(parts));
+    await run(FF,['-v','error','-y','-fflags','+genpts','-r','24','-i',elementary,'-c:v','copy',file],{commands});
+    const stream=(await probe(file,{commands})).raw.streams[0],r=await analyzeRepeats(file,stream,{commands},{freeze:true});
+    assert.equal(r.status,'complete');assert.equal(r.frames.length,count);assert.equal(r.source.pixelFormat,'yuv420p10le');
+    assert.deepEqual(r.frames.map(f=>f.sha256),Array(count).fill(digest(a)),change.name+' must not normalize sample values when a VUI tag changes');
+    assert.deepEqual(r.frames.map(f=>f.equalPrevious),[null,...Array(count-1).fill(true)]);
+    assert.equal(new Set(r.frames.map(f=>f.interpretation[change.changedField])).size,2);
+    assert.equal(r.exact.runs.length,1);assert.equal(r.constant.segments.length,1);assert.equal(r.freeze.status,'complete');
+    assert.deepEqual(r.freeze.events.map(({kind,value,frame})=>({kind,value,frame})),[{kind:'start',value:'0',frame:48}],'metadata change must not reset sustained-freeze history');
+    const preview=await repeatPreview({file,signature:r.source.signature,contentSha256:r.source.contentSha256,stream:0,frame:half+1,hashes:[digest(a),digest(a)]},{commands});
+    assert.equal(preview.images.length,2);assert.deepEqual(preview.images.map(i=>i.frame),[half,half+1]);
+    cases.push({change,expectedSampleSha256:digest(a),expectedLuma:64,expectedChroma:512,result:r,preview:preview.images.map(({image,...i})=>({...i,pngSha256:digest(Buffer.from(image.split(',')[1],'base64'))})),commands});
+  }
+  await writeFile(path.join(dir,'metadata-preservation.json'),JSON.stringify({outcome:'passed',scope:'Three changing-VUI controls; original integer samples, temporal state and frame indices. Not physical display equivalence.',cases}));
+});
+
+test('[repeat-analysis] real midstream dimensions or pixel layout changes are rejected before native comparison',async()=>{
+  const cases=[];
+  for(const change of [{name:'dimensions',nextWidth:48,nextDepth:8},{name:'pixel-format',nextWidth:32,nextDepth:10}]){
+    const parts=[],commands=[];
+    for(const [index,width,depth]of [[0,32,8],[1,change.nextWidth,change.nextDepth]]){
+      const bytes=depth===8?1:2,raw=path.join(dir,`layout-${change.name}-${index}.raw`),file=raw+'.h264',data=Buffer.alloc(width*32*3/2*bytes);
+      for(let i=0;i<width*32*3/2;i++){const v=i<width*32?16:128;if(bytes===1)data[i]=v;else data.writeUInt16LE(v*4,i*2);}
+      await writeFile(raw,Buffer.concat([data,data]));
+      await run(FF,['-v','error','-y','-noauto_conversion_filters','-f','rawvideo','-pixel_format',depth===8?'yuv420p':'yuv420p10le','-video_size',`${width}x32`,'-framerate','24','-i',raw,'-c:v','libx264','-preset','ultrafast','-qp','0','-g','1','-bf','0','-f','h264',file],{commands});parts.push(await readFile(file));
+    }
+    const file=path.join(dir,'layout-'+change.name+'.h264');await writeFile(file,Buffer.concat(parts));
+    const observed=JSON.parse(await run(FP,['-v','error','-show_frames','-show_entries','frame=width,height,pix_fmt','-of','json',file],{commands})).frames;
+    assert.equal(observed.length,4);assert.equal(new Set(observed.map(f=>change.name==='dimensions'?f.width:f.pix_fmt)).size,2);
+    const stream=(await probe(file,{commands})).raw.streams[0],analysisCommands=[];
+    await assert.rejects(analyzeRepeats(file,stream,{commands:analysisCommands}),/帧间尺寸或像素格式改变/);
+    assert.ok(!analysisCommands.some(c=>c.args.includes('framehash')),'no native comparison is started for a changing layout');
+    cases.push({change,observed,commands,analysisCommands,nativeComparisonStarted:false});
+  }
+  await writeFile(path.join(dir,'layout-change-rejection.json'),JSON.stringify({outcome:'passed',cases}));
+});
+
 test('[repeat-analysis] native integer layouts preserve every plane, alpha, edge and LSB against independent known bytes',async()=>{
   const formats=['yuv420p','yuv422p','yuv444p','yuva420p','yuva422p','yuva444p','gray','rgb24','bgr24','rgba','bgra','argb','abgr','gbrp','gbrap','nv12','nv21'];
   for(const sampling of ['420','422','444'])for(const depth of [9,10,12,14,16])for(const endian of ['le','be'])formats.push(`yuv${sampling}p${depth}${endian}`);
@@ -53,6 +112,10 @@ test('[repeat-analysis] native integer layouts preserve every plane, alpha, edge
     const c=fixture(format),{file,stream,ctx}=await media(c),result=await analyzeRepeats(file,stream,ctx);
     assert.equal(result.status,'complete');assert.equal(result.sampleFormat.bytes,c.frames[0].length);
     assert.deepEqual(result.frames.map(f=>f.sha256),c.frames.map(digest));
+    const oracle=oracleComponents(format,c.width,c.height);
+    assert.equal(result.configurationVersion,2);
+    assert.deepEqual(result.frames.map(f=>f.equalPrevious),c.expected.map((v,i)=>i?v:null));
+    for(let i=1;i<c.frames.length;i++)assert.deepEqual(result.frames[i].difference,c.expected[i]?null:oracleDifference(c.frames[i-1],c.frames[i],oracle),format+' frame '+i);
     assert.deepEqual(result.frames.map((f,i)=>i>0&&f.sha256===result.frames[i-1].sha256),c.expected);
     assert.equal(result.exact.duplicates,c.frames.length/2);assert.equal(result.exact.comparisons,c.frames.length-1);
     assert.equal(result.exact.runs.length,c.frames.length/2);assert.ok(result.exact.runs.every(r=>r.extraFrames===1&&r.frameCount===2));

@@ -93,7 +93,7 @@ export function validateReport(r) {
   };
   obj(r, "报告");
   if (Object.hasOwn(r,'schema') || Object.hasOwn(r,'formatVersion'))
-    throw Error('0.4 报告不使用嵌套格式版本');
+    throw Error('报告不使用嵌套格式版本');
   if (!r.producer || typeof r.producer.applicationVersion!=='string' || !r.producer.applicationVersion.length)
     fail('producer.applicationVersion');
   if(typeof r.createdAt!=='string'||!Number.isFinite(Date.parse(r.createdAt)))fail('createdAt');

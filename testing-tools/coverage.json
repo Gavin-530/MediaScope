@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "features": [
-    {"id":"repeat-analysis","purpose":"原生整数样本精确重复与区间、原始PTS有理数诊断、上游持续静止候选、指纹复核预览/显示差分、独立目标与0.4报告/计划/CSV往返","files":["testing-tools/repeat.test.mjs","testing-tools/server.test.mjs","testing-tools/browser.test.mjs"],"names":"\\[repeat-analysis\\]"},
+    {"id":"repeat-analysis","purpose":"原生整数逐值确认与全分量/残块差异、帧间颜色标签变化保留样本/候选历史/复核帧序且拒绝布局改变、来源未知及持续样本不变、原始PTS有理数诊断、上游低变化候选融入原分布图/开放区间/原始读数及独立计数、内容身份与预览、独立目标及旧方法/0.4读取与0.5报告/计划/CSV往返","files":["testing-tools/repeat.test.mjs","testing-tools/repeat-samples.test.mjs","testing-tools/repeat-qualification.test.mjs","testing-tools/server.test.mjs","testing-tools/browser.test.mjs"],"names":"\\[repeat-analysis\\]"},
     {"id":"analysis-targets","purpose":"自动读取文件、独立逐帧/GOP/区间码率/SI-TI/重复帧目标、设置随勾选收起、统一排队启动、15种组合只运行必要阶段及报告与计划往返","files":["testing-tools/server.test.mjs","testing-tools/browser.test.mjs"],"names":"\\[analysis-targets\\]|\\[repeat-analysis\\]"},
     {"id":"units","purpose":"十进制容量与码率自适应、规范大小写、图轴单位稳定、原始字节提示及报告精确往返和旧字段兼容","files":["testing-tools/units.test.mjs","testing-tools/browser.test.mjs"],"names":"\\[units\\]"},
     {"id":"basic-properties","purpose":"真实多位深/采样与 RGB/灰度/透明格式、色彩/SAR/旋转/扫描/附加图像；原始证据、抽样状态、解析边界、性能观察及新旧报告浏览器往返","files":["testing-tools/basic-properties.test.mjs","testing-tools/report.test.mjs","testing-tools/browser.test.mjs"],"names":"\\[basic-properties\\]"},
@@ -17,7 +17,7 @@
     {"id":"trials","purpose":"源片段直接比较、原生 420/422/444 与位深、真实编码矩阵、位深转换、CRF/preset、临时媒体生命周期","files":["testing-tools/trial.test.mjs","testing-tools/native-trial.test.mjs","testing-tools/engine.test.mjs","testing-tools/browser.test.mjs"],"names":"trial|depth|\\[trial\\]"},
     {"id":"bd-rate","purpose":"固定 JVET 801 项数值；独立整数像素真值与基本码流码率；严格 PSNR-Y/PCHIP、探索兼容、拒算和可复算 JSON；真实界面与基准互换","files":["testing-tools/bd-rate.test.mjs","testing-tools/browser.test.mjs","testing-tools/bd-reference.test.mjs"],"names":"\\[bd-rate\\]"},
     {"id":"queue","purpose":"暂停、继续、取消移除、单项移除与分范围清空、失败后执行、重排队与实际计划导入导出","files":["testing-tools/server.test.mjs","testing-tools/browser.test.mjs"],"names":"queue|cancellation|pausing|requeued|plan export|\\[queue-plans\\]"},
-    {"id":"portable-reports","purpose":"统一0.4文件、表格/常量/稀疏字段无损往返、原始证据和生产版本保留、四个命名模板、旧格式与损坏内容拒绝","files":["testing-tools/report.test.mjs","testing-tools/portable.test.mjs","testing-tools/browser.test.mjs"],"names":"^all four actual|^real report parser|^truncating real|^future nonmeasurement|\\[portable-04\\]|\\[portable"},
+    {"id":"portable-reports","purpose":"统一写出0.5与兼容读取0.4、表格/常量/稀疏字段无损往返、原始证据和生产版本保留、四个命名模板、不支持的封装/版本及损坏内容拒绝","files":["testing-tools/report.test.mjs","testing-tools/portable.test.mjs","testing-tools/browser.test.mjs"],"names":"^all four actual|^real report parser|^truncating real|^future nonmeasurement|\\[portable"},
     {"id":"charts","purpose":"真实测量值/时间轴、视频与各音轨独立显示窗口、GOP 与缩放/CSV 操作、图表状态保存","files":["testing-tools/chart-model.test.mjs","testing-tools/trial.test.mjs","testing-tools/browser.test.mjs"],"names":"chart|sorts real|geometry|\\[bitrate-window\\]|\\[analysis\\]|\\[tab-retention\\]"},
     {"id":"performance-correctness","purpose":"共享/分离解码、参考缓存与并行分析结果一致；不推断目标机器吞吐率","files":["testing-tools/performance.test.mjs"],"names":"."},
     {"id":"sidebar","purpose":"异步报告侧边栏目标真实存在；当前版本缺失失败，仅历史对比允许不适用","files":["testing-tools/browser.test.mjs"],"names":"\\[sidebar\\]"},

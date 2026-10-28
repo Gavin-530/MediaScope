@@ -77,11 +77,11 @@ test('[test-system] successful critical checks require retained measurement data
     await fs.writeFile(file,JSON.stringify({fixture:'BD-rate evidence protocol only',outcome:'passed'}));
   }
   const repeat=path.join(work,'repeat-analysis-Ab1234');await fs.mkdir(repeat);
-  for(const name of ['native-layouts.json','timestamps.json','missing-pts.json','freeze.json','semiplanar-raw.json','closed-freeze.json','failure-boundaries.json']){
+  for(const name of ['official-vectors.json','layout-coverage.json','full-code-domain.json','csv-capacity.json','byte-budget.json','aggregation-cancel.json','direct-samples.json','constant-state.json','source-ambiguity.json','msad-identity.json','content-states.json','resource-v2.json','native-layouts.json','timestamps.json','missing-pts.json','freeze.json','semiplanar-raw.json','closed-freeze.json','failure-boundaries.json']){
     await assert.rejects(saveMeasurements(work,work,{requiredMeasurements:criticalMeasurements}),/Missing critical measurement evidence/);
     await fs.writeFile(path.join(repeat,name),JSON.stringify({fixture:'repeat measurement evidence protocol only',outcome:'passed'}));
   }
-  assert.equal((await saveMeasurements(work,work,{requiredMeasurements:criticalMeasurements})).measurements,23);
+  assert.equal((await saveMeasurements(work,work,{requiredMeasurements:criticalMeasurements})).measurements,35);
  } finally {assert.ok(work.startsWith(path.resolve('.build/testing-work')+path.sep));await fs.rm(work,{recursive:true,force:true})}
 });
 

@@ -23,28 +23,39 @@ afterEach(async()=>{await app?.stop()});
 const request=async(url,method='GET',data)=>{const response=await fetch(base+'/api/'+url,{method,headers:{'x-mediascope-token':token,'content-type':'application/json'},body:data?JSON.stringify(data):undefined});const json=response.json.bind(response);response.json=async()=>{const value=await json();return response.ok&&(url==='probe'||/^jobs\/[^/]+\/report$/.test(url))?reportFromPortable(value):value;};return response;};
 // GPU initialization may take 30 seconds before CPU recovery; use the shared task deadline.
 const finished=id=>waitForJob(async url=>(await request(url)).json(),id);
-test('[repeat-analysis] isolated API target, plan and 0.4 report round trips retain exact evidence and protected preview',async()=>{
+test('[repeat-analysis] isolated API target, 0.5 exports and 0.4 imports retain exact evidence and protected preview',async()=>{
   const input={type:'analyze',file:sitiSource,frameAnalysis:false,bitrate:false,complexity:false,repeatAnalysis:true,freezeDetection:true,enqueue:true};
   const queued=await request('jobs','POST',input);assert.equal(queued.status,202);const id=(await queued.json()).id;
-  const plan=(await(await request('plans')).json()).plans.find(p=>p.entryId===id);assert.equal(plan.input.repeatAnalysis,true);assert.equal(plan.input.freezeDetection,true);
+  const exportedPlans=await(await request('plans')).json();assert.equal(exportedPlans.formatVersion,'0.5');
+  const plan=exportedPlans.plans.find(p=>p.entryId===id);assert.equal(plan.input.repeatAnalysis,true);assert.equal(plan.input.freezeDetection,true);
   await request('jobs/'+id,'DELETE');
   const imported=await request('plans/import','POST',{mode:'append',start:true,plans:[plan]});assert.equal(imported.status,200);
   const job=await finished((await imported.json()).ids[0]);assert.equal(job.status,'done',job.message);
   const report=await(await request('jobs/'+job.id+'/report')).json(),r=report.repeatAnalysis;
+  const wire=await(await fetch(base+`/api/jobs/${job.id}/report`,{headers:{'x-mediascope-token':token}})).json();assert.equal(wire.formatVersion,'0.5');
+  for(const formatVersion of ['0.4','0.5']){
+    assert.deepEqual(reportFromPortable({...wire,formatVersion}),report);
+    const broken=structuredClone({...wire,formatVersion});broken.results[0].report.repeatAnalysis.frames.count++;
+    assert.throws(()=>reportFromPortable(broken),/明细表/);
+  }
   assert.deepEqual(report.analysisTargets,{frames:false,bitrate:false,complexity:false,repeat:true});assert.equal(r.status,'complete');
+  assert.equal(r.configurationVersion,2);assert.equal(r.frames[0].equalPrevious,null);assert.equal(r.source.contentSha256.length,64);assert.equal(r.tools.length,3);
+  assert.equal(r.sourceClassification.status,'not-qualified');assert.equal(r.sourceClassification.defaultEnabled,false);
   assert.equal(report.frames,undefined);assert.equal(report.tracks,undefined);assert.equal(report.coding,undefined);assert.equal(report.content,null);
   assert.deepEqual(report.timing.stages.map(s=>s.name),['读取文件','原生重复帧与时间诊断']);
   assert.deepEqual(parseReport(JSON.stringify(report)),report);
-  const preview={file:sitiSource,signature:r.source.signature,stream:0,frame:1,hashes:r.frames.slice(0,2).map(f=>f.sha256)};
+  const preview={file:sitiSource,signature:r.source.signature,contentSha256:r.source.contentSha256,stream:0,frame:1,hashes:r.frames.slice(0,2).map(f=>f.sha256)};
   assert.equal((await fetch(base+'/api/repeat/preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(preview)})).status,403);
   const result=await request('repeat/preview','POST',preview);assert.equal(result.status,200);assert.equal((await result.json()).images.length,2);
   assert.equal((await request('repeat/preview','POST',{...preview,frame:-1})).status,400);
+  assert.equal((await request('repeat/preview','POST',{...preview,contentSha256:'0'.repeat(64)})).status,400);
   const bad=structuredClone(report);bad.repeatAnalysis.frames[1].pts='999999';assert.throws(()=>parseReport(JSON.stringify(bad)),/重复画面/);
   delete bad.repeatAnalysis;assert.throws(()=>parseReport(JSON.stringify(bad)),/重复画面/);
   for(const values of [{repeatAnalysis:'yes'},{repeatAnalysis:false,freezeDetection:true},{freezeDetection:1}])assert.equal((await request('jobs','POST',{...input,...values})).status,400);
   await import('node:fs/promises').then(fs=>fs.writeFile(path.join(reportRoot,'report.json'),JSON.stringify(report)));
 });
 test('[repeat-analysis] repeat target coexists with each of the seven original target combinations',async()=>{
+  const reports=[];
   for(let mask=1;mask<8;mask++){
     const input={type:'analyze',file:sitiSource,frameAnalysis:!!(mask&1),bitrate:!!(mask&2),complexity:!!(mask&4),repeatAnalysis:true};
     const response=await request('jobs','POST',input);assert.equal(response.status,202);const done=await finished((await response.json()).id);assert.equal(done.status,'done',done.message);
@@ -52,7 +63,9 @@ test('[repeat-analysis] repeat target coexists with each of the seven original t
     assert.equal(report.repeatAnalysis.status,'complete');assert.equal(report.repeatAnalysis.frames.length,12);
     assert.equal(!!report.frames,input.frameAnalysis||input.complexity);assert.equal(!!report.tracks,input.frameAnalysis||input.bitrate);assert.equal(!!report.coding,input.frameAnalysis);assert.equal(!!report.content,input.complexity);
     assert.deepEqual(parseReport(JSON.stringify(report)),report);
+    reports.push({mask,report});
   }
+  await import('node:fs/promises').then(fs=>fs.writeFile(path.join(reportRoot,'report.json'),JSON.stringify({outcome:'passed',reports})));
 });
 test('[analysis-limits] SI/TI API accepts 2048 seven-digit scene starts and rejects an out-of-range index',async()=>{
   const starts=Array.from({length:2048},(_,i)=>i===0?0:1999999-(2047-i)),input={type:'analyze',file:source,complexity:true,sitiSceneStarts:starts,enqueue:true};
@@ -121,7 +134,7 @@ test('API protects local data and returns a reproducible in-memory report',async
  const report=await(await request(`jobs/${job.id}/report`)).json();assert.deepEqual(parseReport(JSON.stringify(report)),report);assert.equal((await fetch(base+'/report.js')).status,200);assert.equal(report.schema,undefined);assert.equal(report.frames.length,12);assert.equal(report.frames[0].special,'IDR');assert.equal(report.tracks.length,1);assert.ok(report.commands.every(c=>c.cwd));
  assert.equal(status.reportPath,undefined);
  const fileText=await(await fetch(base+`/api/jobs/${job.id}/report`,{headers:{'x-mediascope-token':token}})).text(),wire=JSON.parse(fileText);
- assert.equal(fileText.includes('\n'),false);assert.equal(wire.formatVersion,'0.4');assert.equal(wire.results[0].report.schema,undefined);
+ assert.equal(fileText.includes('\n'),false);assert.equal(wire.formatVersion,'0.5');assert.equal(wire.results[0].report.schema,undefined);
  assert.equal(wire.results[0].report.frames.count,report.frames.length);assert.equal(wire.results[0].report.packets,undefined);
  assert.deepEqual(parsePortable(fileText).results[0].report,report);
  const rawResponse=await fetch(base+`/api/jobs/${job.id}/report`,{headers:{'x-mediascope-token':token}});
@@ -323,7 +336,7 @@ test('plan export is ordered and plan import validates every item before replaci
  const first=(await(await request('jobs','POST',{type:'analyze',file:source,stream:null,complexity:false,enqueue:true})).json()).id;
  const second=(await(await request('jobs','POST',{type:'inspect',file:source,enqueue:true})).json()).id;
  const saved=await(await request('plans')).json();
- assert.equal(saved.format,'MediaScope');assert.equal(saved.formatVersion,'0.4');
+ assert.equal(saved.format,'MediaScope');assert.equal(saved.formatVersion,'0.5');
  assert.deepEqual(saved.results,[]);
  assert.deepEqual(saved.plans.map(p=>p.entryId),[first,second]);
  assert.deepEqual(saved.plans.map(p=>p.input.type),['analyze','inspect']);
