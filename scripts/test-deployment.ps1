@@ -35,7 +35,9 @@ if($Archive){
 } else {
   $app=Join-Path $work 'app';New-Item -ItemType Directory -Force $app,(Join-Path $app 'scripts') | Out-Null
   foreach($item in @('analysis.mjs','repeat.mjs','repeat-samples.mjs','bd-measure.mjs','siti.mjs','gpu','engine.mjs','server.mjs','package.json','README.md','start.cmd','Uninstall.cmd','runtime-lock.json','public','licenses')){Copy-Item (Join-Path $project $item) $app -Recurse}
-  foreach($item in @('deployment.ps1','manage.ps1','install-location.ps1','uninstall.ps1','check-environment.mjs','desktop.mjs','runtime-data.mjs','time.mjs','validate-launch.ps1')){Copy-Item (Join-Path $PSScriptRoot $item) (Join-Path $app 'scripts')}
+  foreach($item in @('deployment.ps1','manage.ps1','install-location.ps1','uninstall.ps1','check-environment.mjs','desktop.mjs','runtime-data.mjs','time.mjs','validate-launch.ps1','fast-launch.ps1','fast-bootstrap.mjs')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $item) -Destination (Join-Path $app 'scripts')}
+  $null=& (Join-Path $PSScriptRoot 'build-launcher.ps1')
+  foreach($item in @('MediaScope.Launcher.exe','launcher-build.json')){Copy-Item -LiteralPath (Join-Path $project ".build/launcher/$item") -Destination (Join-Path $app 'scripts')}
   Manifest $app (Read-Json (Join-Path $project 'package.json')).version
 }
 $null=Test-App $app

@@ -15,7 +15,7 @@
 
 1. 按[贡献规范](contributing.md)提交对应代码、测试和文档，运行 `npm run check:commits`，核对版本、提交及 Tag。版本号相同不能证明源码相同。
 2. 对确切发布 SHA 完成分工验收：Actions 运行 `npm run test:release` 的完整通用回归，本地干净工作区运行 `npm run test:gpu:release` 的真实 GPU 验收；本地不强制重复完整通用回归。导入或下载云端独立记录后，执行 `npm run test:acceptance -- <通用记录目录> <GPU记录目录> <发布SHA>`，校验两类记录完整性及相同源码/验证器身份。GPU 不可用、CPU 回退、任何失败/取消/跳过/TODO、不完整覆盖或归档阻塞均不能满足对应验收。日常部分检查不能替代上述范围。
-3. 执行 `scripts/package.ps1 -Version <版本>`，生成一个 Windows x64 联网部署 ZIP。已有包及暂存目录不覆盖。
+3. 执行 `scripts/package.ps1 -Version <版本>`，生成一个 Windows x64 联网部署 ZIP。已有包及暂存目录不覆盖。构建机使用系统 .NET Framework 4 x64 编译器生成应用启动器，临时文件留在当前工作区 `.build`，不下载编译工具；编译失败须修复后重新打包。启动器、引导脚本和构建摘要纳入包清单。发行校验只允许摘要与构建记录一致的 `scripts/MediaScope.Launcher.exe`，其他 EXE/DLL 仍不得入包，Node.js/FFmpeg 仍按运行时清单安装。
 4. 对确切附件执行下列离线及真实首次联网部署检查，核对 ZIP 摘要、字节数和结构化断言；另在锁定私有环境下验证应用。离线运输夹具不能证明联网下载通过。
 
    ```powershell

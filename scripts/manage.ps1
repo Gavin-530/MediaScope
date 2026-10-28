@@ -140,6 +140,7 @@ try {
     Write-Json $statePath @{current=$next;previous=$previous}
     Save-LaunchCache $app $selected.paths $selected.mode $selected.validation $InstallRoot
     Save-InstallMarker
+    Update-FastLaunchHint $app $InstallRoot $RuntimeRoot $statePath
     $state=Read-Json $statePath
     if(!$NonInteractive){Register-MediaScopeInstall $InstallRoot $manifest.version}
     Write-Host "Installed and verified MediaScope $($manifest.version). Data: $(Join-Path $InstallRoot 'data')"
@@ -172,6 +173,7 @@ try {
   Write-Json $statePath @{current=$next;previous=$previous}
   Save-LaunchCache $app $paths $mode $selected.validation $InstallRoot
   Save-InstallMarker
+  Update-FastLaunchHint $app $InstallRoot $RuntimeRoot $statePath
   if(!$NonInteractive -and $Action -in @('Launch','Rollback')){Register-MediaScopeInstall $InstallRoot $candidate.version}
   Write-Host "Verified $mode environment. Audit: $statePath"
   if($Action -eq 'Launch'){

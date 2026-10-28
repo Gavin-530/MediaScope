@@ -18,5 +18,6 @@ test('[release-privacy] valid packages pass and private notes or saved media are
   const evidence=JSON.parse(result.trim());
   assert.equal(evidence.validPackage,'passed');
   assert.equal(evidence.privatePathsRejected,4);
+  assert.equal(evidence.runtimePathsRejected,3);
   assert.equal(evidence.syntheticInputsOnly,true);
 });
