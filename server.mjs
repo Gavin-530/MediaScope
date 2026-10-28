@@ -12,6 +12,7 @@ import {analyzeRepeats,repeatPreview} from './repeat.mjs';
 import {validateSitiSceneStarts,validateSitiSettings} from './public/siti.js';
 import {makePortable,maxPortableBytes,utcNow} from './public/portable.js';
 import {byteLimit} from './public/units.js';
+import {analysisNotes} from './public/analysis-notes.js';
 import {vmafModel} from './public/vmaf.js';
 import {RuntimeData,acquireDataLease,verifyDataLease,removeOwned,ended,trialDestination,saveTrialVideos} from './scripts/runtime-data.mjs';
 const root=path.dirname(fileURLToPath(import.meta.url)),token=randomBytes(24).toString('hex'),jobs=new Map();
@@ -213,8 +214,8 @@ async function execute(job,input){
         ...(frames?{summary:summarize(frames),frames}:{}),
         ...(tracks?{packets:tracks.find(t=>t.index===stream.index),tracks,overheadBytes:info.size-tracks.reduce((s,t)=>s+t.bytes,0)}:{}),
         ...(coding?{coding}:{}),content,warnings:[
-          ...(targets.bitrate?['码率曲线按绝对 PTS 的所选窗口统计包负载，首尾除以实际区间时长；缺失 PTS 或持续时间时明确不可计算。100 ms 可聚合显示为 1 秒。全程平均值沿用原有独立口径。']:[]),
-          ...(targets.frames?['GOP 视图按显示顺序的随机访问/关键帧边界分组；不将 CRA 自动标为闭合 GOP，也不声称已验证所有跨组引用。','帧大小取解码器报告的 pkt_size；AV1 多编码帧可能共用一个包，不重复相加估计编码帧体积。',coding.status==='resource-limited'?'详细码流头解析达到独立资源上限，未完成全流头解析；显示帧、码率及 SI/TI 按各自状态解释。':'附加数据来自轨道报告，本次未执行帧级附加数据读取；码流头解析范围见 coding，不等同于完整解释所有私有 SEI。',...coding.warnings]:[])
+          ...(targets.bitrate?[analysisNotes.bitrate]:[]),
+          ...(targets.frames?[analysisNotes.gop,analysisNotes.frameSize,coding.status==='resource-limited'?'详细码流头解析达到独立资源上限，未完成全流头解析；显示帧、码率及 SI/TI 按各自状态解释。':analysisNotes.metadata,...coding.warnings]:[])
         ]};
     }else if(job.type==='compare'){
       if(input.confirm!==true)throw Error('请确认两个视频包含同一剪辑与画面顺序');
@@ -358,7 +359,7 @@ const server=http.createServer(async(req,res)=>{
       }
       send(res,404,{error:'接口不存在'});return;
     }
-    const files={'/':'index.html','/app.js':'app.js','/report.js':'report.js','/vmaf.js':'vmaf.js','/metric-summary.js':'metric-summary.js','/properties.js':'properties.js','/basic-info.js':'basic-info.js','/portable.js':'portable.js','/bitrate-model.js':'bitrate-model.js','/distribution-model.js':'distribution-model.js','/siti.js':'siti.js','/charts.js':'charts.js','/trial-model.js':'trial-model.js','/units.js':'units.js','/style.css':'style.css'};
+    const files={'/':'index.html','/app.js':'app.js','/analysis-notes.js':'analysis-notes.js','/report.js':'report.js','/vmaf.js':'vmaf.js','/metric-summary.js':'metric-summary.js','/properties.js':'properties.js','/basic-info.js':'basic-info.js','/portable.js':'portable.js','/bitrate-model.js':'bitrate-model.js','/distribution-model.js':'distribution-model.js','/siti.js':'siti.js','/charts.js':'charts.js','/trial-model.js':'trial-model.js','/units.js':'units.js','/style.css':'style.css'};
     files['/timing.js']='timing.js';
     files['/analysis-limits.js']='analysis-limits.js';
     files['/report-codec.js']='report-codec.js';
