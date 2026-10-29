@@ -1,6 +1,5 @@
 import {execFileSync, spawn} from 'node:child_process';
-import {mkdtempSync, rmSync, readFileSync, writeFileSync} from 'node:fs';
-import {tmpdir} from 'node:os';
+import {mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync} from 'node:fs';
 import path from 'node:path';
 import {get} from 'node:http';
 
@@ -23,7 +22,9 @@ for(const [kind,names] of Object.entries(required)) {
   const list=run(ffmpeg,['-hide_banner','-'+kind]);
   for(const name of names) if(!new RegExp('\\b'+name+'\\b').test(list)) throw Error('FFmpeg missing '+name);
 }
-const temp=mkdtempSync(path.join(tmpdir(),'mediascope-check-'));
+// Keep diagnostic media below the application workspace, including explicit checks.
+const tempRoot=path.join(app,'.build','environment-check');mkdirSync(tempRoot,{recursive:true});
+const temp=mkdtempSync(path.join(tempRoot,'check-'));
 try {
   for(const encoder of ['libx264','libx265','libaom-av1','ffv1']) {
     const file=path.join(temp,encoder+'.mkv');

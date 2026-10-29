@@ -18,3 +18,5 @@
 SI/TI 的固定输入包含上游 siti-tools 0.6.0 源码、五个原始片段、对应发布结果和许可证，以及独立参考矩阵。`layout-oracle.json.gz` 覆盖 150 种整数像素布局、全/有限范围及三种尺寸，共 900 例。142 种布局来自 libavutil 描述符的已知字节，8 种较新高位对齐布局经过 FFmpeg 往返验证；期望值使用独立二维卷积和总体标准差计算。它们与产品代码分别维护，普通回归重放冻结输入。`tools/generate-siti-reference.py` 的新输出仅写入 `.build/generated-siti-reference/`，不会覆盖锁定缓存。
 
 根目录旧 `test-work/` 是兼容保留位置，包含受保护的历史验收资料，不再承接这些用例的新输出。正式测试记录与中断恢复资料按 [数据与归档](../docs/data-and-archives.md) 单独管理。
+
+`fast-launch.test.mjs` 在 `.build/testing-work/fast-launch` 建立独立源码及安装副本，通过真实 `start.cmd`、原环境验证、原更新/回滚流程和专用隐藏控制台验证快速入口。测试复制的组件、启动记录和控制台日志均留在该范围；目录链接哨兵和真实控制信号只作用于测试创建的目录与进程。原 PowerShell 启动、JSON 原子写入和浏览器生命周期检查仍由原用例覆盖。

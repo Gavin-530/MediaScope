@@ -225,7 +225,17 @@ function Read-LaunchCache($App,$InstallRoot,$Selection=$null,[switch]$CheckChang
     return @{paths=$paths;mode=$cached.mode;validation=$cached.validation;needsValidation=!(Compare-LaunchSnapshot $cached.snapshot $snapshot)}
   } catch {return $null}
 }
+function Update-FastLaunchHint($App,$InstallRoot,$RuntimeRoot,$StatePath) {
+  # Missing tools, build failures and unwritable auxiliary records never block the original launcher.
+  try {
+    $helper=Join-Path $App 'scripts/fast-launch.ps1'
+    if(!(Test-Path -LiteralPath $helper)){return}
+    . $helper
+    Save-FastLaunchHint $App $InstallRoot $RuntimeRoot $StatePath
+  } catch {Write-Verbose "Fast launch unavailable: $($_.Exception.Message)"}
+}
 function Start-MediaScope($App,$Paths,$Mode,$Validation,$InstallRoot,$RuntimeRoot,[bool]$NeedsValidation=$false,[bool]$Desktop=$true,[string]$StatePath) {
+  if(!$NeedsValidation){Update-FastLaunchHint $App $InstallRoot $RuntimeRoot $StatePath}
   $request=Join-Path $InstallRoot "staging/launch-$([guid]::NewGuid().ToString('N')).json"
   Write-Json $request @{app=$App;paths=$Paths;mode=$Mode;validation=$Validation;installRoot=$InstallRoot;runtimeRoot=$RuntimeRoot;statePath=$StatePath;needsValidation=$NeedsValidation;desktop=$Desktop}
   try {

@@ -13,7 +13,8 @@ New-Item -ItemType Directory -Force $stage,(Join-Path $stage 'scripts'),(Join-Pa
 foreach($item in @('analysis.mjs','bd-measure.mjs','siti.mjs','gpu','engine.mjs','server.mjs','package.json','README.md','start.cmd','Uninstall.cmd','runtime-lock.json','public','licenses')){
   Copy-Item -LiteralPath (Join-Path $project $item) -Destination $stage -Recurse
 }
-foreach($item in @('deployment.ps1','manage.ps1','install-location.ps1','uninstall.ps1','check-environment.mjs','desktop.mjs','runtime-data.mjs','time.mjs','validate-launch.ps1')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $item) -Destination (Join-Path $stage 'scripts')}
+foreach($item in @('deployment.ps1','manage.ps1','install-location.ps1','uninstall.ps1','check-environment.mjs','desktop.mjs','runtime-data.mjs','time.mjs','validate-launch.ps1','fast-launch.ps1','fast-bootstrap.mjs')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $item) -Destination (Join-Path $stage 'scripts')}
+$null=& (Join-Path $PSScriptRoot 'build-launcher.ps1') -OutputDirectory (Join-Path $stage 'scripts')
 Write-Json (Join-Path $stage 'MANIFEST.json') @{schema=1;version=$Version;platform='win32-x64';files=@(Get-TreeRecords $stage)}
 $null=Test-App $stage
 Compress-Archive -LiteralPath $stage -DestinationPath $archive -CompressionLevel Optimal

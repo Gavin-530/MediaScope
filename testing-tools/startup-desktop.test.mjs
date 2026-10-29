@@ -40,7 +40,9 @@ test('[desktop-startup] daily launch skips runtime scans; explicit checking dete
 
 test('[desktop-startup] source launcher validates a changed real tool behind the page and preserves its receipt after a failed check',async()=>{
   const cacheHome=path.join(work,'cache'),result=JSON.parse(await readFile(path.join(work,'cache-result.json'),'utf8'));
-  const cacheFiles=await readdir(path.join(cacheHome,'launch-cache'));const cachePath=path.join(cacheHome,'launch-cache',cacheFiles[0]);
+  const cacheFiles=(await readdir(path.join(cacheHome,'launch-cache'))).filter(name=>name.endsWith('.json'));
+  assert.equal(cacheFiles.length,1,'The source workspace has exactly one JSON launch receipt');
+  const cachePath=path.join(cacheHome,'launch-cache',cacheFiles[0]);
   const original=JSON.parse((await readFile(cachePath,'utf8')).replace(/^\uFEFF/,''));
   await utimes(result.paths.ffprobe,new Date(),new Date(Date.now()+2000));
   async function launch(check,checkEnvironment=true){
