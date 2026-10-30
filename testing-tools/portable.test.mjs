@@ -17,7 +17,8 @@ before(async()=>{
 });
 after(async()=>{await app?.stop();});
 
-test('[portable-04] single report, result table, plan and combined content share 0.4 and round trip exactly',()=>{
+test('[portable-format] new result, plan and combined exports use 0.5 and round trip exactly',()=>{
+  assert.equal(portableVersion,'0.5');
   for(const content of [{results},{plans},{results,plans}]){
     const value=makePortable({...content,applicationVersion}),restored=parsePortable('\uFEFF'+JSON.stringify(value));
     assert.equal(value.format,portableFormat);assert.equal(value.formatVersion,portableVersion);
@@ -28,18 +29,31 @@ test('[portable-04] single report, result table, plan and combined content share
   }
 });
 
-test('[portable-04] old files and unknown versions are rejected rather than silently normalized',()=>{
-  const value=makePortable({results,applicationVersion});
-  for(const broken of [report,...['MediaScope/0.1','MediaScope/0.2','MediaScope/0.3','MediaScopePortable/1','MediaScopeResults/1','MediaScopePlan/1','MediaScopeBundle/1'].map(schema=>({...value,schema})),{...value,formatVersion:'0.5'},{...value,formatVersion:0.4}])assert.throws(()=>parsePortable(JSON.stringify(broken)),/格式|版本/);
+test('[portable-format] 0.4 and 0.5 inputs preserve content and provenance while re-export always writes 0.5',()=>{
+  for(const content of [{results},{plans},{results,plans}])for(const formatVersion of ['0.4','0.5']){
+    // Envelope compatibility fixture around a real measured report, not a historical measurement.
+    const value={...makePortable({...content,applicationVersion:'original-writer',createdAt:'2026-10-17T01:02:03Z'}),formatVersion};
+    const before=structuredClone(value),restored=parsePortable(JSON.stringify(value));
+    assert.equal(restored.formatVersion,formatVersion);assert.deepEqual(value,before);
+    assert.deepEqual(restored.results,content.results??[]);assert.deepEqual(restored.plans,content.plans??[]);
+    const written=makePortable({...restored,applicationVersion:'new-writer',createdAt:'2026-10-18T01:02:03Z'});
+    assert.equal(written.formatVersion,'0.5');assert.equal(written.producer.applicationVersion,'new-writer');
+    assert.deepEqual(written.results,value.results);assert.deepEqual(written.plans,value.plans);
+  }
 });
 
-test('[portable-04] changed writer preserves original report provenance, calculation times and raw evidence',()=>{
+test('[portable-format] unsupported wrappers and versions are rejected rather than silently normalized',()=>{
+  const value=makePortable({results,applicationVersion});
+  for(const broken of [report,...['MediaScope/0.1','MediaScope/0.2','MediaScope/0.3','MediaScopePortable/1','MediaScopeResults/1','MediaScopePlan/1','MediaScopeBundle/1'].map(schema=>({...value,schema})),...['0.3','0.6','0.50',' 0.5',0.4,0.5,null,undefined,['0.5']].map(formatVersion=>({...value,formatVersion}))])assert.throws(()=>parsePortable(JSON.stringify(broken)),/格式|版本/);
+});
+
+test('[portable-format] changed writer preserves original report provenance, calculation times and raw evidence',()=>{
   const measured={...report,createdAt:'2026-09-01T01:02:03.123456Z',producer:{applicationVersion:'measurement-build'}};
   const value=makePortable({results:[{entryId:'original',report:measured}],applicationVersion:'export-build',createdAt:'2026-10-17T01:02:03Z'});
   const restored=parsePortable(JSON.stringify(value));assert.deepEqual(restored.results[0].report,measured);assert.equal(restored.producer.applicationVersion,'export-build');
 });
 
-test('[portable-04] specified table fixture preserves constants, sparse absence/null, large integer strings and source precision',()=>{
+test('[portable-format] specified table fixture preserves constants, sparse absence/null, large integer strings and source precision',()=>{
   // Protocol fixture only; these are not claimed media measurements.
   const rows=Array.from({length:40},(_,i)=>({id:i,t:i/3,tick:'900719925474099312345',value:i%2?0:0.12345678901234568,flags:[1,2],...(i===2?{optional:null}:i===5?{optional:'source\ntext'}:{})}));
   const table=encodeTable(rows,'id');assert.deepEqual(decodeTable(JSON.parse(JSON.stringify(table)),'id'),rows);
@@ -47,22 +61,24 @@ test('[portable-04] specified table fixture preserves constants, sparse absence/
   const restored=decodeTable(table,'id');assert.equal(Object.hasOwn(restored[0],'optional'),false);assert.equal(restored[2].optional,null);
 });
 
-test('[portable-04] table validation rejects wrong columns, counts, overlapping fields and unsafe or out-of-order sparse indices',()=>{
+test('[portable-format] table validation rejects wrong columns, counts, overlapping fields and unsafe or out-of-order sparse indices',()=>{
   const table=encodeTable([{i:0,n:1},{i:1,n:2,x:null},{i:2,n:3}],'i');
-  for(const mutate of [t=>t.count++,t=>t.rows.pop(),t=>t.rows[0].push(0),t=>t.columns.push('n'),t=>t.constants={n:0},t=>t.constants={i:0},t=>t.extra=1,t=>t.sparse.x=[[3,null]],t=>t.sparse.x=[[1,null],[1,2]],t=>t.sparse.x=[[-1,null]],t=>t.sparse.x=[[1,null],[0,2]],t=>t.sparse=JSON.parse('{"__proto__":[[1,null]]}')]){
+  for(const mutate of [t=>t.count++,t=>t.rows.pop(),t=>t.rows[0].push(0),t=>t.columns.push('n'),t=>t.constants={n:0},t=>t.constants={i:0},t=>t.extra=1,t=>t.aliases={},t=>t.runs={},t=>t.sparse.x=[[3,null]],t=>t.sparse.x=[[1,null],[1,2]],t=>t.sparse.x=[[-1,null]],t=>t.sparse.x=[[1,null],[0,2]],t=>t.sparse=JSON.parse('{"__proto__":[[1,null]]}')]){
     const broken=structuredClone(table);mutate(broken);assert.throws(()=>decodeTable(broken,'i'));
   }
   assert.throws(()=>decodeTable({count:2000001,columns:[],rows:[]}));assert.equal({}.polluted,undefined);
   assert.throws(()=>decodeTable({count:0,columns:['hidden'],rows:[]}));
 });
 
-test('[portable-04] duplicate entries, nested versions, changed timing and malformed reports are rejected',()=>{
-  const value=makePortable({results,plans,applicationVersion});
+test('[portable-format] both supported versions reject duplicate entries, nested versions, changed timing and malformed reports',()=>{
+  for(const formatVersion of ['0.4','0.5']){
+  const value={...makePortable({results,plans,applicationVersion}),formatVersion};
   for(const broken of [{...value,kind:'plan'},{...value,plans:undefined},{...value,producer:{}},{...value,createdAt:'2026-02-31T00:00:00Z'},{...value,results:[...value.results,...value.results]},{...value,results:[{entryId:'bad',report:{...value.results[0].report,schema:'MediaScope/0.2'}}]},{...value,timing:{}},{...value,results:[],plans:[]},{...value,plans:[{entryId:'bad',input:{type:'unknown'}}]}])assert.throws(()=>parsePortable(JSON.stringify(broken)));
   const reordered={...value,timing:Object.fromEntries(Object.entries(value.timing).reverse())};assert.deepEqual(parsePortable(JSON.stringify(reordered)).results,results);
+  }
 });
 
-test('[portable-04] filenames have exactly four templates, actual count controls selection and only source name/time vary',()=>{
+test('[portable-format] filenames have exactly four templates, actual count controls selection and only source name/time vary',()=>{
   const time='20261017T123456Z',single=report=>[{report}],plan=input=>[{input}];
   for(const type of ['inspect','analyze','trial']){
     const r={type,file:'D:\\private\\素材.mkv'},expected=`MediaScope-${type==='trial'?'trial':'analyze'}-素材.mkv-${time}.json`;

@@ -6,6 +6,8 @@ import {validateSitiSceneResult,validateSitiConfiguration,validateSitiAttempts} 
 import {MAX_ANALYSIS_FRAMES} from './analysis-limits.js';
 import {validateBdMeasurement,sameBdResult} from './bd-reference.js';
 import {trialBdRate} from './trial-model.js';
+import {validateRepeatAnalysis} from './repeat-model.js';
+import {validateReportMetadata,validateReportRequirements} from './report-extensions.js';
 // Validate the saved data without normalizing, rounding or discarding evidence.
 export function parseReport(text) {
   let r;
@@ -91,8 +93,10 @@ export function validateReport(r) {
     }
   };
   obj(r, "报告");
+  if(r.extensions!==undefined)validateReportMetadata(r.extensions);
+  if(r.requires!==undefined)validateReportRequirements(r.requires);
   if (Object.hasOwn(r,'schema') || Object.hasOwn(r,'formatVersion'))
-    throw Error('0.4 报告不使用嵌套格式版本');
+    throw Error('报告不使用嵌套格式版本');
   if (!r.producer || typeof r.producer.applicationVersion!=='string' || !r.producer.applicationVersion.length)
     fail('producer.applicationVersion');
   if(typeof r.createdAt!=='string'||!Number.isFinite(Date.parse(r.createdAt)))fail('createdAt');
@@ -149,7 +153,9 @@ export function validateReport(r) {
     if (r.analysisTargets !== undefined) {
       obj(r.analysisTargets, 'analysisTargets');
       const targets = r.analysisTargets;
-      if(r.type!=='analyze'||Object.keys(targets).length!==3||!['frames','bitrate','complexity'].every(k=>typeof targets[k]==='boolean')||!Object.values(targets).some(Boolean))fail('analysisTargets');
+      if(r.type!=='analyze'||Object.keys(targets).some(k=>!['frames','bitrate','complexity','repeat'].includes(k))||!['frames','bitrate','complexity'].every(k=>typeof targets[k]==='boolean')||targets.repeat!==undefined&&targets.repeat!==true||!Object.values(targets).some(Boolean))fail('analysisTargets');
+      if(targets.repeat)validateRepeatAnalysis(r.repeatAnalysis,r.raw.streams.find(s=>s.index===r.stream));
+      else if(r.repeatAnalysis!==undefined)fail('analysisTargets / repeatAnalysis');
       const needsFrames=targets.frames||targets.complexity,needsPackets=targets.frames||targets.bitrate;
       if(needsFrames!==Array.isArray(r.frames)||!needsFrames&&r.summary!==undefined)fail('analysisTargets / frames / summary');
       if(targets.frames)obj(r.coding,'coding');
@@ -162,6 +168,7 @@ export function validateReport(r) {
         if(targets.bitrate&&r.tracks.some(t=>['video','audio'].includes(t.type)&&!t.bitrateCurve))fail('analysisTargets / bitrateCurve');
       }
     }
+    if(r.repeatAnalysis!==undefined&&!r.analysisTargets?.repeat)fail('repeatAnalysis / analysisTargets');
     if ((r.type === "analyze" && !r.analysisTargets) || r.frames !== undefined) {
       objects(r.frames, "frames");
       if(!r.frames.length||r.frames.length>MAX_ANALYSIS_FRAMES)fail('frames.length');

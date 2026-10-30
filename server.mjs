@@ -73,6 +73,7 @@ function analysisTargets(input){
   return targets;
 }
 function normalizeInputPaths(input){
+  if(Object.hasOwn(input,'repeatAnalysis')||Object.hasOwn(input,'freezeDetection'))throw Error('当前版本仅支持读取保存的重复帧报告，不提供重复帧计算');
   if(input.type==='inspect'||input.type==='analyze'||input.type==='trial')input.file=normalizeMediaPath(input.file);
   if(input.type==='analyze'){
     analysisTargets(input);
@@ -347,6 +348,7 @@ const server=http.createServer(async(req,res)=>{
     files['/timing.js']='timing.js';
     files['/analysis-limits.js']='analysis-limits.js';
     files['/report-codec.js']='report-codec.js';
+    for(const name of ['repeat-model','repeat-difference','repeat-fingerprint','report-extensions'])files['/'+name+'.js']=name+'.js';
     files['/bd-rate.js']='bd-rate.js';
     files['/bd-reference.js']='bd-reference.js';
     files['/bd-trial.js']='bd-trial.js';

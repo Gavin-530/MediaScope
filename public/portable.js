@@ -1,10 +1,11 @@
 import {validateReport} from './report.js';
 import {encodeReport,decodeReport} from './report-codec.js';
 import {timingSummary} from './timing.js';
+import {validateReportRequirements,reportRequirements} from './report-extensions.js';
 
 export const utcNow=()=>new Date().toISOString().replace(/\.\d{3}Z$/,'Z');
 export const utcFilename=()=>utcNow().replace(/[-:]/g,'');
-export const portableFormat='MediaScope',portableVersion='0.4';
+export const portableFormat='MediaScope',portableVersion='0.5';
 export const maxPortableBytes=256*1000*1000;
 const object=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
 const validTime=v=>typeof v==='string'&&/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(v)&&Number.isFinite(Date.parse(v))&&new Date(v).toISOString().slice(0,19)===v.slice(0,19);
@@ -21,7 +22,9 @@ function entries(items,key){
 }
 
 export function validatePortable(value){
-  if(!object(value)||value.format!==portableFormat||value.formatVersion!==portableVersion||Object.hasOwn(value,'schema')||Object.hasOwn(value,'kind'))throw Error('不支持的 JSON 格式或版本；仅接受 MediaScope 0.4');
+  if(!object(value)||value.format!==portableFormat||!['0.4',portableVersion].includes(value.formatVersion)||Object.hasOwn(value,'schema')||Object.hasOwn(value,'kind'))throw Error('不支持的 JSON 格式或版本；仅接受 MediaScope 0.4、0.5');
+  if(value.requires!==undefined)validateReportRequirements(value.requires);
+  if(value.extensions!==undefined)throw Error('文件扩展须放在各报告的 extensions 中');
   if(!validTime(value.createdAt)||!producer(value.producer))throw Error('文件缺少有效的创建时间或软件版本');
   entries(value.results,'results');entries(value.plans,'plans');
   if(!value.results.length&&!value.plans.length)throw Error('文件没有结果或计划');
@@ -38,10 +41,12 @@ export function parsePortable(text){
   return validatePortable(value);
 }
 
-export function makePortable({createdAt=utcNow(),results=[],plans=[],applicationVersion}={}){
+export function makePortable({createdAt=utcNow(),results=[],plans=[],applicationVersion,requires=[],extensions}={}){
   if(!validTime(createdAt)||!producer({applicationVersion}))throw Error('文件缺少有效的创建时间或软件版本');
   entries(results,'results');entries(plans,'plans');
-  return {format:portableFormat,formatVersion:portableVersion,createdAt,producer:{applicationVersion},results:results.map(item=>{validateReport(item.report);return {...item,report:encodeReport(item.report)};}),plans,timing:timingSummary(results.map(item=>item.report.timing))};
+  if(extensions!==undefined)throw Error('文件扩展须放在各报告的 extensions 中');
+  const needed=reportRequirements(results,requires);validateReportRequirements(needed);
+  return {format:portableFormat,formatVersion:portableVersion,createdAt,producer:{applicationVersion},...(needed.length?{requires:needed}:{}),results:results.map(item=>{validateReport(item.report);return {...item,report:encodeReport(item.report)};}),plans,timing:timingSummary(results.map(item=>item.report.timing))};
 }
 
 export function reportFromPortable(value){

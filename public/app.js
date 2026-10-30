@@ -1166,6 +1166,12 @@ function renderMedia(r) {
   }
   cards([]);
   let html = basicInfoHTML(r, {readingNotes: notes.metadata});
+  if(r.repeatAnalysis){
+    const repeat=r.repeatAnalysis,exact=repeat.exact;
+    html+=section('保存的重复帧结果',repeat.status==='complete'?metricStrip([
+      ['显示帧数',exact.frames],['相邻比较次数',exact.comparisons],[repeat.configurationVersion===1?'指纹相同次数':'精确重复次数',exact.duplicates],['连续重复段',exact.runs.length],
+    ])+`<p class="hint">${repeat.configurationVersion===1?'旧方法记录相邻帧 SHA-256 相同，未进行逐值确认。':'方法 2 记录原生样本直接比较及整数差异。'}这些计数可能包含正常静止画面，不代表录制丢帧或编码前画面重用。本页读取保存结果，不重新计算摘要或原始样本。</p>`:`<p class="hint">重复帧测量不可用：${esc(repeat.reason)}</p>`);
+  }
   if (r.type === "analyze" || r.frames) {
     if (r.frames && frameEnabled) {
     const gops = r.coding?.gops || legacyGops(r.frames);

@@ -7,6 +7,7 @@ import {chromium} from 'playwright-core';
 import {makeMedia} from './helpers/real-media.mjs';
 import {startServer,waitForJob} from './helpers/server.mjs';
 import {parsePortable,makePortable,reportFromPortable,portableFilename} from '../public/portable.js';
+import {repeatReportFixture} from './helpers/repeat-report-fixture.mjs';
 import {requireFeature,supportedThemeModes} from './helpers/feature-policy.mjs';
 import {propertyValue} from '../public/properties.js';
 import {probe,FF,run} from '../engine.mjs';
@@ -399,7 +400,7 @@ async function download(page,button,file){
   const stamp=downloaded.suggestedFilename().match(/(\d{8}T\d{6}Z)(?:-\d+)?\.json$/)[1];
   const instant=Date.parse(stamp.replace(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/,'$1-$2-$3T$4:$5:$6Z'));
   assert.ok(Math.abs(Date.now()-instant)<60000,'download filename must represent UTC regardless of the browser timezone');
-  await downloaded.saveAs(file);const text=await readFile(file,'utf8');assert.equal(text.includes('\n'),false);assert.equal(JSON.parse(text).formatVersion,'0.4');
+  await downloaded.saveAs(file);const text=await readFile(file,'utf8');assert.equal(text.includes('\n'),false);assert.equal(JSON.parse(text).formatVersion,'0.5');
   const decoded=parsePortable(text);assert.equal(downloaded.suggestedFilename(),portableFilename(decoded.results,decoded.plans,stamp));return decoded;
 }
 async function analyze(page,app){await preview(page);await page.locator('#bitrate-enabled').check();return runTask(page,app,'#enqueue-analyze')}
@@ -1404,6 +1405,18 @@ scenario('[portable] real export/import restores measured frames without queuing
   await page.locator('#inspect-details').getByRole('heading',{name:'帧结构与 GOP',exact:true}).waitFor();
   const restored=await download(page,'#inspect-export',path.join(dir,'restored.json'));
   assert.deepEqual(restored.results[0].report,report);assert.deepEqual(saved.results[0].report,report);
+  assert.equal((await app.request('status')).jobs.length,before);
+});
+
+scenario('[portable-repeat] saved generic repeat evidence and optional metadata survive GUI import and export',async({page,app,dir})=>{
+  // Protocol fixture, not a claimed media measurement or newly supported calculation backend.
+  const report=repeatReportFixture({algorithm:'sha512',encoding:'base64'});report.extensions={example:{note:'preserve this optional metadata',values:[1,null,'text']}};
+  const value=makePortable({results:[{entryId:'saved-repeat',report}],applicationVersion:'protocol-fixture'}),file=path.join(dir,'saved-repeat.json');
+  await writeFile(file,JSON.stringify(value));const before=(await app.request('status')).jobs.length;
+  await importReport(page,file);await page.getByRole('heading',{name:'保存的重复帧结果',exact:true}).waitFor();
+  assert.match(await page.locator('#inspect-details').innerText(),/精确重复次数/);
+  const restored=await download(page,'#inspect-export',path.join(dir,'saved-repeat-restored.json'));
+  assert.deepEqual(restored.results[0].report,report);assert.deepEqual(restored.requires,['frame-digest/1','repeat/2']);
   assert.equal((await app.request('status')).jobs.length,before);
 });
 

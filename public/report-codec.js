@@ -2,7 +2,7 @@ import {MAX_ANALYSIS_FRAMES} from './analysis-limits.js';
 
 const object=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
 const safeKey=k=>typeof k==='string'&&!['__proto__','constructor','prototype'].includes(k);
-const fail=()=>{throw Error('0.4 明细表结构、数量、列或索引无效');};
+const fail=()=>{throw Error('JSON 明细表结构、数量、列或索引无效');};
 const same=(a,b)=>a===b||object(a)&&object(b)&&Object.keys(a).length===Object.keys(b).length&&Object.keys(a).every(k=>Object.hasOwn(b,k)&&same(a[k],b[k]))||Array.isArray(a)&&Array.isArray(b)&&a.length===b.length&&a.every((v,i)=>same(v,b[i]));
 
 // Only the explicit report paths below use tables. Raw evidence is never traversed.
@@ -64,7 +64,7 @@ function structuralVersion(value,encode){
 }
 
 function transformReport(report,encode){
-  if(!object(report)||Object.hasOwn(report,'schema')||Object.hasOwn(report,'formatVersion'))throw Error('0.4 报告不使用嵌套格式版本');
+  if(!object(report)||Object.hasOwn(report,'schema')||Object.hasOwn(report,'formatVersion'))throw Error('报告不使用嵌套格式版本');
   const r={...report};
   const table=(parent,key,indexField=null,limit=MAX_ANALYSIS_FRAMES)=>{
     if(Object.hasOwn(parent,key)){
@@ -73,6 +73,13 @@ function transformReport(report,encode){
     }
   };
   table(r,'frames');
+  if(r.repeatAnalysis){
+    if(!object(r.repeatAnalysis))fail();
+    r.repeatAnalysis={...r.repeatAnalysis};table(r.repeatAnalysis,'frames','frame');
+    if(r.repeatAnalysis.exact){r.repeatAnalysis.exact={...r.repeatAnalysis.exact};table(r.repeatAnalysis.exact,'runs');}
+    if(r.repeatAnalysis.timeline){r.repeatAnalysis.timeline={...r.repeatAnalysis.timeline};table(r.repeatAnalysis.timeline,'intervals');}
+    if(r.repeatAnalysis.constant){r.repeatAnalysis.constant={...r.repeatAnalysis.constant};table(r.repeatAnalysis.constant,'segments');}
+  }
   if(r.content){
     if(!object(r.content))fail();
     r.content={...r.content};table(r.content,'points','frame');table(r.content,'scenes','index',2048);
@@ -94,12 +101,12 @@ function transformReport(report,encode){
   }
   if(r.type==='analyze' && (r.analysisTargets?.frames!==false || r.analysisTargets?.bitrate!==false)){
     const selected=report.tracks?.filter(t=>t.index===r.stream);
-    if(selected?.length!==1)throw Error('0.4 所选视频轨道索引无效');
+    if(selected?.length!==1)throw Error('所选视频轨道索引无效');
     if(encode){
       if(!same(report.packets,selected[0]))throw Error('所选视频轨道的重复记录不一致');
       delete r.packets;
     }else{
-      if(Object.hasOwn(r,'packets'))throw Error('0.4 不重复保存所选视频轨道');
+      if(Object.hasOwn(r,'packets'))throw Error('JSON 不重复保存所选视频轨道');
       r.packets=r.tracks.find(t=>t.index===r.stream);
     }
   }

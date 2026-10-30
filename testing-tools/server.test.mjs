@@ -84,13 +84,16 @@ test('[analysis-targets] all seven target combinations run only required stages 
 test('API protects local data and returns a reproducible in-memory report',async()=>{
  assert.equal((await fetch(base+'/api/status')).status,403);
  assert.equal((await fetch(base+'/api/status',{headers:{'x-mediascope-token':token,origin:'https://external.invalid'}})).status,403);
+ for(const extra of [{repeatAnalysis:true},{freezeDetection:true}]){
+  const unsupported=await request('jobs','POST',{type:'analyze',file:source,...extra});assert.equal(unsupported.status,400);assert.match((await unsupported.json()).error,/仅支持读取/);
+ }
  const job=await(await request('jobs','POST',{type:'analyze',file:source,stream:0})).json();const queued=await request('jobs','POST',{type:'inspect',file:source});assert.equal(queued.status,202);const next=await queued.json();await finished(next.id);
  const status=await finished(job.id);assert.equal(status.status,'done',status.message);
  assert.equal(status.progress.stage,'完成');assert.equal(status.progress.completed,1);assert.equal(status.progress.total,1);assert.ok(status.progress.phaseIndex>=1);assert.ok(status.progress.phaseCount>=status.progress.phaseIndex);
  const report=await(await request(`jobs/${job.id}/report`)).json();assert.deepEqual(parseReport(JSON.stringify(report)),report);assert.equal((await fetch(base+'/report.js')).status,200);assert.equal(report.schema,undefined);assert.equal(report.frames.length,12);assert.equal(report.frames[0].special,'IDR');assert.equal(report.tracks.length,1);assert.ok(report.commands.every(c=>c.cwd));
  assert.equal(status.reportPath,undefined);
  const fileText=await(await fetch(base+`/api/jobs/${job.id}/report`,{headers:{'x-mediascope-token':token}})).text(),wire=JSON.parse(fileText);
- assert.equal(fileText.includes('\n'),false);assert.equal(wire.formatVersion,'0.4');assert.equal(wire.results[0].report.schema,undefined);
+ assert.equal(fileText.includes('\n'),false);assert.equal(wire.formatVersion,'0.5');assert.equal(wire.results[0].report.schema,undefined);
  assert.equal(wire.results[0].report.frames.count,report.frames.length);assert.equal(wire.results[0].report.packets,undefined);
  assert.deepEqual(parsePortable(fileText).results[0].report,report);
  const rawResponse=await fetch(base+`/api/jobs/${job.id}/report`,{headers:{'x-mediascope-token':token}});
@@ -292,7 +295,7 @@ test('plan export is ordered and plan import validates every item before replaci
  const first=(await(await request('jobs','POST',{type:'analyze',file:source,stream:null,complexity:false,enqueue:true})).json()).id;
  const second=(await(await request('jobs','POST',{type:'inspect',file:source,enqueue:true})).json()).id;
  const saved=await(await request('plans')).json();
- assert.equal(saved.format,'MediaScope');assert.equal(saved.formatVersion,'0.4');
+ assert.equal(saved.format,'MediaScope');assert.equal(saved.formatVersion,'0.5');
  assert.deepEqual(saved.results,[]);
  assert.deepEqual(saved.plans.map(p=>p.entryId),[first,second]);
  assert.deepEqual(saved.plans.map(p=>p.input.type),['analyze','inspect']);
