@@ -43,6 +43,25 @@ function Select-ExplicitEnvironment($App) {
     return @{mode='private';paths=(Get-PrivateRuntime $App $RuntimeRoot)}
   }
 }
+function Select-ProgramFile($Name,$InitialDirectory) {
+  $dialog=New-Object Windows.Forms.OpenFileDialog
+  $dialog.Title="选择已有的 $Name"
+  $dialog.Filter="$Name|$Name"
+  $dialog.CheckFileExists=$true
+  $dialog.RestoreDirectory=$true
+  if($InitialDirectory){$dialog.InitialDirectory=$InitialDirectory}
+  try {
+    if($dialog.ShowDialog() -ne [Windows.Forms.DialogResult]::OK){throw 'Installation cancelled; no component was selected'}
+    return Resolve-Program $dialog.FileName $Name
+  } finally {$dialog.Dispose()}
+}
+function Select-ManualEnvironment {
+  $node=Select-ProgramFile 'node.exe'
+  $ffmpeg=Select-ProgramFile 'ffmpeg.exe' (Split-Path $node)
+  $ffprobe=Join-Path (Split-Path $ffmpeg) 'ffprobe.exe'
+  if(!(Test-Path -LiteralPath $ffprobe -PathType Leaf)){$ffprobe=Select-ProgramFile 'ffprobe.exe' (Split-Path $ffmpeg)}
+  return @{mode='external';paths=@{node=$node;ffmpeg=$ffmpeg;ffprobe=$ffprobe}}
+}
 function Select-FirstEnvironment($App) {
   $localPaths=$null;$reason=$null
   try {
@@ -60,8 +79,9 @@ function Select-FirstEnvironment($App) {
     $detail=if($reason){$reason}else{'未找到全部三个程序'}
     Write-Host "No compatible local environment: $detail"
     if(!$NonInteractive) {
-      $choice=Show-EnvironmentPrompt "电脑中没有通过验证的完整运行环境。`n原因：$detail`n`n确定：首次联网下载推荐的私有 Node.js、FFmpeg 和 FFprobe（约 230 MB）`n取消：暂不安装。不会改动电脑已有环境。" ([Windows.Forms.MessageBoxButtons]::OKCancel) ([Windows.Forms.MessageBoxDefaultButton]::Button1)
-      if($choice -ne [Windows.Forms.DialogResult]::OK){throw 'Installation cancelled; no environment was selected'}
+      $choice=Show-EnvironmentPrompt "未自动找到完整可用的运行环境。`n原因：$detail`n`n是：手动选择已有组件（依次选择 node.exe、ffmpeg.exe，同目录的 ffprobe.exe 自动识别）`n否：联网下载推荐的私有组件（约 236 MB）`n取消：暂不安装。" ([Windows.Forms.MessageBoxButtons]::YesNoCancel)
+      if($choice -eq [Windows.Forms.DialogResult]::Yes){return Select-ManualEnvironment}
+      if($choice -eq [Windows.Forms.DialogResult]::Cancel){throw 'Installation cancelled; no environment was selected'}
     }
   }
   return @{mode='private';paths=(Get-PrivateRuntime $App $RuntimeRoot)}

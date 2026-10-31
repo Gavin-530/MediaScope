@@ -1,6 +1,7 @@
 {
   "schema": 1,
   "features": [
+    {"id":"environment-selection","purpose":"首次安装未自动找到组件时手动选择已有程序、相邻 FFprobe 自动识别及缺失时单独选择、真实兼容验证、取消与无下载保证、验证失败显式确认、无人值守及自动检测兼容、完整安装保存所选路径与启动缓存复用","files":["testing-tools/environment-selection.test.mjs"],"names":"\\[environment-selection\\]"},
     {"id":"gop-view","purpose":"真实多GOP主图的全片/单GOP/自定义范围状态与概览高亮一致，拖选/缩放/平移仅点亮时间或帧区间相交的GOP，清除过期悬停读数，全览/双击/自动/坐标切换保留纵轴并保持导出原文","files":["testing-tools/browser.test.mjs"],"names":"\\[gop-view\\]"},
     {"id":"table-scrolling","purpose":"长结果表格限制高度、区域内滚动及固定表头，翻页恢复顶部、窄屏容纳与CSV完整导出","files":["testing-tools/browser.test.mjs"],"names":"\\[table-scrolling\\]"},
     {"id":"section-folding","purpose":"结果板块原生折叠、简洁统一标题、提示与警告随所属结果展开收起、导航自动展开、图表尺寸及范围/页签状态保留、导出不变","files":["testing-tools/browser.test.mjs"],"names":"\\[section-folding\\]"},
