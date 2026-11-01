@@ -111,11 +111,11 @@
               <p class="hint">查看显示帧、GOP 和编码帧头结构。</p>
             </div>
             <div class="analysis-target">
-              <label class="target-toggle"><input id="bitrate-enabled" type="checkbox" aria-controls="bitrate-options" /> 区间码率曲线</label>
+              <label class="target-toggle"><input id="bitrate-enabled" type="checkbox" checked aria-controls="bitrate-options" /> 区间码率曲线</label>
               <p class="hint">查看视频与各音轨的码率变化。</p>
             </div>
             <div class="analysis-target">
-              <label class="target-toggle"><input id="complexity" type="checkbox" aria-controls="siti-settings" /> SI/TI 内容复杂度</label>
+              <label class="target-toggle"><input id="complexity" type="checkbox" checked aria-controls="siti-settings" /> SI/TI 内容复杂度</label>
               <p class="hint">测量空间细节与帧间运动变化。</p>
             </div>
           </div>
@@ -127,8 +127,8 @@
             <h3>SI/TI 设置</h3>
         <div class="row siti-options siti-device-row">
           <label class="worker-option" for="siti-device">计算设备<select id="siti-device" disabled>
-              <option value="cpu">CPU（默认）</option>
-              <option value="gpu">GPU（OpenCL）</option>
+              <option value="gpu">GPU（OpenCL，默认）</option>
+              <option value="cpu">CPU</option>
             </select></label
           ><button id="siti-gpu-recheck" type="button" class="secondary" disabled>检测 GPU</button><label id="siti-workers-label" class="worker-option" for="siti-workers"
             >并行上限<select id="siti-workers" disabled>
@@ -141,7 +141,7 @@
             </select></label
           >
         </div>
-        <p id="siti-device-status" class="hint" role="status" aria-live="polite">CPU 计算；并行上限会按可用资源自动调整。</p>
+        <p id="siti-device-status" class="hint" role="status" aria-live="polite">优先使用 GPU；运行前自检，不可用或设备执行失败时回退 CPU。</p>
         <div class="row siti-options">
           <label for="siti-scenes">场景范围<select id="siti-scenes" disabled>
             <option value="unconfirmed">边界未确认（全片参考）</option>

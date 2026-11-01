@@ -421,6 +421,7 @@ async function poll() {
   refreshing = true;
   try {
     const previous = current,
+      previousJobs = latestJobs,
       s = await api("status"),
       running = s.jobs.find((j) => j.status === "running");
     showStartup(s);
@@ -464,9 +465,10 @@ async function poll() {
     renderResultList();
     const completed = s.jobs.find(
       (j) => j.id === autoOpen && !["queued", "running"].includes(j.status),
-    );
+    ) || s.jobs.findLast(j => j.type === "analyze" && j.status === "done" &&
+      previousJobs.some(old => old.id === j.id && old.status !== "done"));
     if (completed) {
-      autoOpen = null;
+      if (completed.id === autoOpen) autoOpen = null;
       if (completed.status === "done")
         render(await api("jobs/" + completed.id + "/report"), false, completed.id);
       if (!running)
@@ -656,7 +658,7 @@ async function checkSitiGpu(force=false){
     if(revision!==sitiGpuRevision)return;
     $("#siti-device-status").textContent = result.available
       ? `GPU 可用：${result.device} · 自检通过。${$("#siti-device").value === 'gpu' ? '软件解码，GPU 计算；执行失败时回退 CPU。' : '当前选择 CPU。'}`
-      : `GPU 检查未通过：${result.reason}。可重新检查。`;
+      : `GPU 检查未通过：${result.reason}。${requested === 'gpu' ? '已选择 CPU；' : ''}可重新检查 GPU。`;
     if (!result.available) {
       sitiGpuCheck=null;
       if(requested==='gpu'&&$("#siti-device").value==='gpu')$("#siti-device").value = "cpu";
@@ -1062,21 +1064,23 @@ function cardsHTML(items) {
 function cards(items) {
   $("#summary").innerHTML = cardsHTML(items);
 }
-function section(title, html) {
-  return `<section class="section"><h3>${esc(title)}</h3>${html}</section>`;
+function section(title, html, analysisTarget = null) {
+  return `<section class="section"${analysisTarget ? ` data-analysis-target="${esc(analysisTarget)}"` : ""}><h3>${esc(title)}</h3>${html}</section>`;
 }
-function makeSectionsCollapsible(root) {
+function makeSectionsCollapsible(root, targets = {}) {
   for (const panel of root.querySelectorAll('.section')) {
+    const open = targets[panel.dataset.analysisTarget] === true;
     const existing = panel.querySelector(':scope > .basic-info-body, :scope > .report-section-body');
     if (existing) {
       existing.classList.add('report-section-body');
+      existing.open = open;
       for (const node of [...panel.childNodes]) if (node!==existing) existing.append(node);
       continue;
     }
     const heading = panel.querySelector(':scope > h3');
     if (!heading) continue;
     const details = document.createElement('details'), summary = document.createElement('summary');
-    details.className = 'report-section-body'; details.open = true;
+    details.className = 'report-section-body'; details.open = open;
     summary.append(heading); details.append(summary);
     for (const node of [...panel.childNodes]) {
       details.append(node);
@@ -1124,7 +1128,11 @@ function render(r, activate = true, owner = null) {
     if (r.type === "compare") renderComparison(r);
     else if (r.type === "trial") renderTrial(r);
     else renderMedia(r);
-    makeSectionsCollapsible($("#details"));
+    makeSectionsCollapsible($("#details"), r.type === "analyze" ? {
+      frames: r.analysisTargets?.frames !== false,
+      bitrate: r.analysisTargets?.bitrate !== false,
+      complexity: r.analysisTargets?.complexity ?? !!r.content,
+    } : {});
     reports[mode] = r;
     reportOwners[mode] = owner;
     $("#" + mode + "-result").dataset.reportOwner = owner ?? "";
@@ -1183,6 +1191,7 @@ function renderMedia(r) {
       ]) + `<div id="gop-overview"></div><div class="pager"><button id="gop-prev" class="secondary">上一 GOP</button><label>GOP #<input id="gop-index" type="number" min="0" max="${gops.length - 1}" value="0"></label><button id="gop-next" class="secondary">下一 GOP</button><span id="gop-info"></span></div><div id="frame-plot"><label>坐标<select id="frame-axis" aria-label="帧大小图 X 轴坐标"><option value="time">呈现时间（s）</option><option value="frame">显示帧序号</option></select></label></div><p class="notice hidden" id="frame-axis-warning"></p><div id="frame-detail" class="frame-detail"></div>` +
       explanation('GOP 与帧大小的读取说明', '<p class="hint">显示顺序视图。I / P / B 是预测类型；IDR / CRA / BLA 是码流访问类型，二者不混用。GOP 以随机访问/关键帧区间呈现，不据此猜测开放或闭合。</p><p class="hint" id="frame-axis-note"></p>' + hintNotes(notes.frames)) +
       '<details><summary>逐帧列表 / CSV</summary><div class="pager"><button id="prev" class="secondary">上一页</button><span id="page"></span><button id="next" class="secondary">下一页</button><button id="csv" class="secondary">导出帧 CSV</button></div><div id="frames"></div></details>',
+      "frames",
     );
     }
     if (r.content?.available) {
@@ -1205,12 +1214,14 @@ function renderMedia(r) {
           explanation('计算方法与限制', execution +
             (e?.configuration?`<p class="hint">计算流程：${esc(e.configuration.profile)}。输入 ${esc(e.configuration.input?.source?.pixelFormat??'')} · ${esc(e.configuration.inputDomain??'SDR')} · ${e.configuration.inputBitDepth}-bit · ${e.configuration.inputRange==='tv'?'有限范围':'全范围'}。</p>`:'') +
             (e?.configuration?.display?`<p class="hint">参考显示模型：峰值 ${fmt(e.configuration.display.whiteCdM2)}、黑位 ${fmt(e.configuration.display.blackCdM2,4)} cd/m²；gamma ${fmt(e.configuration.display.gamma,6)}。</p>`:'') + hintNotes([...sceneNotes,...notes.siti])),
+        "complexity",
       );
-    } else if (r.content) html += notices([r.content.reason])+sitiAttemptsHTML(r.content.attempts);
+    } else if (r.content) html += section("SI/TI 内容复杂度", notices([r.content.reason])+sitiAttemptsHTML(r.content.attempts), "complexity");
     if (r.coding?.codec === "av1")
       html += section(
         "AV1 编码帧 / 显示事件",
         `<p>新编码帧 ${r.coding.counts.encoded} · 隐藏帧 ${r.coding.counts.hidden} · SHOW_EXISTING ${r.coding.counts.showExisting} · 显示事件 ${r.coding.counts.shown}</p><p class="hint">按码流编码顺序列出所有帧头事件，包含 KEY / INTER / INTRA_ONLY / SWITCH、隐藏帧和 SHOW_EXISTING。H=隐藏、S=显示已有帧、V=新帧直接显示。点击色带查看结构字段、刷新掩码与参考槽。OBU 负载字节不一定等于完整图像大小。</p><div id="av1-plot"></div><label>编码事件 #<input id="av1-index" type="number" min="0" max="${r.coding.events.length - 1}" value="0"></label><div id="av1-detail"></div>${raw(r.coding.sequences, "AV1 序列头（去重）")}`,
+        "frames",
       );
     const audio = (r.tracks || []).filter((t) => t.type === "audio");
     if (audio.length && frameEnabled) html += `<section class="section"><details class="report-section-body" id="audio-packets-optional"><summary><h3>音轨包大小时间分布</h3></summary>${audio.map(audioPacketHTML).join("")}</details></section>`;
@@ -1228,7 +1239,7 @@ function renderMedia(r) {
               `<h4>音轨 #${t.index} · ${esc(t.codec)} · 窗口码率</h4>${displayControl(t.bitrateCurve, `audio-${t.index}-display`)}<div id="audio-${t.index}"></div>`,
           )
           .join("");
-    html += section("音视频码率统计", table(["轨道", "全程平均（原有独立口径）"], [[`视频 #${r.stream}`, rate(r.packets.averageMbps)], ...audio.map(t => [`音轨 #${t.index} · ${t.codec}`, t.averageMbps == null ? "不可计算" : rate(t.averageMbps)])]) + notices(bitrateWarnings) + (bitrateEnabled ? `<details id="bitrate-optional"><summary>展开音视频窗口码率曲线</summary>${bitrateHTML}</details>` : '<p class="hint">本次未选择区间码率曲线。</p>') + explanation('码率统计说明', hintNotes(notes.bitrate) + (bitrateEnabled && r.packets.bitrateCurve ? '<p class="hint">整包按起始 PTS 归属，跨窗口包不拆分，首尾使用实际时长；恒定 PCM 也可能波动，短尾窗口偏差可能更大。曲线不代表采样码率或传输瞬时码率。放大不改变统计窗口。</p>' : '')));
+    html += section("音视频码率统计", table(["轨道", "全程平均（原有独立口径）"], [[`视频 #${r.stream}`, rate(r.packets.averageMbps)], ...audio.map(t => [`音轨 #${t.index} · ${t.codec}`, t.averageMbps == null ? "不可计算" : rate(t.averageMbps)])]) + notices(bitrateWarnings) + (bitrateEnabled ? `<details id="bitrate-optional" open><summary>展开音视频窗口码率曲线</summary>${bitrateHTML}</details>` : '<p class="hint">本次未选择区间码率曲线。</p>') + explanation('码率统计说明', hintNotes(notes.bitrate) + (bitrateEnabled && r.packets.bitrateCurve ? '<p class="hint">整包按起始 PTS 归属，跨窗口包不拆分，首尾使用实际时长；恒定 PCM 也可能波动，短尾窗口偏差可能更大。曲线不代表采样码率或传输瞬时码率。放大不改变统计窗口。</p>' : '')), "bitrate");
     }
     if (r.tracks)
       html += section(

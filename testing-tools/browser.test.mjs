@@ -57,6 +57,16 @@ async function importReport(page,file){
   await page.locator('#import-report').setInputFiles(file);
   // The async import handler clears the input only after rendering and polling finish.
   await page.waitForFunction(()=>document.querySelector('#import-report').value==='');
+  await openComparisonPanels(page);
+  const preview=page.locator('#inspect-details > .basic-info > .basic-info-body');
+  if(await preview.count()&&await page.locator('#inspect-details > .section').count()===1&&!await preview.evaluate(el=>el.open))await preview.locator(':scope > summary').click();
+}
+async function openComparisonPanels(page){
+  for(const mode of ['compare','trial']){
+    if(!await page.locator('#'+mode+'-result').isVisible())continue;
+    const panels=page.locator('#'+mode+'-details > .section > .report-section-body');
+    for(const panel of await panels.all())if(!await panel.evaluate(el=>el.open))await panel.locator(':scope > summary').click();
+  }
 }
 async function observeYAxis(page){
   // Observe actual canvas labels while forwarding every drawing call unchanged.
@@ -378,6 +388,9 @@ async function preview(page,file=media.source){
   const report=reportFromPortable(await(await response).json());
   await page.waitForFunction(()=>!document.querySelector('#stream').disabled);
   await page.locator('#inspect-details').getByRole('heading',{name:'文件基本信息',exact:true}).waitFor();
+  const basic=page.locator('#inspect-details .basic-info-body');
+  assert.equal(await basic.evaluate(el=>el.open),false,'file preview starts with collapsed basic information');
+  await basic.locator(':scope > summary').click();
   assert.equal(report.type,'inspect');return report;
 }
 async function runTask(page,app,button){
@@ -387,11 +400,17 @@ async function runTask(page,app,button){
   const done=await waitForJob(app.request,job.id);
   assert.equal(done.status,'done',JSON.stringify(done));
   if(button==='#enqueue-analyze'){
-    await page.locator(`[data-result-open="${job.id}"]`).click();
     await page.waitForFunction(id=>document.querySelector('#inspect-result').dataset.reportOwner===id,job.id);
   }
-  else await page.waitForFunction(()=>document.querySelector('#task-label')?.textContent==='任务完成');
-  return {job:done,report:await app.request(`jobs/${job.id}/report`)};
+  else {
+    const mode=button.includes('trial')?'trial':'compare';
+    await page.waitForFunction(({mode,id})=>document.querySelector('#'+mode+'-result').dataset.reportOwner===id,{mode,id:job.id});
+    assert.equal(await page.locator('#'+mode+'-details > .section > .report-section-body[open]').count(),0,'report panels start collapsed');
+    await openComparisonPanels(page);
+  }
+  const report=await app.request(`jobs/${job.id}/report`);
+  if(button==='#enqueue-analyze')assert.ok(await page.locator('#inspect-details > .section > .report-section-body').evaluateAll((panels,targets)=>panels.every(panel=>panel.open===(targets[panel.parentElement.dataset.analysisTarget]===true)),report.analysisTargets),'only this completed task’s selected analysis panels expand');
+  return {job:done,report};
 }
 async function download(page,button,file){
   const pending=page.waitForEvent('download');await page.locator(button).click();
@@ -408,10 +427,12 @@ scenario('[section-folding] all result panels fold natively and preserve charts,
   await preview(page,media.sitiSource);await page.locator('#complexity').check();
   await page.locator('#bitrate-enabled').check();
   const {report,job}=await runTask(page,app,'#enqueue-analyze');assert.equal(report.content.available,true,report.content.reason);
+  assert.deepEqual(report.analysisTargets,{frames:true,bitrate:true,complexity:true});
+  assert.equal(report.content.execution.requestedDevice,'gpu','default submission requests GPU and retains the backend CPU fallback');
   const root=page.locator('#inspect-details'),panels=root.locator(':scope > .section > .report-section-body');
   assert.equal(await panels.count(),await root.locator(':scope > .section').count());
   assert.ok(await panels.count()>=6);
-  assert.ok(await panels.evaluateAll(items=>items.every(item=>item.open===(item.id!=='audio-packets-optional'))));
+  assert.ok(await panels.evaluateAll(items=>items.every(item=>item.open===!!item.parentElement.dataset.analysisTarget)));
   const frame=root.locator(':scope > .section').filter({has:page.getByRole('heading',{name:'帧结构与 GOP',exact:true})});
   const frameBody=frame.locator(':scope > .report-section-body'),canvas=await frame.locator('#frame-plot canvas').elementHandle();
   await frame.locator('#frame-plot [data-field="x-scale"]').selectOption('manual');
@@ -429,6 +450,9 @@ scenario('[section-folding] all result panels fold natively and preserve charts,
   assert.ok(await panels.evaluateAll(items=>items.every(item=>item.querySelector(':scope > summary').textContent===item.querySelector(':scope > summary > h3').textContent)),'major headings contain only the panel name');
   const closedHeights=await panels.evaluateAll(items=>items.map(item=>item.parentElement.getBoundingClientRect().height));
   assert.ok(Math.max(...closedHeights)-Math.min(...closedHeights)<2,'normal folded panels use the same compact row height');
+  await page.setViewportSize({width:390,height:844});
+  assert.equal(await root.evaluate(el=>el.scrollWidth<=el.clientWidth),true,'collapsed report panels fit a narrow viewport');
+  await root.screenshot({path:path.join(dir,'report-panels-collapsed-mobile.png')});
   await page.setViewportSize({width:1440,height:1400});
   await root.screenshot({path:path.join(dir,'report-panels-collapsed.png')});
   await page.locator('.floating-nav a').filter({hasText:'帧结构与 GOP'}).click();
@@ -447,7 +471,7 @@ scenario('[section-folding] all result panels fold natively and preserve charts,
   assert.equal(await frameBody.evaluate(el=>el.open),true);
   assert.equal(await root.locator('.basic-info-body').evaluate(el=>el.open),false,'same-report selection and tabs keep fold state');
   const file=path.join(dir,'report.json'),exported=await download(page,'#inspect-export',file);assert.deepEqual(exported.results[0].report,report);
-  await importReport(page,file);assert.ok(await panels.evaluateAll(items=>items.every(item=>item.open===(item.id!=='audio-packets-optional'))),'a newly opened report restores default panel states');
+  await importReport(page,file);assert.ok(await panels.evaluateAll(items=>items.every(item=>item.open===!!item.parentElement.dataset.analysisTarget)),'a newly opened report expands only selected analysis panels');
   await page.locator('[data-mode="compare"]').click();await page.locator('#reference').fill(media.sitiSource);
   await page.locator('#candidate').fill(media.sitiSource);await page.locator('#confirm').check();await runTask(page,app,'#compare');
   assert.equal(await page.locator('#compare-details > .section > .report-section-body').count(),await page.locator('#compare-details > .section').count());
@@ -460,8 +484,7 @@ scenario('[report-layout] current report remains identifiable across views, impo
   assert.equal(await page.locator('#result-list .is-current-report').count(),1);
   assert.match(await page.locator('#inspect-report-context').textContent(),new RegExp(path.basename(media.source).replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
   const basic=page.locator('.basic-info-body'),canvas=await page.locator('#frame-plot canvas').elementHandle();
-  assert.equal(await basic.evaluate(el=>el.open),true);
-  await basic.locator(':scope > summary').click();
+  assert.equal(await basic.evaluate(el=>el.open),false);
   assert.equal(await page.locator('[data-track-main]').isVisible(),false);
   assert.equal(await basic.locator(':scope > summary').isVisible(),true);
   await button(first.job.id).click();
@@ -497,7 +520,6 @@ scenario('[report-layout] current report remains identifiable across views, impo
   assert.notEqual(importedId,replacedId);assert.equal(await button(replacedId).count(),0);
   assert.equal(await page.locator('#inspect-result').getAttribute('data-report-owner'),importedId);
   await page.locator('#result-list').screenshot({path:path.join(dir,'current-report.png')});
-  await page.locator('.basic-info-body > summary').click();
   await page.locator('[data-basic-info]').screenshot({path:path.join(dir,'basic-info-collapsed.png')});
   await page.setViewportSize({width:390,height:844});
   assert.equal(await frameSection.locator('.report-metrics').evaluate(el=>el.scrollWidth<=el.clientWidth),true);
@@ -536,21 +558,24 @@ scenario('[analysis-notes] measured methods collapse by module while current sce
   await preview(page,untimed);
   const limited=await runTask(page,app,'#enqueue-analyze');
   assert.equal(limited.report.packets.bitrateCurve.status,'unavailable');
-  assert.equal(await page.locator('#bitrate-optional').evaluate(el=>el.open),false);
+  assert.equal(await page.locator('#bitrate-optional').evaluate(el=>el.open),true);
   for(const reason of limited.report.packets.bitrateCurve.reasons){
     assert.equal(await page.locator('#inspect-details .notice').filter({hasText:`窗口码率不可计算：${reason}`}).isVisible(),true,'actual limitations remain visible while curves are collapsed');
   }
 });
 scenario('[analysis-targets] automatic preview and independent targets follow the queue workflow and survive import',async({page,app,dir})=>{
   assert.equal(await page.locator('#frame-analysis').isChecked(),true);
-  assert.equal(await page.locator('#bitrate-enabled').isChecked(),false);
-  assert.equal(await page.locator('#complexity').isChecked(),false);
-  assert.equal(await page.locator('#bitrate-options').isVisible(),false);
-  assert.equal(await page.locator('#siti-settings').isVisible(),false);
+  assert.equal(await page.locator('#bitrate-enabled').isChecked(),true);
+  assert.equal(await page.locator('#complexity').isChecked(),true);
+  assert.equal(await page.locator('#bitrate-options').isVisible(),true);
+  assert.equal(await page.locator('#siti-settings').isVisible(),true);
+  assert.equal(await page.locator('#siti-device').inputValue(),'gpu');
+  assert.equal(await page.locator('#siti-workers').isDisabled(),true);
   assert.equal(await page.locator('#analyze').count(),0);
   assert.equal(await page.locator('#inspect').isVisible(),false);
   await preview(page,media.sitiSource);
   assert.equal((await app.request('status')).jobs.length,0,'automatic preview must not start or enqueue analysis');
+  await page.locator('#bitrate-enabled').uncheck();await page.locator('#complexity').uncheck();
   await page.locator('#frame-analysis').uncheck();
   assert.equal(await page.locator('#enqueue-analyze').isDisabled(),true);
   await page.locator('#frame-analysis').check();
@@ -576,14 +601,13 @@ scenario('[analysis-targets] automatic preview and independent targets follow th
   const plan=(await app.request('plans')).plans[0].input;
   assert.equal(plan.bitrate,true);assert.equal(plan.bitrateWindowMs,1000);assert.equal(plan.complexity,false);
   await page.locator('#queue-start').click();assert.equal((await waitForJob(app.request,job.id)).status,'done');
-  await page.locator(`[data-result-open="${job.id}"]`).click();
   await page.waitForFunction(id=>document.querySelector('#inspect-result').dataset.reportOwner===id,job.id);
   const bitrate=await app.request(`jobs/${job.id}/report`);
   assert.deepEqual(bitrate.analysisTargets,{frames:false,bitrate:true,complexity:false});
   assert.equal(bitrate.frames,undefined);assert.equal(bitrate.packets.bitrateCurve.windowMs,1000);
   assert.equal(await page.locator('#frame-plot').count(),0);assert.equal(await page.locator('#bitrate-optional').count(),1);
   const curveFile=path.join(dir,'curve-only.json');await saveImportFixture(curveFile,bitrate);await importReport(page,curveFile);
-  await page.locator('#bitrate-optional > summary').click();assert.equal(await page.locator('#bitrate canvas').count(),1);
+  assert.equal(await page.locator('#bitrate-optional').evaluate(el=>el.open),true);assert.equal(await page.locator('#bitrate canvas').isVisible(),true);
 
   const siti=await runTask(page,app,'#enqueue-analyze');
   assert.deepEqual(siti.report.analysisTargets,{frames:false,bitrate:false,complexity:true});
@@ -637,8 +661,8 @@ scenario('[bitrate-window] [units] calculation selection and display aggregation
   const {report}=await runTask(page,app,'#enqueue-analyze');
   assert.equal(report.packets.bitrateCurve.windowMs,100);
   assert.equal(report.packets.bitrateCurve.status,'ok');
-  assert.equal(await page.locator('#bitrate-optional').evaluate(el=>el.open),false);
-  await page.locator('#bitrate-optional > summary').click();
+  assert.equal(await page.locator('#bitrate-optional').evaluate(el=>el.open),true);
+
   assert.equal(await page.locator('#bitrate-display').inputValue(),'100');
   assert.equal(await page.locator('[id^="audio-"][id$="-display"]').count(),2);
   const videoWidth=await page.locator('#bitrate-display').evaluate(el=>el.getBoundingClientRect().width);
@@ -666,8 +690,8 @@ scenario('[bitrate-window] [units] calculation selection and display aggregation
   await page.locator('#bitrate-display').selectOption('100');
   const file=path.join(dir,'bitrate.json');await saveImportFixture(file,report);
   await importReport(page,file);
-  assert.equal(await page.locator('#bitrate-optional').evaluate(el=>el.open),false);
-  await page.locator('#bitrate-optional > summary').click();
+  assert.equal(await page.locator('#bitrate-optional').evaluate(el=>el.open),true);
+
   assert.equal(await page.locator('#bitrate-display').inputValue(),'100');
   await page.locator('#bitrate-window').selectOption('1000');
   const next=await runTask(page,app,'#enqueue-analyze');
@@ -899,7 +923,7 @@ scenario('[analysis] SI/TI confirmed scenes exclude boundary TI and export separ
 scenario('[analysis] [units] actual multi-audio file, frame scan, GOP, SI/TI and export match the server report',async({page,app,dir})=>{
   const info=await preview(page,media.sitiSource);assert.deepEqual(info.raw,(await probe(media.sitiSource)).raw);
   assert.equal(info.raw.streams.length,3);
-  await page.locator('#bitrate-enabled').check();await page.locator('#complexity').check();await page.locator('#siti-workers').selectOption('8');
+  await page.locator('#bitrate-enabled').check();await page.locator('#complexity').check();await page.locator('#siti-device').selectOption('cpu');await page.locator('#siti-workers').selectOption('8');
   assert.equal(await page.locator('#siti-device').inputValue(),'cpu');
   const {report}=await runTask(page,app,'#enqueue-analyze');
   assert.deepEqual(await page.locator('#inspect-details > .section > .report-section-body > summary > h3').allTextContents(),['文件基本信息','帧结构与 GOP','SI/TI 内容复杂度','音轨包大小时间分布','音视频码率统计','体积构成']);
@@ -1179,6 +1203,7 @@ scenario('[bd-rate] changed presets distinguish the displayed single-group repor
   assert.equal(await page.locator('#bd-anchor option').count(),1,'a queued task must not silently replace the viewed report');
   await page.locator(`[data-result-open="${job.id}"]`).click();
   await page.waitForFunction(id=>document.querySelector('#trial-result').dataset.reportOwner===id,job.id);
+  await openComparisonPanels(page);
   assert.equal(await page.locator('#bd-anchor option').count(),2);
   assert.match(await page.locator('#bd-report-context').innerText(),/2 条曲线，4 个采样点/);
   assert.equal(await page.locator('#bd-report-context .notice').count(),0);
@@ -1346,7 +1371,7 @@ scenario('[packet-distribution] actual audio packets, optional rates and frame a
   assert.equal(await frameReadout.locator('dd').nth(4).locator('[title]').getAttribute('title'),byteEvidence(report.frames[0].bytes));
   assert.doesNotMatch(await frameReadout.textContent(),/[·|]/,'real frame evidence has no duplicated axis prefix or loose separators');
   await frameReadout.screenshot({path:path.join(dir,'real-frame-readout.png')});
-  assert.equal(await page.locator('#bitrate-optional').evaluate(el=>el.open),false);
+  assert.equal(await page.locator('#bitrate-optional').evaluate(el=>el.open),true);
   assert.equal(await page.locator('#audio-packets-optional').evaluate(el=>el.open),false);
   assert.equal(await page.locator('#audio-packets-optional').getAttribute('class'),'report-section-body');
   assert.equal(await page.locator('#audio-packets-optional > summary').innerText(),'音轨包大小时间分布');
@@ -1384,7 +1409,7 @@ scenario('[packet-distribution] actual audio packets, optional rates and frame a
   assert.equal(await page.locator('#audio-packets-optional').evaluate(el=>el.open),false);
   await page.locator('#audio-packets-optional > summary').click();
   assert.ok(await page.locator('#audio-packets-1 canvas').isVisible());
-  assert.equal(await page.locator('#bitrate-optional').evaluate(el=>el.open),false);
+  assert.equal(await page.locator('#bitrate-optional').evaluate(el=>el.open),true);
   await page.screenshot({path:path.join(dir,'packet-distribution.png'),fullPage:true});
   const legacy=structuredClone(report);for(const track of legacy.tracks)delete track.packetDistribution;
   const legacyFile=path.join(dir,'legacy-packets.json');await saveImportFixture(legacyFile,legacy);
@@ -1392,7 +1417,7 @@ scenario('[packet-distribution] actual audio packets, optional rates and frame a
   await page.locator('#audio-packets-optional > summary').click();
   assert.equal(await page.locator('[id^="audio-packets-"] canvas').count(),0);
   assert.equal(await page.getByText(/此旧报告未保存音轨逐包数据/).count(),2);
-  await page.locator('#bitrate-optional > summary').click();assert.ok(await page.locator('#audio-1 canvas').isVisible());
+  assert.ok(await page.locator('#audio-1 canvas').isVisible());
   await page.screenshot({path:path.join(dir,'legacy-packet-distribution.png'),fullPage:true});
 });
 
@@ -1414,6 +1439,9 @@ scenario('[portable-repeat] saved generic repeat evidence and optional metadata 
   const value=makePortable({results:[{entryId:'saved-repeat',report}],applicationVersion:'protocol-fixture'}),file=path.join(dir,'saved-repeat.json');
   await writeFile(file,JSON.stringify(value));const before=(await app.request('status')).jobs.length;
   await importReport(page,file);await page.getByRole('heading',{name:'保存的重复帧结果',exact:true}).waitFor();
+  const saved=page.locator('#inspect-details > .section').filter({has:page.getByRole('heading',{name:'保存的重复帧结果',exact:true})}).locator(':scope > .report-section-body');
+  assert.equal(await saved.evaluate(el=>el.open),false);
+  await saved.locator(':scope > summary').click();
   assert.match(await page.locator('#inspect-details').innerText(),/精确重复次数/);
   const restored=await download(page,'#inspect-export',path.join(dir,'saved-repeat-restored.json'));
   assert.deepEqual(restored.results[0].report,report);assert.deepEqual(restored.requires,['frame-digest/1','repeat/2']);
