@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$SourcePath,[int]$DeviceIndex=0)
+param([Parameter(Mandatory=$true)][string]$SourcePath,[int]$DeviceIndex=-1)
 $ErrorActionPreference='Stop'
 try {
   [Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false)

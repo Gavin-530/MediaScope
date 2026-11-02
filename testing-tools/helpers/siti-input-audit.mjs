@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {sitiInput} from '../../public/siti.js';
 import {sitiGpuRequest} from '../../siti.mjs';
 
-export async function auditGpuInputs(cases,signal,{deviceIndex=0,onProgress}={}){
+export async function auditGpuInputs(cases,signal,{deviceIndex=-1,onProgress}={}){
   const child=spawn('powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',fileURLToPath(new URL('./siti-input-audit.ps1',import.meta.url)),'-SourcePath',fileURLToPath(new URL('../../gpu/SitiOpenCl.cs',import.meta.url)),'-DeviceIndex',String(deviceIndex)],{windowsHide:true,signal});
   const lines=createInterface({input:child.stdout});let current,stderr='';
   const next=()=>new Promise((resolve,reject)=>{current={resolve,reject}}),ready=next();

@@ -61,7 +61,7 @@ if($Case -eq 'Install'){
   . (Join-Path $App 'scripts/install-location.ps1')
   $source=Join-Path $Work 'package'
   New-Item -ItemType Directory -Force (Join-Path $source 'scripts') | Out-Null
-  foreach($item in @('analysis.mjs','bd-measure.mjs','siti.mjs','gpu','engine.mjs','server.mjs','package.json','README.md','start.cmd','Uninstall.cmd','runtime-lock.json','public','licenses')){
+  foreach($item in @('analysis.mjs','repeat.mjs','repeat-samples.mjs','bd-measure.mjs','siti.mjs','gpu','engine.mjs','server.mjs','package.json','README.md','start.cmd','Uninstall.cmd','runtime-lock.json','public','licenses')){
     Copy-Item -LiteralPath (Join-Path $App $item) -Destination $source -Recurse
   }
   foreach($item in @('deployment.ps1','manage.ps1','install-location.ps1','uninstall.ps1','check-environment.mjs','desktop.mjs','runtime-data.mjs','time.mjs','validate-launch.ps1','fast-launch.ps1','fast-bootstrap.mjs')){

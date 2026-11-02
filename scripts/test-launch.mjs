@@ -2,6 +2,7 @@ import {spawn,execFileSync} from 'node:child_process';
 import {readFileSync,existsSync} from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
+import {reportFromPortable} from '../public/portable.js';
 const [app,home,media,expectedVersion]=process.argv.slice(2);
 // PowerShell 7's host injects its own PSModulePath. Let Windows PowerShell build
 // its normal module path, as it does when launched by Explorer/start.cmd.
@@ -20,11 +21,17 @@ try {
   let result;
   for(let i=0;i<100;i++){result=await(await fetch(base+'/api/jobs/'+job.id,{headers:{'x-mediascope-token':token}})).json();if(!['queued','running'].includes(result.status))break;await delay(100)}
   assert.equal(result.status,'done',result.message);
-  assert.ok(existsSync(path.join(home,'data',job.id,'report.json')),'Report must be outside the application directory');
+  assert.equal(result.reportPath,undefined,'Completed jobs must not claim an automatic report file');
+  const reportResponse=await fetch(base+'/api/jobs/'+job.id+'/report',{headers:{'x-mediascope-token':token}});
+  assert.equal(reportResponse.status,200);
+  const report=reportFromPortable(await reportResponse.json());
+  assert.equal(report.type,'inspect');assert.equal(report.file,path.resolve(media));
+  assert.ok(!existsSync(path.join(home,'data',job.id,'report.json')),'Reports remain in memory until the user exports them');
   const state=JSON.parse(readFileSync(path.join(home,'current.json'),'utf8').replace(/^\uFEFF/,''));
   if(expectedVersion)assert.equal(state.current.version,expectedVersion,'new package must activate its own version');
+  assert.equal(report.producer.applicationVersion,state.current.version);
   assert.ok(!existsSync(path.join(home,'apps',state.current.version,'.mediascope')));
-  console.log('PASS: packaged Launch starts HTTP and writes a real report only to the separate data directory');
+  console.log('PASS: packaged Launch serves a real in-memory report without automatic persistence');
 } finally {
   if(child.exitCode===null){
     try{execFileSync('taskkill.exe',['/PID',String(child.pid),'/T','/F'],{windowsHide:true,stdio:'ignore'})}

@@ -4,8 +4,8 @@ import {sitiInput} from '../../public/siti.js';
 import {sitiGpuRequest} from '../../siti.mjs';
 
 // One owned bridge process; raw requests have no CPU fallback path.
-export async function withRawSitiGpu(exe,signal,body,{deviceIndex=0}={}){
-  const child=spawn(exe,['serve',String(deviceIndex)],{windowsHide:true}),lines=createInterface({input:child.stdout});
+export async function withRawSitiGpu(exe,signal,body,{deviceIndex}={}){
+  const child=spawn(exe,['serve',...(deviceIndex===undefined?[]:[String(deviceIndex)])],{windowsHide:true}),lines=createInterface({input:child.stdout});
   let current,sequence=0,stderr='',readyResolve,readyReject,closedResolve;
   const closed=new Promise(resolve=>{closedResolve=resolve}),ready=new Promise((resolve,reject)=>{readyResolve=resolve;readyReject=reject});
   const fail=e=>{readyReject(e);current?.reject(e);child.kill()};

@@ -177,6 +177,6 @@ Invoke-Manager $app Check
  } finally {Copy-Item -LiteralPath (Join-Path $external 'node.exe') -Destination $node -Force}
  Invoke-Manager $app Check
  & $node (Join-Path $PSScriptRoot 'test-launch.mjs') $app $homeDir $media
- Assert ($LASTEXITCODE -eq 0) 'packaged launcher HTTP and separate report storage'
+ Assert ($LASTEXITCODE -eq 0) 'packaged launcher HTTP and in-memory report export'
 Write-Host "Deployment verification: $script:passed passed. Evidence preserved: $work"
 Save-DeploymentResult 'passed' $null
