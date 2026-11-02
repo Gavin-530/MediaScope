@@ -6,7 +6,7 @@ import {gzipSync} from 'node:zlib';
 export function measurementFile(relative) {
   const name=path.posix.basename(relative),top=relative.split('/')[0];
   if(/^(psnr|ssim|vmaf)\.(log|json)$/.test(name)&&(!relative.includes('/')||['bitdepth','trial','trial-libx265','trial-libaom-av1'].includes(top)))return true;
-  if(/^(metrics-equivalence|reference-cache|vfr-equivalence|structure-equivalence|siti-parallel|siti-gpu|siti-p910|bitrate-equivalence|vmaf-official)-[A-Za-z0-9]{6}$/.test(top))return name.endsWith('.json');
+  if(/^(metrics-equivalence|reference-cache|vfr-equivalence|structure-equivalence|siti-parallel|siti-gpu|siti-p910|bitrate-equivalence|vmaf-official|repeat-analysis)-[A-Za-z0-9]{6}$/.test(top))return name.endsWith('.json');
   if(['browser','server-reports','chroma-assumption','portable','report-validation'].includes(top))return name==='report.json'||/^theme-.*\.json$/.test(name)||name==='sidebar-links.json';
   if(['trials-expanded','chart-model'].includes(top))return name==='measured-trial.json';
   if(top==='bd-reference')return ['bd-reference.json','bd-measurement.json','bd-trial-report.json'].includes(name);
@@ -17,6 +17,25 @@ export function measurementFile(relative) {
 }
 
 export const criticalMeasurements = [
+  {testName:'[repeat-analysis] locked NIST SHA256 vectors and exact upstream freezedetect FATE case pass product integration',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/official-vectors\.json$/},
+  {testName:'[repeat-analysis] complete runtime layout intersection matches native upstream or lossless equivalence and every enabled freeze layout',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/layout-coverage\.json$/},
+  {testName:'[repeat-analysis] every code value in every component round trips through equivalent layouts with exact integer difference relations',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/full-code-domain\.json$/},
+  {testName:'[repeat-analysis] CSV includes every record at the exact UTF8 byte limit and rejects one byte beyond it',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/csv-capacity\.json$/},
+  {testName:'[repeat-analysis] native byte budget rejects the first byte over the declared frame limit before decoding',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/byte-budget\.json$/},
+  {testName:'[repeat-analysis] cancellation during interval aggregation and final validation never returns a complete result',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/aggregation-cancel\.json$/},
+  {testName:'[repeat-analysis] direct samples and component block integers match independent oracle for 103 layouts and all corners',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/direct-samples\.json$/},
+  {testName:'[repeat-analysis] constant state uses observed PTS and exact predicate survives a forced digest collision',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/constant-state\.json$/},
+  {testName:'[repeat-analysis] ambiguous source histories remain unclassified and numerical bands are not reuse labels',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/source-ambiguity\.json$/},
+  {testName:'[repeat-analysis] native MSAD cross-check and file identity agree with independent integer evidence',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/msad-identity\.json$/},
+  {testName:'[repeat-analysis] cursor subtitle slow changes noise and scene cuts stay nonzero with independent source-time state',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/content-states\.json$/},
+  {testName:'[repeat-analysis] v2 moving 1080p 4K and exact 8K boundaries preserve evidence and bounded cancellation',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/resource-v2\.json$/},
+  {testName:'[repeat-analysis] native integer layouts preserve every plane, alpha, edge and LSB against independent known bytes',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/native-layouts\.json$/},
+  {testName:'[repeat-analysis] original PTS, offset and VFR holds agree with separate FFprobe integer evidence',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/timestamps\.json$/},
+  {testName:'[repeat-analysis] missing source PTS never borrows generated framehash timestamps',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/missing-pts\.json$/},
+  {testName:'[repeat-analysis] freezedetect metadata matches upstream events and preserves open EOF in native 8, 10, 12, 16-bit and alpha',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/freeze\.json$/},
+  {testName:'[repeat-analysis] P010 P012 P016 native raw paths match official hashes and reject non-sample bits without a container claim',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/semiplanar-raw\.json$/},
+  {testName:'[repeat-analysis] closed and open freeze events reproduce upstream strings, event frames and durations',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/closed-freeze\.json$/},
+  {testName:'[repeat-analysis] bad padding, truncated decode, unsupported representation and mid-process cancel cannot succeed',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/failure-boundaries\.json$/},
   {testName:'[bd-rate] exact integer pixel oracle 8-bit tv: frame mean, peak, zero MSE and bitstream bytes',pathPattern:/^bd-reference\/known-8-tv-false-[A-Za-z0-9]{6}\/bd-measurement\.json$/},
   {testName:'[bd-rate] exact integer pixel oracle 8-bit pc: frame mean, peak, zero MSE and bitstream bytes',pathPattern:/^bd-reference\/known-8-pc-false-[A-Za-z0-9]{6}\/bd-measurement\.json$/},
   {testName:'[bd-rate] exact integer pixel oracle 10-bit tv: frame mean, peak, zero MSE and bitstream bytes',pathPattern:/^bd-reference\/known-10-tv-false-[A-Za-z0-9]{6}\/bd-measurement\.json$/},

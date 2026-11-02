@@ -32,7 +32,7 @@ if($Action -eq 'PackageVersion'){
 $source=Join-Path $Work "源 [x] & ! % '"
 $package=Join-Path $source '.build/package'
 foreach($directory in @($source,(Join-Path $source 'scripts'),(Join-Path $HomeRoot 'staging'))){[IO.Directory]::CreateDirectory($directory) | Out-Null}
-$items=@('analysis.mjs','bd-measure.mjs','siti.mjs','gpu','engine.mjs','server.mjs','package.json','README.md','start.cmd','Uninstall.cmd','runtime-lock.json','public','licenses')
+$items=@('analysis.mjs','repeat.mjs','repeat-samples.mjs','bd-measure.mjs','siti.mjs','gpu','engine.mjs','server.mjs','package.json','README.md','start.cmd','Uninstall.cmd','runtime-lock.json','public','licenses')
 foreach($item in $items){Copy-Item -LiteralPath (Join-Path $App $item) -Destination $source -Recurse}
 $scripts=@('deployment.ps1','manage.ps1','install-location.ps1','uninstall.ps1','check-environment.mjs','desktop.mjs','runtime-data.mjs','time.mjs','validate-launch.ps1','start-source.ps1','fast-launch.ps1','fast-bootstrap.mjs','build-launcher.ps1','launcher')
 foreach($item in $scripts){Copy-Item -LiteralPath (Join-Path $App "scripts/$item") -Destination (Join-Path $source 'scripts') -Recurse}

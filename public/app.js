@@ -8,6 +8,7 @@ import { plot, gopOverview } from "./charts.js";
 import { basicInfoHTML, initBasicInfo } from "./basic-info.js";
 import {vmafModels} from "./vmaf.js";
 import {validateSitiSceneStarts,validateSitiSettings} from "./siti.js";
+import {repeatHTML,initRepeat} from './repeat-view.js';
 import {
   parseCrfs,
   trialBdRate,
@@ -582,7 +583,7 @@ document.querySelectorAll(".file-picker").forEach(
 );
 let fileInfoTimer, fileInfoController, fileInfoRevision = 0, fileInfoLoading = false;
 function updateAnalysisSubmission() {
-  const selected = ["frame-analysis", "bitrate-enabled", "complexity"].some(id => $("#" + id).checked);
+  const selected = ["frame-analysis", "bitrate-enabled", "complexity", "repeat-enabled"].some(id => $("#" + id).checked);
   $("#enqueue-analyze").disabled = !environmentReady || !infoPath || !hasVideo || fileInfoLoading || !selected;
   $("#inspect").disabled = !environmentReady || fileInfoLoading;
   $("#analysis-selection-hint").textContent = selected
@@ -607,6 +608,8 @@ $("#file").oninput = () => {
 $("#file").onchange = () => void readFileInfo();
 $("#file").onkeydown = event => { if (event.key === "Enter") { event.preventDefault(); void readFileInfo(); } };
 const syncSitiWorkers = () => {
+  $("#repeat-options").classList.toggle("hidden", !$("#repeat-enabled").checked);
+  $("#freeze-enabled").disabled = !$("#repeat-enabled").checked;
   $("#bitrate-options").classList.toggle("hidden", !$("#bitrate-enabled").checked);
   $("#bitrate-window").disabled = !$("#bitrate-enabled").checked;
   $("#siti-settings").classList.toggle("hidden", !$("#complexity").checked);
@@ -628,6 +631,7 @@ const syncSitiWorkers = () => {
 $('#complexity').onchange=syncSitiWorkers;
 $('#frame-analysis').onchange=syncSitiWorkers;
 $('#bitrate-enabled').onchange=syncSitiWorkers;
+$('#repeat-enabled').onchange=syncSitiWorkers;
 $('#siti-scenes').onchange=syncSitiWorkers;
 $('#siti-transfer').onchange=syncSitiWorkers;
 function sitiSettingsInput(){
@@ -779,6 +783,7 @@ $("#enqueue-analyze").onclick = () => {
     complexity: $("#complexity").checked,
     frameAnalysis: $("#frame-analysis").checked,
     bitrate: $("#bitrate-enabled").checked,
+    ...($("#repeat-enabled").checked?{repeatAnalysis:true,freezeDetection:$("#freeze-enabled").checked}:{}),
     ...($("#bitrate-enabled").checked ? {bitrateWindowMs: Number($("#bitrate-window").value)} : {}),
     sitiWorkers: $("#siti-workers").value,
     sitiDevice: $("#siti-device").value,
@@ -1132,6 +1137,7 @@ function render(r, activate = true, owner = null) {
       frames: r.analysisTargets?.frames !== false,
       bitrate: r.analysisTargets?.bitrate !== false,
       complexity: r.analysisTargets?.complexity ?? !!r.content,
+      repeat: !!r.repeatAnalysis,
     } : {});
     reports[mode] = r;
     reportOwners[mode] = owner;
@@ -1174,12 +1180,13 @@ function renderMedia(r) {
   }
   cards([]);
   let html = basicInfoHTML(r, {readingNotes: notes.metadata});
-  if(r.repeatAnalysis){
+  if(r.repeatAnalysis?.fingerprint){
     const repeat=r.repeatAnalysis,exact=repeat.exact;
     html+=section('保存的重复帧结果',repeat.status==='complete'?metricStrip([
       ['显示帧数',exact.frames],['相邻比较次数',exact.comparisons],[repeat.configurationVersion===1?'指纹相同次数':'精确重复次数',exact.duplicates],['连续重复段',exact.runs.length],
     ])+`<p class="hint">${repeat.configurationVersion===1?'旧方法记录相邻帧 SHA-256 相同，未进行逐值确认。':'方法 2 记录原生样本直接比较及整数差异。'}这些计数可能包含正常静止画面，不代表录制丢帧或编码前画面重用。本页读取保存结果，不重新计算摘要或原始样本。</p>`:`<p class="hint">重复帧测量不可用：${esc(repeat.reason)}</p>`);
-  }
+  } else if(r.repeatAnalysis)html+=repeatHTML(r.repeatAnalysis);
+  else if(r.type==='analyze')html+='<p class="hint">本次未计算重复帧与时间诊断。选择该分析目标后重新运行可取得证据。</p>';
   if (r.type === "analyze" || r.frames) {
     if (r.frames && frameEnabled) {
     const gops = r.coding?.gops || legacyGops(r.frames);
@@ -1261,6 +1268,7 @@ function renderMedia(r) {
   }
   $("#details").innerHTML = html;
   initBasicInfo($("#details"), r);
+  if(r.repeatAnalysis&&!r.repeatAnalysis.fingerprint)initRepeat($("#details"),r,{api,download,draw});
   if (r.type === "analyze" || r.frames) {
     if (r.frames && frameEnabled) {
       if (r.frames.length) initFrames(r);

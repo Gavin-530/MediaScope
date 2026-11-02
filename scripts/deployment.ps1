@@ -140,7 +140,7 @@ function Test-Environment($App,$Paths,$InstallRoot) {
   $libraries=@($Paths.Values | ForEach-Object {Get-ChildItem -LiteralPath (Split-Path $_) -Filter '*.dll' -File} | Sort-Object FullName -Unique | ForEach-Object {@{path=$_.FullName;sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash}})
   Remove-Item -LiteralPath $result
   if(!(Compare-LaunchSnapshot $before (Get-LaunchSnapshot $App $Paths))){throw 'Runtime changed during validation; restart MediaScope'}
-  return @{programs=$programs;libraries=$libraries;checkedAt=$check.checkedAt;compatibility=$check.compatibility;launchSnapshot=$before}
+  return @{programs=$programs;libraries=$libraries;checkedAt=$check.checkedAt;compatibility=$check.compatibility;launchSnapshot=$before;optional=$check.optional}
 }
 function Get-SelectedPaths($Selection,$App,$InstallRoot) {
   if(!$Selection -or $Selection.mode -eq 'private'){return Get-PrivateRuntime $App $InstallRoot}

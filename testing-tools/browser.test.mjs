@@ -367,6 +367,245 @@ scenario('[charts] [comparison] actual anticorrelated video retains negative SSI
   assert.deepEqual(exported.results[0].report.metrics.ssim,ssim,'signed scores survive chart view changes and export');
   await writeFile(path.join(dir,'report.json'),JSON.stringify(report));
 });
+async function repeatPosition(page,time){
+  const canvas=page.locator('#repeat-overview canvas'),box=await canvas.boundingBox(),lo=Number(await page.locator('#repeat-overview [data-field="from"]').inputValue()),hi=Number(await page.locator('#repeat-overview [data-field="to"]').inputValue());
+  return {x:76+(time-lo)/(hi-lo)*(box.width-101),y:70};
+}
+function repeatField(page,label){return page.locator('#repeat-overview .chart-field').filter({has:page.getByText(label,{exact:true})}).locator('dd');}
+scenario('[repeat-analysis] independent target displays actual runs, original timing, verified preview, RGB difference and portable evidence',async({page,app,dir})=>{
+  await observeYAxis(page);
+  const file=path.join(dir,'duplicates.nut');
+  await run(FF,['-v','error','-y','-f','lavfi','-i','color=size=128x96:rate=24:duration=3','-c:v','rawvideo',file]);
+  await preview(page,file);await page.locator('#frame-analysis').uncheck();await page.locator('#bitrate-enabled').uncheck();await page.locator('#complexity').uncheck();
+  await page.locator('#repeat-enabled').check();assert.equal(await page.locator('#repeat-options').isVisible(),true);await enableFreeze(page);
+  const {report}=await runTask(page,app,'#enqueue-analyze');assert.equal(report.repeatAnalysis.exact.duplicates,71);assert.equal(report.repeatAnalysis.exact.comparisons,71);
+  const host=page.locator('#repeat-result');assert.match(await host.textContent(),/精确重复/);assert.match(await host.textContent(),/N−1/);
+  await singleRow(host.locator('.repeat-cards > .card'),3);
+  assert.ok((await host.locator('.repeat-cards').boundingBox()).height<85,'important repeat statistics use a compact strip');
+  assert.deepEqual(await host.locator('.repeat-cards > .card > span:first-child').allTextContents(),['分析规模','精确重复','连续重复段']);
+  assert.deepEqual(await host.locator('.repeat-cards > .card > strong').allTextContents(),['72 帧','71 次','1 段']);
+  assert.match(await host.locator('.repeat-cards > .card').nth(0).innerText(),/71 次相邻比较/);
+  assert.match(await host.locator('.repeat-cards > .card').nth(1).innerText(),/占相邻比较 100%/);
+  await singleRow(page.locator('#repeat-overview .plot-controls > div'),3);
+  await host.locator('.repeat-cards').screenshot({path:path.join(dir,'repeat-summary-desktop.png')});
+  await page.locator('#repeat-overview .plot-controls').screenshot({path:path.join(dir,'repeat-controls-desktop.png')});
+  assert.deepEqual(await yAxisLabels(page,'#repeat-overview'),['0','1'],'actual repeated-frame report opts into a zero-based integer axis');
+  assert.equal(await page.locator('#frame-plot').count(),0);assert.equal(await page.locator('#bitrate').count(),0);
+  const evidence=host.locator('#repeat-evidence');
+  assert.equal(await evidence.evaluate(el=>el.open),false,'supporting evidence starts collapsed');
+  assert.match(await host.locator('#repeat-timing-status').textContent(),/原始时间戳完整且严格递增/);
+  assert.equal(await host.locator('#repeat-timing-status').isVisible(),false,'normal timing belongs with the detailed timing evidence');
+  await host.locator('#repeat-overview canvas').hover({position:await repeatPosition(page,1)});
+  assert.equal(await repeatField(page,'结束（s）').innerText(),'未报告（开放）');
+  assert.equal(await repeatField(page,'持续（s）').innerText(),'未知');
+  assert.match(await host.locator('#repeat-constant-summary').innerText(),/原 PTS 证实 ≥2 秒.*1 段/);
+  assert.doesNotMatch(await host.locator('#repeat-summary').innerText(),/比较 71|发现 1 段精确重复/,'summary does not recite the counts already shown in cards');
+  assert.match(await host.locator('#repeat-source').textContent(),/原生格式 .*8-bit/);
+  assert.match(await host.locator('#repeat-interpretation').textContent(),/正常静止画面.*不能据此认定录制故障/);
+  assert.equal(await host.locator('#repeat-source').isVisible(),false);
+  assert.equal(await host.locator('#repeat-interpretation').isVisible(),false);
+  assert.equal(await host.locator('#repeat-differences').isVisible(),false,'difference bands stay inside the default-collapsed evidence panel');
+  assert.equal(await host.locator('#repeat-method p').first().isVisible(),false,'technical basis does not crowd the default view');
+  assert.doesNotMatch(await host.innerText(),/SHA-256|N−1|资格验证/);
+  await host.screenshot({path:path.join(dir,'repeat-results-compact.png')});
+  assert.deepEqual(await host.locator('#repeat-evidence > summary, #repeat-review > summary').allTextContents(),['检测明细与导出','原帧复核']);
+  assert.equal(await host.locator('[data-rows="frames"] table').count(),0,'large tables are not populated until requested');
+  await evidence.locator(':scope > summary').click();await host.locator('[data-rows="runs"] tbody tr').waitFor();
+  assert.equal(await host.locator('#repeat-timing-status').isVisible(),true);
+  await host.locator('#repeat-method > summary').click();
+  assert.equal(await host.locator('#repeat-source').isVisible(),true);
+  assert.equal(await host.locator('#repeat-interpretation').isVisible(),true);
+  assert.match(await host.locator('#repeat-overview-method').innerText(),/点击可定位.*图表分组不改变原始计数/);
+  await host.locator('#repeat-method > summary').click();
+  const summaries=await host.locator('summary').allTextContents();
+  const headings=await evidence.locator('h4').allTextContents();
+  assert.ok(headings.includes('连续重复段 · 1 段'));assert.match(await host.locator('#repeat-freeze-details > summary').textContent(),/静止候选 · 1 段/);
+  assert.ok(headings.includes('连续样本不变区间 · 1 段'));assert.equal(report.repeatAnalysis.configurationVersion,2);
+  assert.equal(await host.locator('#repeat-differences').isVisible(),true);
+  assert.match(await host.locator('#repeat-differences').innerText(),/相邻帧最大样本差分布.*不代表异常等级或视觉差异程度/s);
+  await singleRow(host.locator('.repeat-metrics > div'),4);
+  for(const [band,count]of Object.entries(report.repeatAnalysis.differenceSummary.counts)){
+    const label={equal:'逐值相等','one-code':'最大差 1 码值','two-codes':'最大差 2 码值',larger:'最大差超过 2 码值'}[band];
+    const metric=host.locator('#repeat-differences dl > div').filter({has:page.getByText(label,{exact:true})});
+    assert.equal(await metric.locator('dd').innerText(),`${count.toLocaleString('zh-CN')} 次`,'each visible value retains its measured band');
+  }
+  assert.equal(await host.locator('#repeat-method').evaluate(el=>el.open),false);
+  await host.locator('#repeat-method > summary').click();
+  assert.match(await host.locator('#repeat-method').innerText(),/直接核对全部有效样本逐值相等.*SHA-256.*N−1/s);
+  assert.match(await host.locator('#repeat-method').innerText(),/不代表录制丢帧率.*色彩解释标签不属于样本相等判据/s);
+  await host.locator('#repeat-method > summary').click();
+  await host.locator('[data-rows="constant"] tbody tr').waitFor();
+  const constantDownload=page.waitForEvent('download');await host.locator('[data-csv="constant"]').click();
+  const constantFile=path.join(dir,'constant.csv');await(await constantDownload).saveAs(constantFile);assert.match(await readFile(constantFile,'utf8'),/observedTicks/);
+  assert.ok(summaries.every(text=>!text.includes('已完成')&&!text.includes('方法与证据口径')));
+  assert.equal(await host.locator('[data-page="runs:1"]').isVisible(),false);
+  await host.locator('[data-rows="intervals"] tbody tr').first().waitFor();
+  assert.equal(await host.locator('[data-rows="intervals"] tbody tr').count(),report.repeatAnalysis.timeline.intervals.length);
+  await host.locator('#repeat-freeze-details > summary').click();
+  await host.locator('[data-rows="segments"] tbody tr').waitFor();
+  assert.match(await host.locator('[data-rows="segments"]').textContent(),/未报告结束（开放区间）/);
+  const segment=report.repeatAnalysis.freeze.segments[0];
+  assert.equal(await host.locator('[data-rows="segments"] tbody tr td').nth(0).textContent(),segment.start);
+  await host.locator('[data-rows="segments"] [data-frame]').click();
+  assert.equal(await page.locator('#repeat-frame').inputValue(),String(segment.detectedAtFrame));
+  const segmentDownload=page.waitForEvent('download');await host.locator('[data-csv="segments"]').click();
+  const segmentFile=path.join(dir,'segments.csv');await(await segmentDownload).saveAs(segmentFile);
+  assert.match(await readFile(segmentFile,'utf8'),/"start","end","duration","detectedAtFrame","endDetectedAtFrame"/);
+  await host.locator('summary').filter({hasText:'检测事件明细与 CSV'}).click();
+  await host.locator('[data-rows="freeze"] tbody tr').first().waitFor();
+  assert.equal(await host.locator('[data-rows="freeze"] tbody tr').count(),report.repeatAnalysis.freeze.events.length);
+  await host.locator('[data-rows="frames"] tbody tr').first().waitFor();
+  assert.equal(await host.locator('[data-rows="frames"] tbody tr').count(),50);
+  const frameDownload=page.waitForEvent('download');await host.locator('[data-csv="frames"]').click();
+  const frameFile=path.join(dir,'frames.csv');await(await frameDownload).saveAs(frameFile);assert.match(await readFile(frameFile,'utf8'),/"equalPrevious","difference"/);
+  assert.match(await readFile(frameFile,'utf8'),/native-integer-difference-v1/);
+  await host.locator('[data-page="frames:1"]').click();
+  assert.equal(await host.locator('[data-rows="frames"] tbody tr').count(),22);
+  await host.locator('[data-rows="runs"] [data-frame="0"]').click();assert.equal(await page.locator('#repeat-frame').inputValue(),'0');
+  await page.locator('#repeat-frame').fill('1');await page.locator('#repeat-preview').click();
+  await page.waitForFunction(()=>document.querySelector('#repeat-preview-images')?.querySelectorAll('img').length===2&&document.querySelector('#repeat-preview-images canvas'));
+  assert.match(await page.locator('#repeat-preview-status').textContent(),/原帧指纹已核对/);
+  const difference=await page.locator('#repeat-preview-images canvas').evaluate(c=>{const a=c.getContext('2d').getImageData(0,0,c.width,c.height).data;let max=0;for(let i=0;i<a.length;i++)if(i%4!==3)max=Math.max(max,a[i]);return max;});assert.equal(difference,0);
+  const pending=page.waitForEvent('download');await host.locator('[data-csv="runs"]').click();const csv=await pending;const csvFile=path.join(dir,'runs.csv');await csv.saveAs(csvFile);assert.match(await readFile(csvFile,'utf8'),/next-original-pts|last-ffprobe-duration|unknown/);
+  const exported=path.join(dir,'repeat-report.json');const portable=await download(page,'#inspect-export',exported);assert.deepEqual(portable.results[0].report.repeatAnalysis,report.repeatAnalysis);
+  await importReport(page,exported);assert.match(await page.locator('#repeat-result').textContent(),/精确重复/);
+  assert.equal(await evidence.evaluate(el=>el.open),false,'importing a report also starts with collapsed evidence');
+  assert.equal(await host.locator('#repeat-differences').isVisible(),false);
+  assert.equal(await host.locator('[data-rows="runs"] tbody tr').count(),0);
+  await evidence.locator(':scope > summary').click();await host.locator('[data-rows="runs"] tbody tr').waitFor();
+  assert.equal(await host.locator('[data-rows="runs"] tbody tr').count(),1);
+  await page.setViewportSize({width:390,height:844});
+  await page.locator('#repeat-overview [data-field="scale"]').selectOption('manual');
+  await page.locator('#repeat-overview [data-field="x-scale"]').selectOption('manual');
+  const fits=await host.evaluate(el=>{
+    const bounds=el.getBoundingClientRect();
+    return [...el.querySelectorAll('.repeat-cards > .card,.repeat-metrics > div,.plot-controls button,.plot-controls input,.plot-controls select')]
+      .filter(item=>item.getClientRects().length).every(item=>{const r=item.getBoundingClientRect();return r.left>=bounds.left&&r.right<=bounds.right;});
+  });
+  assert.equal(fits,true,'narrow layouts wrap cards and manual controls inside the result');
+  await page.locator('#repeat-overview .plot-controls').screenshot({path:path.join(dir,'repeat-controls-mobile.png')});
+  await writeFile(path.join(dir,'report.json'),JSON.stringify(report));
+});
+scenario('[repeat-analysis] empty and single-frame results explain what was measured without empty tables or success labels',async({page,app,dir})=>{
+  await preview(page,media.sitiSource);await page.locator('#frame-analysis').uncheck();await page.locator('#bitrate-enabled').uncheck();await page.locator('#complexity').uncheck();
+  await page.locator('#repeat-enabled').check();await enableFreeze(page);
+  const {report}=await runTask(page,app,'#enqueue-analyze');
+  assert.equal(report.repeatAnalysis.exact.duplicates,0);assert.equal(report.repeatAnalysis.freeze.segments.length,0);
+  const host=page.locator('#repeat-result');
+  await host.locator('#repeat-evidence > summary').click();await host.locator('[data-rows="runs"] p').waitFor();
+  assert.match(await host.locator('[data-rows="runs"]').textContent(),/未发现相邻帧/);
+  assert.equal(await host.locator('[data-rows="runs"] table').count(),0);
+  assert.match(await host.locator('#repeat-freeze-details > summary').textContent(),/未检出/);
+  assert.equal(await host.locator('#repeat-freeze-track').count(),0,'empty results do not invent a time distribution');
+  await host.locator('#repeat-freeze-details > summary').click();
+  await host.locator('[data-rows="segments"] p').waitFor();
+  assert.match(await host.locator('[data-rows="segments"]').textContent(),/持续至少 2 s.*不排除更短/);
+  assert.equal(await host.locator('[data-page="segments:1"]').isVisible(),false);
+  const pending=page.waitForEvent('download');await host.locator('[data-csv="segments"]').click();
+  const file=path.join(dir,'empty-segments.csv');await(await pending).saveAs(file);
+  const csv=await readFile(file,'utf8');assert.match(csv,/"start","end","duration","detectedAtFrame","endDetectedAtFrame"/);assert.equal(csv.trim().split('\r\n').length,1);
+  const single=path.join(dir,'single.nut');
+  await run(FF,['-v','error','-y','-f','lavfi','-i','color=size=128x96:rate=24','-frames:v','1','-c:v','rawvideo',single]);
+  await preview(page,single);const result=await runTask(page,app,'#enqueue-analyze');assert.equal(result.report.repeatAnalysis.frames.length,1);
+  assert.match(await host.locator('#repeat-summary').innerText(),/仅有一帧，无法比较相邻画面或计算相邻间隔/);
+  assert.match(await host.locator('.repeat-cards > .card').nth(1).innerText(),/比例不可计算/);
+  await host.locator('#repeat-evidence > summary').click();await host.locator('[data-rows="runs"] p').waitFor();
+  assert.match(await host.locator('[data-rows="runs"]').textContent(),/仅有一帧/);
+  await host.locator('[data-rows="intervals"] p').waitFor();
+  assert.match(await host.textContent(),/仅有一帧，无法比较相邻画面或计算相邻间隔/);
+  assert.equal(await host.locator('[data-rows="intervals"] table').count(),0);
+  assert.equal(await host.locator('[data-page="intervals:1"]').isVisible(),false);
+  // Presentation-only status fixtures, not media measurements or importable reports.
+  const statusMessages=await page.evaluate(async original=>{
+    const {repeatHTML}=await import('/repeat-view.js');
+    const cases=[
+      {...original,timeBase:null,constant:{...original.constant,status:'unavailable',unresolvedRuns:1},freeze:{status:'unavailable',reason:'时间证据不足'}},
+      {...original,timeline:{...original.timeline,status:'partial'},constant:{...original.constant,status:'partial',unresolvedRuns:1},freeze:{status:'failed',reason:'检测进程退出'}},
+    ];
+    return cases.map(value=>{
+      const doc=new DOMParser().parseFromString(repeatHTML(value),'text/html');
+      return {summary:doc.querySelector('#repeat-summary').textContent,constant:doc.querySelector('#repeat-constant-summary').textContent,freeze:doc.querySelector('#repeat-freeze').textContent};
+    });
+  },report.repeatAnalysis);
+  assert.match(statusMessages[0].summary,/缺少有效时间基.*1 段重复的持续时间未能核定/);
+  assert.match(statusMessages[1].summary,/时间戳有缺失或非递增.*持续时间未能核定/);
+  assert.match(statusMessages[0].freeze,/无法判断.*时间证据不足/);
+  assert.match(statusMessages[1].freeze,/检测失败.*检测进程退出/);
+  assert.match(statusMessages[0].constant,/0 段 · 无法判断/);
+  assert.match(statusMessages[1].constant,/0 段 · 部分可用/);
+});
+scenario('[repeat-analysis] closed freeze candidates show upstream start, end and duration without changing event evidence',async({page,app,dir})=>{
+  const file=path.join(dir,'closed-freeze.nut');
+  await run(FF,['-v','error','-y','-f','lavfi','-i','color=size=128x96:rate=24:duration=3','-f','lavfi','-i','testsrc2=size=128x96:rate=24:duration=1','-filter_complex','[0:v][1:v]concat=n=2:v=1:a=0','-c:v','rawvideo',file]);
+  await preview(page,file);await page.locator('#frame-analysis').uncheck();await page.locator('#bitrate-enabled').uncheck();await page.locator('#complexity').uncheck();await page.locator('#repeat-enabled').check();await enableFreeze(page);
+  const {report}=await runTask(page,app,'#enqueue-analyze'),segment=report.repeatAnalysis.freeze.segments[0];assert.ok(segment.end!==null&&segment.duration!==null);
+  const host=page.locator('#repeat-result');
+  assert.equal(await host.locator('#repeat-evidence').evaluate(el=>el.open),false);
+  await host.locator('#repeat-overview canvas').hover({position:await repeatPosition(page,1)});
+  assert.equal(await repeatField(page,'开始（s）').innerText(),segment.start);
+  assert.equal(await repeatField(page,'结束（s）').innerText(),segment.end);
+  assert.equal(await repeatField(page,'持续（s）').innerText(),segment.duration);
+  await host.locator('#repeat-freeze-details > summary').click();
+  await host.locator('[data-rows="segments"] tbody tr').first().waitFor();
+  assert.deepEqual((await host.locator('[data-rows="segments"] tbody tr').first().locator('td').allTextContents()).slice(0,4),[segment.start,segment.end,segment.duration,String(segment.detectedAtFrame)]);
+  await host.locator('#repeat-freeze').screenshot({path:path.join(dir,'repeat-results-expanded.png')});
+});
+scenario('[repeat-analysis] eight real static candidates share the existing count plot, retain actual time boundaries and preserve review and exports',async({page,app,dir})=>{
+  const raw=path.join(dir,'eight-static.raw'),file=path.join(dir,'eight-static.nut');
+  const frames=Array.from({length:128},(_,frame)=>Buffer.alloc(32*32,frame%16<12?40+40*(Math.floor(frame/16)%2):frame%2?220:160));
+  await writeFile(raw,Buffer.concat(frames));
+  await run(FF,['-v','error','-y','-f','rawvideo','-pixel_format','gray','-video_size','32x32','-framerate','4','-i',raw,'-c:v','rawvideo',file]);
+  await preview(page,file);await page.locator('#frame-analysis').uncheck();await page.locator('#bitrate-enabled').uncheck();await page.locator('#complexity').uncheck();await page.locator('#repeat-enabled').check();await enableFreeze(page);
+  const {report}=await runTask(page,app,'#enqueue-analyze'),r=report.repeatAnalysis;
+  assert.equal(r.freeze.status,'complete',r.freeze.reason);assert.equal(r.freeze.segments.length,8);
+  const host=page.locator('#repeat-result'),body=host.locator(':scope > .report-section-body'),canvas=host.locator('#repeat-overview canvas'),candidates=host.locator('#repeat-freeze'),rows=candidates.locator('[data-rows="segments"] tbody tr');
+  assert.equal(await host.locator('canvas').count(),1,'candidates reuse the existing duplicate-count canvas');
+  assert.equal(await host.locator('svg').count(),0);assert.equal(await rows.count(),0);
+  assert.match(await canvas.getAttribute('aria-label'),/原始时间/);
+  assert.equal(Number(await host.locator('#repeat-overview [data-field="to"]').inputValue()),31.75,'the endpoint is the last observed PTS');
+  for(let i=0;i<r.freeze.segments.length;i++){
+    const segment=r.freeze.segments[i],position=await repeatPosition(page,(Number(segment.start)+Number(segment.end))/2);
+    await canvas.hover({position});
+    assert.equal(await repeatField(page,'静止候选').innerText(),String(i+1)+' / 8');
+    assert.deepEqual(await Promise.all(['开始（s）','结束（s）','持续（s）'].map(label=>repeatField(page,label).innerText())),[segment.start,segment.end,segment.duration]);
+    assert.equal(await repeatField(page,'精确重复次数').innerText(),'1');
+  }
+  const inside=await repeatPosition(page,1.5),outside=await repeatPosition(page,3.5);
+  const alpha=await canvas.evaluate((el,positions)=>{const c=el.getContext('2d'),d=el.width/el.clientWidth;return positions.map(p=>c.getImageData(Math.floor(p.x*d),Math.floor(p.y*d),1,1).data[3]);},[inside,outside]);
+  assert.ok(alpha[0]>alpha[1],'candidate intervals are drawn behind the original curve');
+  await canvas.hover({position:outside});assert.equal(await repeatField(page,'静止候选').innerText(),'无');assert.equal(await repeatField(page,'精确重复次数').innerText(),'0');
+  await page.locator('#toggle-island').click();
+  await host.screenshot({path:path.join(dir,'eight-static-integrated.png')});
+  await body.locator(':scope > summary').click();assert.equal((await host.innerText()).trim(),'重复帧与时间诊断');
+  await body.locator(':scope > summary').click();
+  await canvas.click({position:await repeatPosition(page,29.5)});
+  assert.equal(await host.locator('#repeat-review').evaluate(el=>el.open),true);
+  assert.equal(await host.locator('#repeat-frame').inputValue(),String(r.freeze.segments[7].detectedAtFrame));
+  await candidates.locator('#repeat-freeze-details > summary').click();await rows.first().waitFor();assert.equal(await rows.count(),8);
+  for(let i=0;i<r.freeze.segments.length;i++){
+    const segment=r.freeze.segments[i];assert.deepEqual((await rows.nth(i).locator('td').allTextContents()).slice(0,4),[segment.start,segment.end,segment.duration,String(segment.detectedAtFrame)]);
+  }
+  const csvPending=page.waitForEvent('download');await candidates.locator('[data-csv="segments"]').click();
+  const csvFile=path.join(dir,'eight-static.csv');await(await csvPending).saveAs(csvFile);assert.equal((await readFile(csvFile,'utf8')).trim().split('\r\n').length,9);
+  const exported=path.join(dir,'report.json'),portable=await download(page,'#inspect-export',exported);assert.deepEqual(portable.results[0].report,report);
+  await importReport(page,exported);assert.equal(await rows.count(),0);assert.equal(await host.locator('canvas').count(),1);
+  await host.locator('#repeat-overview [data-field="x-scale"]').selectOption('manual');
+  await host.locator('#repeat-overview [data-field="from"]').fill('28.25');await host.locator('#repeat-overview [data-field="to"]').fill('28.75');await host.locator('#repeat-overview [data-op="apply"]').click();
+  assert.equal(Number(await host.locator('#repeat-overview [data-field="to"]').inputValue())-Number(await host.locator('#repeat-overview [data-field="from"]').inputValue()),.5,'time coordinates retain subsecond inspection');
+  await canvas.hover({position:await repeatPosition(page,28.5)});assert.equal(await repeatField(page,'静止候选').innerText(),'8 / 8');
+  await page.setViewportSize({width:390,height:844});assert.equal(await host.evaluate(el=>el.scrollWidth<=el.clientWidth),true);
+  await host.screenshot({path:path.join(dir,'eight-static-integrated-mobile.png')});
+});
+scenario('[repeat-analysis] low-change candidate shading never adds to exact duplicate counts',async({page,app,dir})=>{
+  const raw=path.join(dir,'changing-16.raw'),file=path.join(dir,'changing-16.nut'),frames=[];
+  for(let i=0;i<48;i++){const frame=Buffer.alloc(32*32*2);for(let j=0;j<frame.length;j+=2)frame.writeUInt16LE(i,j);frames.push(frame);}
+  await writeFile(raw,Buffer.concat(frames));await run(FF,['-v','error','-y','-f','rawvideo','-pixel_format','gray16le','-video_size','32x32','-framerate','12','-i',raw,'-c:v','rawvideo',file]);
+  await preview(page,file);await page.locator('#frame-analysis').uncheck();await page.locator('#bitrate-enabled').uncheck();await page.locator('#complexity').uncheck();await page.locator('#repeat-enabled').check();await enableFreeze(page);
+  const {report}=await runTask(page,app,'#enqueue-analyze'),r=report.repeatAnalysis;
+  assert.equal(r.exact.duplicates,0);assert.equal(r.freeze.status,'complete',r.freeze.reason);assert.equal(r.freeze.segments.length,1);
+  await page.locator('#repeat-overview canvas').hover({position:await repeatPosition(page,1)});
+  assert.equal(await repeatField(page,'精确重复次数').innerText(),'0');assert.equal(await repeatField(page,'静止候选').innerText(),'1 / 1');assert.equal(await repeatField(page,'结束（s）').innerText(),'未报告（开放）');
+});
 scenario('[table-scrolling] actual frame records scroll under fixed headers, page independently and export every row',async({page,app,dir})=>{
   const file=path.join(dir,'long-list.nut');await run(FF,['-v','error','-y','-f','lavfi','-i','testsrc2=size=32x32:rate=24:duration=6','-c:v','rawvideo',file]);
   await preview(page,file);const {report}=await runTask(page,app,'#enqueue-analyze');assert.equal(report.frames.length,144);
@@ -382,6 +621,83 @@ scenario('[table-scrolling] actual frame records scroll under fixed headers, pag
   const lines=(await readFile(out,'utf8')).trim().split('\n');assert.equal(lines.length,145);assert.equal(lines.at(-1).split(',')[0],'143');
   await page.setViewportSize({width:390,height:844});assert.ok((await viewport.boundingBox()).height<=421);assert.equal(await page.locator('#inspect-details').evaluate(el=>el.scrollWidth<=el.clientWidth),true);
 });
+scenario('[repeat-analysis] default analysis exposes one evidence panel and omits unrequested freeze screening',async({page,app,dir})=>{
+  await preview(page,media.sitiSource);await page.locator('#frame-analysis').uncheck();await page.locator('#bitrate-enabled').uncheck();await page.locator('#complexity').uncheck();await page.locator('#repeat-enabled').check();
+  assert.equal(await page.locator('#freeze-enabled').isVisible(),false,'optional screening stays in collapsed advanced options');
+  const {report}=await runTask(page,app,'#enqueue-analyze');assert.equal(report.repeatAnalysis.freeze.status,'not-requested');
+  const host=page.locator('#repeat-result');
+  assert.deepEqual(await host.locator('#repeat-evidence > summary, #repeat-review > summary').allTextContents(),['检测明细与导出','原帧复核']);
+  const layout=await host.evaluate(el=>{
+    const heading=el.querySelector('h3').getBoundingClientRect(),canvas=el.querySelector('#repeat-overview canvas').getBoundingClientRect();
+    return {beforeCanvas:canvas.top-heading.top,numberFont:getComputedStyle(el.querySelector('.repeat-cards strong')).fontSize};
+  });
+  await writeFile(path.join(dir,'repeat-default-layout.json'),JSON.stringify(layout));
+  assert.ok(parseFloat(layout.numberFont)>=23,'primary measured values keep their original visual prominence');
+  assert.ok(layout.beforeCanvas<230,'normal metadata and method paragraphs do not push the chart down');
+  const spread=await host.locator('.repeat-cards > .card').evaluateAll(cards=>cards.map(card=>card.getBoundingClientRect().left));
+  const stripWidth=(await host.locator('.repeat-cards').boundingBox()).width;
+  assert.ok(spread[2]-spread[0]>stripWidth*.6,'statistics use the available horizontal space');
+  assert.equal(await host.locator('#repeat-freeze').count(),0);assert.doesNotMatch(await host.textContent(),/静止筛查|持续静止候选|本次未选择/);
+  assert.equal(await host.locator('#repeat-summary').isVisible(),false,'zero duplicates are already explicit in the primary statistic');
+  assert.equal(await host.locator('.repeat-cards > .card').nth(1).locator('strong').textContent(),'0 次');
+  assert.doesNotMatch(await host.locator('#repeat-summary').innerText(),/比较 11/);
+  assert.equal(await host.locator('#repeat-review').evaluate(el=>el.open),false);
+  await host.evaluate(el=>scrollTo(0,Math.max(0,scrollY+el.querySelector('h3').getBoundingClientRect().top-360)));
+  const top=await host.evaluate(el=>{
+    const section=el.getBoundingClientRect(),heading=el.querySelector('h3').getBoundingClientRect(),canvas=el.querySelector('#repeat-overview canvas').getBoundingClientRect();
+    return {x:section.left,y:heading.top,width:section.width,height:canvas.top-heading.top};
+  });
+  await page.screenshot({path:path.join(dir,'repeat-default-top.png'),clip:top});
+  await host.screenshot({path:path.join(dir,'repeat-results-default.png')});
+  await page.setViewportSize({width:390,height:844});
+  assert.equal(await host.locator('#repeat-interpretation').isVisible(),false);
+  assert.match(await host.locator('.repeat-cards > .card').nth(1).locator('span').first().getAttribute('title'),/不能据此认定录制故障/);
+  assert.equal(await host.locator('#repeat-differences').isVisible(),false);
+  assert.match(await host.locator('#repeat-constant-summary').innerText(),/0 段/,'zero continuous holds remain an explicit measured result');
+  assert.equal(await host.evaluate(el=>el.scrollWidth>el.clientWidth),false,'collapsed technical content does not overflow the narrow result');
+  await page.locator('#toggle-island').click();
+  await host.locator('.repeat-cards').screenshot({path:path.join(dir,'repeat-summary-mobile.png')});
+  await host.screenshot({path:path.join(dir,'repeat-results-default-mobile.png')});
+  await page.setViewportSize({width:1440,height:900});
+  await host.locator('#repeat-evidence > summary').click();await host.locator('[data-rows="frames"] tbody tr').first().waitFor();
+  assert.equal(await host.locator('#repeat-differences').isVisible(),true);
+  assert.equal(await host.locator('[data-rows="frames"] tbody tr').count(),12);
+});
+scenario('[repeat-analysis] one native 16-bit code difference is nonzero and legacy imports retain fingerprint wording',async({page,app,dir})=>{
+  const a=Buffer.alloc(35*33*2),b=Buffer.from(a);b.writeUInt16LE(1,b.length-2);
+  const c=Buffer.from(b),d=Buffer.from(b);c.writeUInt16LE(3,c.length-2);d.writeUInt16LE(6,d.length-2);
+  const raw=path.join(dir,'one-code.raw'),file=path.join(dir,'one-code.nut');await writeFile(raw,Buffer.concat([a,a,b,b,c,d]));
+  await run(FF,['-v','error','-y','-f','rawvideo','-pixel_format','gray16le','-video_size','35x33','-framerate','1','-i',raw,'-c:v','rawvideo','-threads:v','1',file]);
+  await preview(page,file);await page.locator('#frame-analysis').uncheck();await page.locator('#bitrate-enabled').uncheck();await page.locator('#complexity').uncheck();await page.locator('#repeat-enabled').check();
+  const {report}=await runTask(page,app,'#enqueue-analyze'),r=report.repeatAnalysis;
+  assert.equal(r.exact.duplicates,2);assert.deepEqual(r.differenceSummary.counts,{equal:2,'one-code':1,'two-codes':1,larger:1});
+  const host=page.locator('#repeat-result');
+  assert.equal(await host.locator('#repeat-evidence').evaluate(el=>el.open),false);
+  assert.equal(await host.locator('#repeat-differences').isVisible(),false);
+  assert.deepEqual(await host.locator('#repeat-differences dt').allTextContents(),['逐值相等','最大差 1 码值','最大差 2 码值','最大差超过 2 码值']);
+  assert.deepEqual(await host.locator('#repeat-differences dd').allTextContents(),['2 次','1 次','1 次','1 次']);
+  await host.screenshot({path:path.join(dir,'repeat-measurements-collapsed.png')});
+  await host.locator('#repeat-evidence > summary').click();await host.locator('[data-rows="frames"] tbody tr').first().waitFor();
+  assert.equal(await host.locator('#repeat-differences').isVisible(),true);
+  assert.deepEqual(await host.locator('#repeat-differences dd').allTextContents(),['2 次','1 次','1 次','1 次']);
+  await host.screenshot({path:path.join(dir,'repeat-measurements-expanded.png')});
+  await host.locator('#repeat-evidence > summary').click();assert.equal(await host.locator('#repeat-differences').isVisible(),false);
+  await host.locator('#repeat-evidence > summary').click();assert.equal(await host.locator('#repeat-differences').isVisible(),true);
+  const row=await host.locator('[data-rows="frames"] tbody tr').nth(2).locator('td').allTextContents();
+  assert.deepEqual(row.slice(5,9),['否','1','1','1']);
+  const legacy=structuredClone(report);legacy.repeatAnalysis.configurationVersion=1;legacy.repeatAnalysis.algorithm='FFmpeg/rawvideo/framehash/SHA256';
+  for(const key of ['differenceConfiguration','differenceSummary','constant','sourceClassification','tools'])delete legacy.repeatAnalysis[key];delete legacy.repeatAnalysis.source.contentSha256;
+  for(const f of legacy.repeatAnalysis.frames){delete f.equalPrevious;delete f.difference;}
+  const saved=path.join(dir,'legacy.json');await saveImportFixture(saved,legacy);await importReport(page,saved);
+  assert.match(await host.textContent(),/旧方法版本 1.*未进行逐值确认/);assert.doesNotMatch(await host.textContent(),/相邻帧最大样本差分布/);
+  assert.equal(await host.locator('#repeat-constant-summary').count(),0,'legacy reports do not invent a measured constant-interval count');
+  assert.match(await host.locator('#repeat-summary').innerText(),/旧版指纹比较，未进行逐值确认/);
+  assert.equal(await host.locator('#repeat-summary').isVisible(),true,'legacy method limitations must remain visible');
+  await writeFile(path.join(dir,'report.json'),JSON.stringify(report));
+});
+async function enableFreeze(page){
+  await page.locator('#repeat-options > details > summary').click();await page.locator('#freeze-enabled').check();
+}
 async function preview(page,file=media.source){
   const response=page.waitForResponse(r=>r.url().endsWith('/api/probe')&&r.request().method()==='POST');
   await page.locator('#file').fill(file);
@@ -425,13 +741,13 @@ async function download(page,button,file){
 async function analyze(page,app){await preview(page);await page.locator('#bitrate-enabled').check();return runTask(page,app,'#enqueue-analyze')}
 scenario('[section-folding] all result panels fold natively and preserve charts, warnings, navigation and exported evidence',async({page,app,dir})=>{
   await preview(page,media.sitiSource);await page.locator('#complexity').check();
-  await page.locator('#bitrate-enabled').check();
+  await page.locator('#bitrate-enabled').check();await page.locator('#repeat-enabled').check();
   const {report,job}=await runTask(page,app,'#enqueue-analyze');assert.equal(report.content.available,true,report.content.reason);
-  assert.deepEqual(report.analysisTargets,{frames:true,bitrate:true,complexity:true});
+  assert.deepEqual(report.analysisTargets,{frames:true,bitrate:true,complexity:true,repeat:true});
   assert.equal(report.content.execution.requestedDevice,'gpu','default submission requests GPU and retains the backend CPU fallback');
   const root=page.locator('#inspect-details'),panels=root.locator(':scope > .section > .report-section-body');
   assert.equal(await panels.count(),await root.locator(':scope > .section').count());
-  assert.ok(await panels.count()>=6);
+  assert.ok(await panels.count()>=7);
   assert.ok(await panels.evaluateAll(items=>items.every(item=>item.open===!!item.parentElement.dataset.analysisTarget)));
   const frame=root.locator(':scope > .section').filter({has:page.getByRole('heading',{name:'帧结构与 GOP',exact:true})});
   const frameBody=frame.locator(':scope > .report-section-body'),canvas=await frame.locator('#frame-plot canvas').elementHandle();
@@ -564,6 +880,12 @@ scenario('[analysis-notes] measured methods collapse by module while current sce
   }
 });
 scenario('[analysis-targets] automatic preview and independent targets follow the queue workflow and survive import',async({page,app,dir})=>{
+  await singleRow(page.locator('.analysis-target-grid > .analysis-target'),4);
+  await page.locator('.analysis-target-grid').screenshot({path:path.join(dir,'analysis-targets-desktop.png')});
+  await page.setViewportSize({width:390,height:844});
+  assert.equal(await page.locator('.analysis-target-grid').evaluate(el=>el.scrollWidth<=el.clientWidth),true);
+  await page.locator('.analysis-target-grid').screenshot({path:path.join(dir,'analysis-targets-mobile.png')});
+  await page.setViewportSize({width:1440,height:900});
   assert.equal(await page.locator('#frame-analysis').isChecked(),true);
   assert.equal(await page.locator('#bitrate-enabled').isChecked(),true);
   assert.equal(await page.locator('#complexity').isChecked(),true);
@@ -1421,7 +1743,7 @@ scenario('[packet-distribution] actual audio packets, optional rates and frame a
   await page.screenshot({path:path.join(dir,'legacy-packet-distribution.png'),fullPage:true});
 });
 
-scenario('[portable] real export/import restores measured frames without queuing or changing the report',async({page,app,dir})=>{
+scenario('[portable] 0.5 export and 0.4 import restore measured frames without queuing or changing the report',async({page,app,dir})=>{
   const {report}=await analyze(page,app),file=path.join(dir,'round-trip.json');
   const saved=await download(page,'#inspect-export',file);
   await page.reload();await page.waitForFunction(()=>document.querySelector('#environment')?.textContent.includes('ffmpeg version'));
@@ -1430,6 +1752,12 @@ scenario('[portable] real export/import restores measured frames without queuing
   await page.locator('#inspect-details').getByRole('heading',{name:'帧结构与 GOP',exact:true}).waitFor();
   const restored=await download(page,'#inspect-export',path.join(dir,'restored.json'));
   assert.deepEqual(restored.results[0].report,report);assert.deepEqual(saved.results[0].report,report);
+  // Compatibility envelope around real measurements; not a historical measurement fixture.
+  const legacy=JSON.parse(await readFile(file,'utf8'));legacy.formatVersion='0.4';
+  const legacyFile=path.join(dir,'compatible-04.json');await writeFile(legacyFile,JSON.stringify(legacy));
+  await importReport(page,legacyFile);await page.waitForFunction(()=>document.querySelector('#task-message')?.textContent.includes('已导入 compatible-04.json'));
+  const rewritten=await download(page,'#inspect-export',path.join(dir,'rewritten-05.json'));
+  assert.deepEqual(rewritten.results[0].report,report);assert.equal(JSON.parse(await readFile(legacyFile,'utf8')).formatVersion,'0.4');
   assert.equal((await app.request('status')).jobs.length,before);
 });
 

@@ -157,6 +157,8 @@ export function plot(
     yFactor = 1,
     xEnd,
     height,
+    regions = [],
+    minXSpan = 1,
   } = {},
 ) {
   const focusedControl = document.activeElement,
@@ -220,7 +222,7 @@ export function plot(
   const minimum = data[0][0],
     last = Number.isFinite(xEnd) && xEnd > data.at(-1)[0] ? xEnd : intervals ? data.at(-1)[2].end : data.at(-1)[0] + (frames ? 1 : 0),
     maximum = last > minimum ? last : minimum + 1,
-    minSpan = frames ? 1 : stems ? Math.min(1e-6, (maximum - minimum) / 10) : Math.min(1, (maximum - minimum) / 10);
+    minSpan = frames ? 1 : stems ? Math.min(1e-6, (maximum - minimum) / 10) : Math.min(minXSpan, (maximum - minimum) / 10);
   let a = minimum,
     b = maximum,
     w = 0,
@@ -303,6 +305,22 @@ export function plot(
     }
     c.save();
     c.beginPath();c.rect(left, top, Math.max(0, w - left - right), base - top);c.clip();
+    for (const region of regions) {
+      if (region.end <= a || region.start >= b) continue;
+      const start=px(Math.max(a,region.start)),end=px(Math.min(b,region.end));
+      c.fillStyle='rgba(245,158,11,0.14)';c.fillRect(start,top,end-start,base-top);
+      c.strokeStyle='#d97706';c.lineWidth=1;c.setLineDash(region.open?[4,3]:[]);
+      c.beginPath();c.moveTo(start,top);c.lineTo(end,top);c.moveTo(start,top);c.lineTo(start,base);
+      if (!region.open && region.end <= b) {c.moveTo(end,top);c.lineTo(end,base);}
+      c.stroke();
+      if(region.open){
+        c.save();c.beginPath();c.rect(start,top,end-start,base-top);c.clip();
+        c.strokeStyle='rgba(217,119,6,0.3)';c.setLineDash([]);
+        for(let x=start-(base-top);x<end;x+=12){c.beginPath();c.moveTo(x,base);c.lineTo(x+base-top,top);c.stroke();}
+        c.restore();
+      }
+    }
+    c.setLineDash([]);
     if (frames) {
       const bw = Math.max(1, (w - left - right) / (b - a));
       for (const p of finite) {

@@ -118,6 +118,17 @@
               <label class="target-toggle"><input id="complexity" type="checkbox" checked aria-controls="siti-settings" /> SI/TI 内容复杂度</label>
               <p class="hint">测量空间细节与帧间运动变化。</p>
             </div>
+            <div class="analysis-target">
+              <label class="target-toggle"><input id="repeat-enabled" type="checkbox" aria-controls="repeat-options" /> 重复帧与时间诊断</label>
+              <p class="hint">原生样本逐值相等、细微码值差异、持续不变段与原始 PTS 间隔。</p>
+            </div>
+          </div>
+          <div id="repeat-options" class="analysis-target-settings hidden">
+            <details>
+              <summary>高级选项</summary>
+              <label><input id="freeze-enabled" type="checkbox" disabled /> 筛查持续静止画面（至少 2 秒）</label>
+              <p class="hint">静止筛查按画面变化阈值生成候选，供人工复核；正常静态画面也可能命中。</p>
+            </details>
           </div>
           <div id="bitrate-options" class="analysis-target-settings hidden">
             <h3>区间码率设置</h3>

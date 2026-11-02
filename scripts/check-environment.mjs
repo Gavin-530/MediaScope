@@ -1,5 +1,6 @@
 import {execFileSync, spawn} from 'node:child_process';
 import {mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync} from 'node:fs';
+import {pathToFileURL} from 'node:url';
 import path from 'node:path';
 import {get} from 'node:http';
 
@@ -36,6 +37,18 @@ try {
   }
   for(const metric of ['psnr','ssim','libvmaf=model=version=vmaf_v0.6.1'])
     run(ffmpeg,['-v','error','-i',path.join(temp,'libx264.mkv'),'-filter_complex',`split[a][b];[a][b]${metric}`,'-f','null','-']);
+  const optional={};
+  try{
+    process.env.FFMPEG_PATH=ffmpeg;process.env.FFPROBE_PATH=ffprobe;
+    const file=path.join(temp,'repeat.nut');
+    run(ffmpeg,['-v','error','-nostdin','-f','lavfi','-i','color=size=32x32:rate=4:duration=3','-c:v','rawvideo',file]);
+    const stream=JSON.parse(run(ffprobe,['-v','error','-show_streams','-of','json',file])).streams[0];
+    const {analyzeRepeats}=await import(pathToFileURL(path.join(app,'repeat.mjs')));
+    const r=await analyzeRepeats(file,stream,{signal:AbortSignal.timeout(30000)}, {freeze:true});
+    if(r.status!=='complete'||r.configurationVersion!==2||r.exact.duplicates!==11||r.frames[0].equalPrevious!==null||!r.frames.slice(1).every(f=>f.equalPrevious===true&&f.difference===null)||r.differenceSummary.counts.equal!==11||r.constant.segments.length!==1)throw Error('native sample comparison smoke mismatch');
+    optional.repeatAnalysis={status:'ready',configurationVersion:r.configurationVersion};
+    optional.freezeDetection=r.freeze.status==='complete'&&r.freeze.events.length===1?{status:'ready'}:{status:'unavailable',reason:r.freeze.reason??'freezedetect smoke mismatch'};
+  }catch(e){optional.repeatAnalysis={status:'unavailable',reason:e.message};optional.freezeDetection={status:'unavailable',reason:'原生重复测量能力未通过检查'};}
   // Probe an actual HTTP response before allowing the application pointer to change.
   const child=spawn(process.execPath,[path.join(app,'server.mjs')],{cwd:app,windowsHide:true,env:{...process.env,MEDIASCOPE_STARTUP_RESULT:'',MEDIASCOPE_DESKTOP:'0',PORT:'0',MEDIASCOPE_DATA_DIR:temp,FFMPEG_PATH:ffmpeg,FFPROBE_PATH:ffprobe}});
   try {
@@ -60,5 +73,5 @@ try {
       });
     });
   } finally { child.kill(); await new Promise(resolve=>child.exitCode!==null?resolve():child.once('exit',resolve)); }
-  writeFileSync(output,JSON.stringify({compatibility:lock.compatibility,versions,checkedAt:new Date().toISOString().replace(/\.\d{3}Z$/,'Z')},null,2));
+  writeFileSync(output,JSON.stringify({compatibility:lock.compatibility,versions,optional,checkedAt:new Date().toISOString().replace(/\.\d{3}Z$/,'Z')},null,2));
 } finally {rmSync(temp,{recursive:true,force:true})}
