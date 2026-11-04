@@ -85,7 +85,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/recover-test-evidenc
 
 ## GitHub 自动测试
 
-[产品工作流](../.github/workflows/tests.yml) 在分支 push、PR、merge_group 和 workflow_dispatch 使用 Windows Server 2022 x64，下载并校验锁定运行时，执行 `npm ci --ignore-scripts` 和 `node scripts/test.mjs --release`。Tag push 不再重复触发同提交的完整通用回归；发布仍须核验 Tag 指向的确切 SHA 已有合格通用记录，没有则手动对该 Tag 运行 workflow_dispatch。PR 合并测试 SHA 不同则不能复用。Edge 使用 runner 已装版本并记录身份；硬件精度矩阵由独立 GPU 范围覆盖。本地保存文件不触发远端测试，工作流修改提交推送后才生效。现有 job 名 `Windows full regression` 保留以兼容既有必需检查配置，其范围为通用回归。
+[产品工作流](../.github/workflows/tests.yml) 在分支 push、`verify-main-*` 临时验证标签 push、PR、merge_group 和 workflow_dispatch 使用 Windows Server 2022 x64，下载并校验锁定运行时，执行 `npm ci --ignore-scripts` 和 `node scripts/test.mjs --release`。临时验证标签用于只在 `main` 开发时，让最终提交先取得 push 事件产生的必需检查；主线接收同一 SHA 后删除该标签。版本 Tag push 不重复触发同提交的完整通用回归；发布仍须核验 Tag 指向的确切 SHA 已有合格通用记录，没有则手动对该 Tag 运行 workflow_dispatch。手动运行的通过记录不能自动视为已满足主分支门禁，仍须核对服务器实际接受的必需检查。PR 合并测试 SHA 不同则不能复用。Edge 使用 runner 已装版本并记录身份；硬件精度矩阵由独立 GPU 范围覆盖。本地保存文件不触发远端测试，工作流修改提交推送后才生效。现有 job 名 `Windows full regression` 保留以兼容既有必需检查配置，其范围为通用回归。
 
 本地和远端是独立执行，不合并通过数。记录仓库、测试 SHA、run_id、run_attempt、job 和事件；PR 的 head SHA 与实际合并测试 SHA 分别保留。比较结果须核对源码、验证器、实际工具和范围，不要求日志/截图字节相同。当前只有一个产品回归 job，扩展矩阵前须同步扩展证据身份及产物名。
 

@@ -119,17 +119,11 @@
               <p class="hint">测量空间细节与帧间运动变化。</p>
             </div>
             <div class="analysis-target">
-              <label class="target-toggle"><input id="repeat-enabled" type="checkbox" aria-controls="repeat-options" /> 重复帧与时间诊断</label>
+              <label class="target-toggle"><input id="repeat-enabled" type="checkbox" checked aria-controls="repeat-options" /> 重复帧与时间诊断</label>
               <p class="hint">原生样本逐值相等、细微码值差异、持续不变段与原始 PTS 间隔。</p>
             </div>
           </div>
-          <div id="repeat-options" class="analysis-target-settings hidden">
-            <details>
-              <summary>高级选项</summary>
-              <label><input id="freeze-enabled" type="checkbox" disabled /> 筛查持续静止画面（至少 2 秒）</label>
-              <p class="hint">静止筛查按画面变化阈值生成候选，供人工复核；正常静态画面也可能命中。</p>
-            </details>
-          </div>
+          <div class="analysis-settings-grid">
           <div id="bitrate-options" class="analysis-target-settings hidden">
             <h3>区间码率设置</h3>
             <label>码率计算窗口<select id="bitrate-window" disabled><option value="100">100 ms</option><option value="1000">1 秒</option></select></label>
@@ -153,6 +147,8 @@
           >
         </div>
         <p id="siti-device-status" class="hint" role="status" aria-live="polite">优先使用 GPU；运行前自检，不可用或设备执行失败时回退 CPU。</p>
+        <details id="siti-scene-settings" class="siti-options">
+          <summary>场景范围</summary>
         <div class="row siti-options">
           <label for="siti-scenes">场景范围<select id="siti-scenes" disabled>
             <option value="unconfirmed">边界未确认（全片参考）</option>
@@ -162,10 +158,11 @@
           <label id="siti-scene-frames-label" class="hidden" for="siti-scene-frames">各场景起始帧（从 1 计数，须包含 1）<input id="siti-scene-frames" placeholder="例如 1, 101, 251" disabled /></label>
         </div>
         <p id="siti-scene-hint" class="hint">未确认场景边界，剪辑点可能影响 TI。</p>
+        </details>
         <details id="siti-input-settings" class="siti-options">
           <summary>SI/TI 输入设置</summary>
           <p class="hint">默认按文件声明解释输入；声明缺失或不准确时，请核实后在此确认。</p>
-          <div class="row">
+          <div class="row siti-input-grid">
             <label>亮度范围<select id="siti-range" disabled><option value="auto">按文件声明</option><option value="tv">用户确认：有限范围</option><option value="pc">用户确认：全范围</option></select></label>
             <label>传递函数<select id="siti-transfer" disabled><option value="auto">按文件声明</option><option value="sdr">SDR（BT.1886）</option><option value="srgb">SDR（逆 sRGB）</option><option value="pq">PQ</option><option value="hlg">HLG</option></select></label>
             <label>RGB 亮度矩阵<select id="siti-matrix" disabled><option value="auto">按一致的矩阵／色原色声明</option><option value="bt601">BT.601</option><option value="bt709">BT.709</option><option value="bt2020">BT.2020 非恒定亮度</option></select></label>
@@ -176,12 +173,15 @@
             <label>HLG 显示黑位（cd/m²）<input id="siti-hlg-black" type="number" min="0" step="any" value="0.01" disabled /></label>
           </div>
         </details>
-        <details class="siti-options">
-          <summary>计算方法与限制</summary>
-          <p class="hint">采用 siti-tools 0.6.0 的 PQ 计算流程及 255 输出尺度；扩展布局与位深单独验证。浮点亮度和半透明输入缺少参考依据时不计算 SI/TI。</p>
-          <p class="hint">GPU 用于 SI/TI 计算，视频仍由软件解码；不支持当前输入或设备执行失败时回退 CPU。并行上限仅影响 CPU，实际并发按 CPU、可用内存与帧数调整，异常时回退串行。</p>
-          <p class="hint">单轨最多 2,000,000 个显示帧；SI/TI 总像素最多 35,389,440（8192×4320）。实际执行仍需满足格式和资源条件。仅选 SI/TI 时仍会核验显示帧，不解析 GOP 或编码帧头。</p>
-        </details>
+          </div>
+          <div id="repeat-options" class="analysis-target-settings hidden">
+            <h3>重复帧与时间诊断设置</h3>
+            <details open>
+              <summary>静止画面筛查</summary>
+              <label><input id="freeze-enabled" type="checkbox" disabled /> 筛查持续静止画面（至少 2 秒）</label>
+              <p class="hint">静止筛查按画面变化阈值生成候选，供人工复核；正常静态画面也可能命中。</p>
+            </details>
+          </div>
           </div>
         </fieldset>
         <div class="analysis-submit">

@@ -1,6 +1,6 @@
 import {test,before} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdir,writeFile} from 'node:fs/promises';
+import {mkdir,writeFile,readFile} from 'node:fs/promises';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {FP,run,probe,readPixelFormats} from '../engine.mjs';
@@ -117,9 +117,22 @@ test('[basic-properties] same-runtime baseline versus supplemented probe timing 
   const memoryInput=path.join(root,'memory-input.json'),memoryOutput=path.join(root,'memory-output.json');
   await writeFile(memoryInput,JSON.stringify([...observations[0].commands,...observations[0].fullCommands]));
   execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',path.resolve('testing-tools/helpers/probe-memory.ps1'),'-InputPath',memoryInput,'-OutputPath',memoryOutput],{windowsHide:true,timeout:60000});
-  const {readFile}=await import('node:fs/promises');
   evidence.performance.toolMemory=JSON.parse((await readFile(memoryOutput,'utf8')).replace(/^\uFEFF/,''));
   for(const row of evidence.performance.toolMemory){assert.equal(row.exitCode,0);assert.ok(row.observedPeakWorkingSetBytes>0&&row.observedPeakWorkingSetBytes<256*1024**2)}
   evidence.performance.scope='Same fixture and runtime: Node RSS snapshots plus OS peak-working-set observations for individual FFprobe processes; sampling may miss final allocation, not a throughput claim';
   await writeFile(path.join(root,'measured-properties.json'),JSON.stringify(evidence));
+});
+test('[basic-properties] memory observer retains fast child exit codes and both output streams',async()=>{
+  const folder=path.join(root,'observer-exit-status');await mkdir(folder,{recursive:true});
+  const statuses=[0,7,0,7,0,7,0,7];
+  const commands=statuses.map((status,i)=>({exe:process.execPath,cwd:folder,args:['-e',`process.stdout.write('out-${i}');process.stderr.write('err-${i}');process.exit(${status})`]}));
+  const input=path.join(folder,'input.json'),output=path.join(folder,'output.json');
+  await writeFile(input,JSON.stringify(commands));
+  execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',path.resolve('testing-tools/helpers/probe-memory.ps1'),'-InputPath',input,'-OutputPath',output],{windowsHide:true,timeout:60000});
+  const rows=JSON.parse((await readFile(output,'utf8')).replace(/^\uFEFF/,''));
+  assert.deepEqual(rows.map(row=>row.exitCode),statuses,'nonzero exits must never be replaced with success');
+  for(let i=0;i<statuses.length;i++){
+    assert.equal(await readFile(path.join(folder,`memory-${i}.stdout`),'utf8'),`out-${i}`);
+    assert.equal(await readFile(path.join(folder,`memory-${i}.stderr`),'utf8'),`err-${i}`);
+  }
 });

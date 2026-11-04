@@ -96,6 +96,228 @@ async function singleRow(locator,count){
   assert.equal(boxes.length,count);
   assert.ok(boxes.every(box=>box.width>0)&&Math.max(...boxes.map(box=>box.top))-Math.min(...boxes.map(box=>box.top))<1,'desktop items share one row');
 }
+scenario('[charts] zero references and hover guides match actual points and half-open intervals without changing ranges',async({page,dir})=>{
+  // Declared mathematical chart inputs exercise the real renderer, not a media report.
+  await page.evaluate(async()=>{
+    const {plot}=await import('/charts.js'),host=document.createElement('section');
+    host.id='guide-contract';host.style.cssText='width:661px;max-width:100%;';document.body.append(host);
+    const proto=CanvasRenderingContext2D.prototype,scale=proto.scale,fillText=proto.fillText,labels=new WeakMap();
+    window.testGuideLabels=labels;
+    proto.scale=function(...args){labels.set(this.canvas,[]);return scale.apply(this,args);};
+    proto.fillText=function(text,x,y,...args){
+      labels.get(this.canvas)?.push({text:String(text),x,y,align:this.textAlign});
+      return fillText.call(this,text,x,y,...args);
+    };
+    window.testDrawGuide=(data,options={})=>{
+      window.testGuidePlot?.dispose();
+      window.testGuideData=data;window.testGuideOriginal=JSON.stringify(data);
+      window.testGuidePlot=plot(host,data,{unit:'测试量',...options});
+    };
+    window.testDrawGuide([[-1,2],[1,6],[3,4]]);
+  });
+  const host=page.locator('#guide-contract'),canvas=host.locator('canvas'),guide=host.locator('.plot-hover-line'),readout=host.locator('.chart-label');
+  const axisLabels=()=>canvas.evaluate(canvas=>window.testGuideLabels.get(canvas).filter(p=>p.align==='center'&&Math.abs(p.y-(canvas.clientHeight-32))<.1));
+  const move=async(value,y=40)=>{
+    await canvas.scrollIntoViewIfNeeded();const box=await canvas.boundingBox();
+    const a=Number(await host.locator('[data-field="from"]').inputValue()),b=Number(await host.locator('[data-field="to"]').inputValue());
+    const x=76+(box.width-101)*(value-a)/(b-a);
+    await page.mouse.move(box.x+x,box.y+y);return {box,x};
+  };
+  await canvas.scrollIntoViewIfNeeded();
+  assert.equal(await guide.isVisible(),false,'the idle chart has no hover guide');
+  const zeros=(await axisLabels()).filter(p=>p.text==='0'),box=await canvas.boundingBox();
+  assert.equal(zeros.length,1,'zero coinciding with a regular tick has one label');
+  assert.ok(Math.abs(zeros[0].x-(76+(box.width-101)/4))<.01,'zero stays at its true media coordinate');
+  const alpha=await canvas.evaluate(canvas=>{
+    const context=canvas.getContext('2d'),factor=canvas.width/canvas.clientWidth,width=canvas.clientWidth-101;
+    const column=x=>{const pixels=context.getImageData(Math.floor((x-1)*factor),Math.floor(25*factor),Math.ceil(3*factor),1).data;let sum=0;for(let i=3;i<pixels.length;i+=4)sum+=pixels[i];return sum;};
+    return {zero:column(76+width/4),grid:column(76+width*3/4)};
+  });
+  assert.ok(alpha.zero>alpha.grid*1.5,'the real zero reference is slightly stronger than an ordinary grid line');
+  await move(.3);
+  assert.equal(await guide.isVisible(),true);
+  assert.equal(await host.locator('.chart-number').first().textContent(),'1','a point readout uses the nearest actual observation');
+  assert.ok(Math.abs(Number.parseFloat(await guide.evaluate(el=>el.style.left))-(76+(box.width-101)/2))<.01,'the guide snaps to the same observation');
+  assert.equal(await guide.evaluate(el=>getComputedStyle(el).pointerEvents),'none');
+  const fieldNames=await readout.locator('dt').allTextContents();
+  await page.mouse.move(box.x+50,box.y+40);
+  assert.equal(await guide.isVisible(),false,'axis margins do not select data');
+  assert.deepEqual(await readout.locator('dd').allTextContents(),['—','—'],'inactive readouts do not retain an unmarked last value');
+  assert.deepEqual(await readout.locator('dt').allTextContents(),fieldNames,'clearing a readout retains its field layout');
+  await move(.3);await host.screenshot({path:path.join(dir,'point-hover-guide.png')});
+  await page.mouse.move(box.x+box.width+5,box.y+40);
+  assert.equal(await guide.isVisible(),false,'leaving the canvas removes the transient line');
+  await page.evaluate(()=>window.testDrawGuide([[-1,2,{end:0}],[0,4,{end:1}],[1,6,{end:3}]],{
+    intervals:true,describe:p=>[{label:'测量区间',value:`[${p[0]}, ${p[2].end})`},{label:'区间值',value:p[1]}],
+  }));
+  const inside=await move(.5);
+  assert.equal(await readout.locator('dd').first().textContent(),'[0, 1)');
+  assert.ok(Math.abs(Number.parseFloat(await guide.evaluate(el=>el.style.left))-inside.x)<.01,'an interval guide follows the pointer within its full measurement window');
+  await move(.5,130);assert.equal(await readout.locator('dd').first().textContent(),'[0, 1)','vertical pointer motion cannot change an interval statistic');
+  await move(0);assert.equal(await readout.locator('dd').first().textContent(),'[0, 1)','an exact boundary belongs to the following half-open interval');
+  await move(3);assert.equal(await guide.isVisible(),false,'the final exclusive endpoint does not belong to the last bin');
+  await move(.5);await host.screenshot({path:path.join(dir,'interval-hover-guide.png')});
+  await page.evaluate(()=>window.testGuidePlot.setRange(.25,2));
+  assert.equal(await guide.isVisible(),false);assert.deepEqual(await readout.locator('dd').allTextContents(),['—','—'],'horizontal navigation clears stale readouts');
+  assert.equal((await axisLabels()).filter(p=>p.text==='0').length,0,'a viewport excluding zero has no zero reference');
+  await move(.5);assert.equal(await readout.locator('dd').first().textContent(),'[0, 1)','a partially visible measurement retains its complete interval boundaries');
+  const drag=await move(.5);await page.mouse.down();
+  assert.equal(await guide.isVisible(),false,'drag selection does not add a second positioning indicator');
+  await page.mouse.move(drag.box.x+76+(drag.box.width-101)*.75,drag.box.y+40);await page.mouse.up();
+  assert.equal(await guide.isVisible(),false);
+  assert.equal(await page.evaluate(()=>JSON.stringify(window.testGuideData)===window.testGuideOriginal),true,'hovering and zooming leave all observations unchanged');
+  for(const [data,count] of [[[[.011024,2],[60,6]],0],[[[-3,2],[-1,6]],0],[[[0,2],[60,6]],1],[[[-.000001,2],[60,6]],1]]){
+    await page.evaluate(data=>window.testDrawGuide(data),data);
+    assert.equal((await axisLabels()).filter(p=>p.text==='0').length,count);
+    assert.equal(Number(await host.locator('[data-field="from"]').inputValue()),data[0][0],'reference lines never force the source start to zero');
+  }
+  await host.screenshot({path:path.join(dir,'zero-near-edge.png')});
+  await page.setViewportSize({width:390,height:844});
+  const narrow=await move(45);
+  assert.ok(Math.abs(Number.parseFloat(await guide.evaluate(el=>el.style.left))-(narrow.box.width-25))<.1,'a resized point guide remains on the selected endpoint');
+  assert.equal(await host.evaluate(el=>el.scrollWidth<=el.clientWidth),true,'the overlay does not widen the chart on a narrow screen');
+  await host.screenshot({path:path.join(dir,'hover-guide-mobile.png')});
+});
+
+scenario('[charts] clicking relocates a pin and only its displayed line cancels it, without an Escape shortcut',async({page,dir})=>{
+  // Declared mathematical observations exercise native pointer/keyboard events.
+  await page.evaluate(async()=>{
+    const {plot}=await import('/charts.js'),host=document.createElement('section');
+    host.id='pin-contract';host.style.cssText='width:661px;max-width:100%;';document.body.append(host);
+    window.testPinPicks=[];
+    window.testDrawPin=(intervals=false)=>{
+      window.testPinPlot?.dispose();
+      const data=intervals?[[-1,2,{end:0}],[0,4,{end:1}],[1,6,{end:3}]]:[[-1,2,null,'a'],[.7,6,null,'a'],[3,4,null,'a']];
+      window.testPinData=data;window.testPinOriginal=JSON.stringify(data);
+      window.testPinPlot=plot(host,data,{unit:'测试量',intervals,
+        series:intervals?[]:[{id:'a',name:'曲线 A',color:'#10b981'}],
+        describe:intervals?p=>[{label:'测量区间',value:`[${p[0]}, ${p[2].end})`},{label:'区间值',value:p[1]}]:undefined,
+        onPick:(p,{x})=>window.testPinPicks.push({record:p[0],x})});
+    };
+    window.testDrawPin();
+  });
+  const host=page.locator('#pin-contract'),canvas=host.locator('canvas'),guide=host.locator('.plot-hover-line'),readout=host.locator('.chart-label');
+  const position=async(value)=>{
+    await canvas.scrollIntoViewIfNeeded();const box=await canvas.boundingBox();
+    const a=Number(await host.locator('[data-field="from"]').inputValue()),b=Number(await host.locator('[data-field="to"]').inputValue());
+    return {x:box.x+76+(box.width-101)*(value-a)/(b-a),y:box.y+40};
+  };
+  const move=async(value)=>{const p=await position(value);await page.mouse.move(p.x,p.y);return p;};
+  const click=async(value)=>{const p=await position(value);await page.mouse.click(p.x,p.y);};
+  const clickLine=async(offset=0)=>{
+    await canvas.scrollIntoViewIfNeeded();
+    const line=await guide.boundingBox(),box=await canvas.boundingBox();
+    await page.mouse.click(line.x+line.width/2+offset,box.y+40);
+  };
+  await move(.3);
+  assert.equal(await guide.evaluate(el=>getComputedStyle(el).borderLeftStyle),'dashed');
+  await click(.3);
+  const pinned=await readout.textContent(),left=await guide.evaluate(el=>el.style.left),height=(await readout.boundingBox()).height;
+  assert.match(await canvas.getAttribute('aria-label'),/读数已固定/);
+  assert.equal(await guide.evaluate(el=>getComputedStyle(el).borderLeftStyle),'solid');
+  assert.equal(await readout.locator('dd').first().textContent(),'0.7','pinning a point retains the actual observation time');
+  await move(2.7);
+  assert.equal(await readout.textContent(),pinned,'moving over another point cannot change a pinned readout');
+  assert.equal(await guide.evaluate(el=>el.style.left),left);
+  const box=await canvas.boundingBox();await page.mouse.move(box.x+box.width+5,box.y+40);
+  assert.equal(await guide.isVisible(),true,'an explicit pin survives leaving the plot');
+  assert.equal(await readout.textContent(),pinned);
+  const lineBox=await guide.boundingBox();
+  assert.ok(Math.abs(lineBox.y-box.y-12)<.1,'the overlay starts at the actual canvas, below the legend');
+  assert.ok(Math.abs(lineBox.height-(box.height-62))<.1);
+  await host.screenshot({path:path.join(dir,'pinned-point-readout.png')});
+  await click(.3);
+  assert.equal(await readout.textContent(),pinned,'another click selecting the same snapped sample does not cancel away from the line');
+  await click(2.7);
+  assert.equal(await guide.isVisible(),true,'a different position directly replaces the pin');
+  assert.equal(await readout.locator('dd').first().textContent(),'3');
+  assert.notEqual(await guide.evaluate(el=>el.style.left),left);
+  const relocated=await readout.textContent();
+  await page.keyboard.press('Escape');
+  assert.equal(await readout.textContent(),relocated,'Escape no longer changes the pin');
+  assert.equal(await guide.isVisible(),true);
+  assert.equal(await canvas.getAttribute('aria-keyshortcuts'),null);
+  assert.doesNotMatch(await canvas.getAttribute('aria-label'),/Esc/);
+  await clickLine(-8);
+  assert.equal(await guide.isVisible(),true,'a click beyond the line target remains a selection, even if it snaps to the same sample');
+  assert.deepEqual(await page.evaluate(()=>window.testPinPicks.map(p=>p.record)),[.7,.7,3,3],'new selections preserve existing detail/navigation callbacks');
+  await clickLine(3);
+  assert.equal(await guide.isVisible(),false,'the displayed line has a small target even beside the right plot boundary');
+  assert.deepEqual(await readout.locator('dd').allTextContents(),['—','—']);
+  assert.equal((await readout.boundingBox()).height,height,'clearing values does not collapse the readout');
+  assert.equal(await page.evaluate(()=>window.testPinPicks.length),4,'canceling does not select another record');
+  await click(.3);await clickLine(-3);
+  assert.equal(await guide.isVisible(),false);assert.deepEqual(await readout.locator('dd').allTextContents(),['—','—']);
+  await click(2.7);const resizedPin=await readout.textContent();
+  await page.setViewportSize({width:390,height:844});
+  assert.equal(await host.evaluate(el=>el.scrollWidth<=el.clientWidth),true,'a pin near the old right edge cannot overflow while resize is pending');
+  await page.waitForFunction(()=>{
+    const canvas=document.querySelector('#pin-contract canvas'),line=document.querySelector('#pin-contract .plot-hover-line');
+    return Math.abs(Number.parseFloat(line.style.left)-(canvas.clientWidth-25))<.1;
+  });
+  assert.equal(await readout.textContent(),resizedPin,'resizing keeps the pinned record and repositions its guide');
+  await page.evaluate(()=>window.testPinPlot.setRange(.1,2));
+  assert.equal(await guide.isVisible(),false);assert.equal(await host.locator('.is-pinned').count(),1);
+  assert.equal(await readout.textContent(),resizedPin,'an offscreen pin retains its original record');
+  assert.equal(await host.locator('.plot-y-status').textContent(),'','offscreen pins do not add a status message');
+  await click(1.9);
+  assert.equal(await readout.textContent(),resizedPin,'an invalid offscreen sample cannot silently clear the pin');
+  await host.locator('[data-op="reset"]').click();
+  assert.equal(await guide.isVisible(),true,'full view restores the original pin at its data coordinate');
+  assert.equal(await readout.textContent(),resizedPin);
+  assert.equal(await host.locator('.plot-y-status').textContent(),'');
+  await host.locator('[data-op="in"]').click();assert.equal(await guide.isVisible(),false);
+  await host.locator('[data-op="right"]').click();assert.equal(await guide.isVisible(),true);
+  await host.locator('[data-op="left"]').click();assert.equal(await guide.isVisible(),false);
+  await host.locator('[data-op="out"]').click();assert.equal(await guide.isVisible(),true);
+  assert.equal(await readout.textContent(),resizedPin,'zoom and pan never replace the fixed record');
+  await move(.7);await page.keyboard.down('Control');
+  try { await page.mouse.wheel(0,-100); } finally { await page.keyboard.up('Control'); }
+  await page.waitForFunction(()=>Number(document.querySelector('#pin-contract [data-field="to"]').value)<3);
+  assert.equal(await guide.isVisible(),false);assert.equal(await readout.textContent(),resizedPin,'wheel zoom preserves an offscreen pin');
+  await host.locator('[data-op="reset"]').click();assert.equal(await guide.isVisible(),true);
+  await page.setViewportSize({width:1440,height:900});
+  await page.evaluate(()=>window.testDrawPin(true));
+  await click(.25);const interval=await readout.textContent();
+  await move(2.5);assert.equal(await readout.textContent(),interval);
+  assert.equal(await readout.locator('dd').first().textContent(),'[0, 1)','a pinned interval remains a window statistic');
+  const intervalLeft=await guide.evaluate(el=>el.style.left);
+  await click(.75);
+  assert.equal(await readout.textContent(),interval,'clicking elsewhere within the same window retains its whole-window statistic');
+  assert.notEqual(await guide.evaluate(el=>el.style.left),intervalLeft,'the marker still moves within the same measurement window');
+  await click(1.5);
+  assert.equal(await readout.locator('dd').first().textContent(),'[1, 3)','a new window directly replaces the pinned window');
+  await clickLine(-4);assert.equal(await guide.isVisible(),false);
+  await click(.25);
+  const dragPinLeft=await guide.evaluate(el=>el.style.left);
+  await move(-.5);await page.mouse.down();
+  const end=await position(1.5);await page.mouse.move(end.x,end.y,{steps:4});
+  assert.equal(await guide.isVisible(),true,'drag selection keeps the already pinned line visible');
+  assert.equal(await guide.evaluate(el=>el.style.left),dragPinLeft,'the pinned line does not move or blink during selection');
+  assert.equal(await readout.textContent(),interval);
+  await canvas.screenshot({path:path.join(dir,'pinned-line-during-selection.png')});
+  await page.mouse.up();assert.equal(await host.locator('.is-pinned').count(),1);
+  assert.equal(await guide.isVisible(),true,'a completed selection restores the pin when its coordinate remains in view');
+  assert.equal(await readout.textContent(),interval);
+  await move(.5);await page.mouse.down();
+  const outside=await position(1.4);await page.mouse.move(outside.x,outside.y,{steps:4});await page.mouse.up();
+  assert.equal(await guide.isVisible(),false);assert.equal(await host.locator('.is-pinned').count(),1);
+  assert.equal(await readout.textContent(),interval,'excluding the fixed coordinate does not discard its interval statistic');
+  assert.equal(await host.locator('.plot-y-status').textContent(),'','clipping the pin does not insert a message');
+  await host.locator('[data-op="reset"]').click();assert.equal(await guide.isVisible(),true);
+  const reset=await position(.5);await page.mouse.dblclick(reset.x,reset.y);
+  assert.equal(await guide.isVisible(),true);assert.equal(await host.locator('[data-field="from"]').inputValue(),'-1');
+  assert.equal(await readout.textContent(),interval,'double-click full view restores the pin preceding its two click events');
+  const fullBox=await canvas.boundingBox();
+  assert.ok(Math.abs(Number.parseFloat(await guide.evaluate(el=>el.style.left))-(76+(fullBox.width-101)*1.25/4))<.1,'full view uses the original fixed coordinate, not the double-click position');
+  await clickLine();
+  await page.mouse.dblclick(reset.x,reset.y);
+  assert.equal(await guide.isVisible(),false,'double-click full view without a prior pin does not create one');
+  assert.equal(await page.evaluate(()=>JSON.stringify(window.testPinData)===window.testPinOriginal),true,'pinning never rewrites data');
+  await click(.25);assert.equal(await guide.isVisible(),true);
+  await page.evaluate(()=>window.testDrawPin());assert.equal(await guide.isVisible(),false,'a replacement dataset starts without a pin');
+});
+
 scenario('[charts] hover readouts keep decimal positions and original text across magnitudes, missing values and infinity',async({page,dir})=>{
   // Mathematical boundary observations, not manufactured media measurements.
   const points=[[-10.25,9.85],[-5,77.264674],[0,100.1],[5,1e-10],[10,null],[15,Infinity],[20,0],[25,-3.5],[30,-Infinity]];
@@ -623,7 +845,8 @@ scenario('[table-scrolling] actual frame records scroll under fixed headers, pag
 });
 scenario('[repeat-analysis] default analysis exposes one evidence panel and omits unrequested freeze screening',async({page,app,dir})=>{
   await preview(page,media.sitiSource);await page.locator('#frame-analysis').uncheck();await page.locator('#bitrate-enabled').uncheck();await page.locator('#complexity').uncheck();await page.locator('#repeat-enabled').check();
-  assert.equal(await page.locator('#freeze-enabled').isVisible(),false,'optional screening stays in collapsed advanced options');
+  assert.equal(await page.locator('#freeze-enabled').isVisible(),true,'screening settings start expanded');
+  assert.equal(await page.locator('#freeze-enabled').isChecked(),false,'screening still requires explicit selection');
   const {report}=await runTask(page,app,'#enqueue-analyze');assert.equal(report.repeatAnalysis.freeze.status,'not-requested');
   const host=page.locator('#repeat-result');
   assert.deepEqual(await host.locator('#repeat-evidence > summary, #repeat-review > summary').allTextContents(),['检测明细与导出','原帧复核']);
@@ -696,7 +919,8 @@ scenario('[repeat-analysis] one native 16-bit code difference is nonzero and leg
   await writeFile(path.join(dir,'report.json'),JSON.stringify(report));
 });
 async function enableFreeze(page){
-  await page.locator('#repeat-options > details > summary').click();await page.locator('#freeze-enabled').check();
+  if(!await page.locator('#repeat-options > details').evaluate(el=>el.open))await page.locator('#repeat-options > details > summary').click();
+  await page.locator('#freeze-enabled').check();
 }
 async function preview(page,file=media.source){
   const response=page.waitForResponse(r=>r.url().endsWith('/api/probe')&&r.request().method()==='POST');
@@ -889,6 +1113,7 @@ scenario('[analysis-targets] automatic preview and independent targets follow th
   assert.equal(await page.locator('#frame-analysis').isChecked(),true);
   assert.equal(await page.locator('#bitrate-enabled').isChecked(),true);
   assert.equal(await page.locator('#complexity').isChecked(),true);
+  assert.equal(await page.locator('#repeat-enabled').isChecked(),true);
   assert.equal(await page.locator('#bitrate-options').isVisible(),true);
   assert.equal(await page.locator('#siti-settings').isVisible(),true);
   assert.equal(await page.locator('#siti-device').inputValue(),'gpu');
@@ -898,6 +1123,7 @@ scenario('[analysis-targets] automatic preview and independent targets follow th
   await preview(page,media.sitiSource);
   assert.equal((await app.request('status')).jobs.length,0,'automatic preview must not start or enqueue analysis');
   await page.locator('#bitrate-enabled').uncheck();await page.locator('#complexity').uncheck();
+  await page.locator('#repeat-enabled').uncheck();
   await page.locator('#frame-analysis').uncheck();
   assert.equal(await page.locator('#enqueue-analyze').isDisabled(),true);
   await page.locator('#frame-analysis').check();
@@ -1175,6 +1401,7 @@ scenario('[analysis] SI/TI reference settings and HLG display survive GUI plans 
     assert.equal(await page.locator('#siti-scale').count(),0);assert.equal(await page.locator('#siti-float-depth').count(),0);assert.equal(await page.locator('#siti-alpha').count(),0);
     await page.locator('#siti-range').selectOption(c.range);await page.locator('#siti-transfer').selectOption(c.domain);await page.locator('#siti-matrix').selectOption(c.matrix??'auto');
     if(c.domain==='hlg'){if(name==='gray12le-hlg-pc')assert.equal(await page.locator('#siti-hlg-white').inputValue(),'1000');await page.locator('#siti-hlg-white').fill('2000');if(c.settings.hlg)await page.locator('#siti-hlg-black').fill(String(c.settings.hlg.blackCdM2))}
+    if(!await page.locator('#siti-scene-settings').evaluate(el=>el.open))await page.locator('#siti-scene-settings > summary').click();
     await page.locator('#siti-scenes').selectOption('single');
     const {report}=await runTask(page,app,'#enqueue-analyze');assert.equal(report.content.available,true,report.content.reason);
     assert.equal(report.content.execution.configuration.configurationVersion,8);assert.equal(report.content.execution.configuration.outputMultiplier,255);
@@ -1228,6 +1455,7 @@ scenario('[analysis] a temporary GPU capability failure can be rechecked without
 scenario('[analysis] SI/TI confirmed scenes exclude boundary TI and export separate scene statistics',async({page,app,dir})=>{
   await preview(page,media.sitiSource);await page.locator('#complexity').check();
   assert.equal(await page.locator('#siti-scenes').inputValue(),'unconfirmed');
+  if(!await page.locator('#siti-scene-settings').evaluate(el=>el.open))await page.locator('#siti-scene-settings > summary').click();
   await page.locator('#siti-scenes').selectOption('confirmed');await page.locator('#siti-scene-frames').fill('1, 7, 12');
   const {report}=await runTask(page,app,'#enqueue-analyze');
   assert.deepEqual(report.content.sceneAnalysis.starts,[0,6,11]);assert.equal(report.content.si,null);assert.equal(report.content.ti,null);
@@ -1248,7 +1476,7 @@ scenario('[analysis] [units] actual multi-audio file, frame scan, GOP, SI/TI and
   await page.locator('#bitrate-enabled').check();await page.locator('#complexity').check();await page.locator('#siti-device').selectOption('cpu');await page.locator('#siti-workers').selectOption('8');
   assert.equal(await page.locator('#siti-device').inputValue(),'cpu');
   const {report}=await runTask(page,app,'#enqueue-analyze');
-  assert.deepEqual(await page.locator('#inspect-details > .section > .report-section-body > summary > h3').allTextContents(),['文件基本信息','帧结构与 GOP','SI/TI 内容复杂度','音轨包大小时间分布','音视频码率统计','体积构成']);
+  assert.deepEqual(await page.locator('#inspect-details > .section > .report-section-body > summary > h3').allTextContents(),['文件基本信息','重复帧与时间诊断','帧结构与 GOP','SI/TI 内容复杂度','音轨包大小时间分布','音视频码率统计','体积构成']);
   assert.equal(await page.locator('#inspect-details .report-metrics > div').count(),4);
   const cardFonts=await page.locator('#inspect-details .report-metrics dd').evaluateAll(values=>values.map(value=>{
     const style=getComputedStyle(value.querySelector('span')??value);
@@ -1479,7 +1707,7 @@ scenario('[trial] [units] [charts] real x264 trial encodes both CRFs, preserves 
   await page.locator('#trial-frame-metric').selectOption('psnr');
   assert.equal(await page.locator('#trial-frames [data-field="scale"]').inputValue(),'manual');
   assert.equal(await page.locator('#trial-frames [data-field="y-max"]').inputValue(),'50');
-  await page.locator('#trial-psnr canvas').hover({position:{x:60,y:50}});
+  await page.locator('#trial-psnr canvas').hover({position:{x:80,y:50}});
   assert.equal(await page.locator('#trial-psnr .chart-field').filter({hasText:metricLabels.psnr}).locator('dd').textContent(),report.rows[0].metrics.psnr.pooled.toLocaleString('zh-CN',{maximumFractionDigits:6}), 'quality fields retain their complete original precision');
   const unit=quantityScale(report.rows.map(r=>r.videoBytes)).unit;
   await page.locator('#rd-axis').selectOption('videoBytes');
@@ -1498,7 +1726,7 @@ scenario('[trial] [units] [charts] real x264 trial encodes both CRFs, preserves 
   await page.locator('#trial-crfs').fill('0');
   const lossless=await runTask(page,app,'#trial');
   assert.equal(lossless.report.rows[0].metrics.psnr.pooled,'Infinity');
-  await page.locator('#trial-psnr canvas').hover({position:{x:60,y:50}});
+  await page.locator('#trial-psnr canvas').hover({position:{x:80,y:50}});
   assert.match(await page.locator('#trial-psnr .chart-label').innerText(),/Infinity/,'infinite quality is not presented as a missing measurement');
 });
 
@@ -1624,11 +1852,26 @@ scenario('[gop-view] custom frame viewports highlight only intersecting GOPs wit
   await preview(page,file);const {report}=await runTask(page,app,'#enqueue-analyze');
   assert.equal(report.frames.length,48);assert.equal(report.coding.gops.length,4);
   const strip=page.locator('#gop-overview canvas'),plot=page.locator('#frame-plot'),index=page.locator('#gop-index'),info=page.locator('#gop-info');
-  const alphas=()=>strip.evaluate((canvas,gops)=>{const c=canvas.getContext('2d'),d=canvas.width/canvas.clientWidth;return gops.map(g=>c.getImageData(Math.floor((g.start+g.count/2)/48*canvas.width),Math.floor(10*d),1,1).data[3]);},report.coding.gops);
+  const readout=page.locator('#gop-overview .chart-label');
+  const emptyReadout=async()=>{
+    assert.deepEqual(await readout.locator('dt').allTextContents(),['GOP','访问类型','显示帧区间','帧数']);
+    assert.deepEqual(await readout.locator('dd').allTextContents(),['—','—','—','—']);
+  };
+  const layout=()=>page.locator('#gop-overview').evaluate(host=>({height:host.getBoundingClientRect().height,nextOffset:host.nextElementSibling.getBoundingClientRect().top-host.getBoundingClientRect().top}));
+  // A viewport change completes before ResizeObserver necessarily redraws the
+  // bitmap. Sample only once the real drawing buffer matches the CSS size.
+  const readyStrip=()=>page.waitForFunction(()=>{
+    const canvas=document.querySelector('#gop-overview canvas');
+    return canvas?.clientWidth>0 && canvas.clientHeight>0 &&
+      canvas.width===Math.floor(canvas.clientWidth*devicePixelRatio) &&
+      canvas.height===Math.floor(canvas.clientHeight*devicePixelRatio);
+  });
+  const edges=async()=>{await readyStrip();return strip.evaluate((canvas,gops)=>{const c=canvas.getContext('2d'),d=canvas.width/canvas.clientWidth;return gops.map(g=>Array.from(c.getImageData(Math.floor((g.start+g.count/2)/48*canvas.width),Math.floor(6*d),1,1).data));},report.coding.gops);};
+  const alphas=async()=>{await readyStrip();return strip.evaluate((canvas,gops)=>{const c=canvas.getContext('2d'),d=canvas.width/canvas.clientWidth;return gops.map(g=>c.getImageData(Math.floor((g.start+g.count/2)/48*canvas.width),Math.floor(10*d),1,1).data[3]);},report.coding.gops);};
   const highlighted=async()=>{const opacity=await alphas();return opacity.flatMap((alpha,i)=>alpha===255?[i]:[]);};
   const timeFull=async()=>{
     assert.equal(await index.inputValue(),'');assert.equal(await info.innerText(),'主图：全片');
-    assert.equal(await page.locator('#gop-overview .chart-label').textContent(),'');
+    await emptyReadout();
     assert.match(await strip.getAttribute('aria-label'),/未定位单个 GOP/);
     assert.equal(Number(await plot.locator('[data-field="from"]').inputValue()),0);
     assert.ok(Math.abs(Number(await plot.locator('[data-field="to"]').inputValue())-4)<.001);
@@ -1640,9 +1883,39 @@ scenario('[gop-view] custom frame viewports highlight only intersecting GOPs wit
     assert.equal(await index.inputValue(),String(i));assert.match(await strip.getAttribute('aria-label'),new RegExp('当前定位 GOP '+i));
     const opacity=await alphas();assert.equal(opacity[i],255);assert.ok(opacity.some(alpha=>alpha<200));
   };
+  await timeFull();
+  for(const width of [1440,390]){
+    await page.setViewportSize({width,height:900});
+    await strip.evaluate(canvas=>canvas.scrollIntoView({block:'center'}));
+    const stable=await layout(),baseEdges=await edges(),box=await strip.boundingBox();
+    await strip.hover({position:{x:box.width*.375,y:16}});
+    assert.deepEqual(await readout.locator('dd').allTextContents(),['1',report.coding.gops[1].label,'12–23','12']);
+    const hoverEdges=await edges();
+    assert.notDeepEqual(hoverEdges[1],baseEdges[1],'only the hovered GOP receives a temporary outline');
+    assert.deepEqual(hoverEdges.filter((_,i)=>i!==1),baseEdges.filter((_,i)=>i!==1));
+    assert.deepEqual(await layout(),stable,'hovering must not move the following controls');
+    assert.equal(await index.inputValue(),'');assert.equal(await info.innerText(),'主图：全片');
+    await page.locator('#gop-overview').screenshot({path:path.join(dir,`gop-hover-${width}.png`)});
+    await strip.hover({position:{x:box.width/2,y:16}});
+    assert.equal(await readout.locator('dd').first().textContent(),'2','a shared boundary belongs to the following GOP');
+    await strip.hover({position:{x:box.width/2,y:50}});
+    await emptyReadout();assert.deepEqual(await edges(),baseEdges,'canvas padding has no hover highlight');
+    await strip.hover({position:{x:box.width*.9,y:16}});
+    await plot.locator('[data-op="reset"]').hover();
+    await emptyReadout();assert.deepEqual(await edges(),baseEdges);
+    assert.deepEqual(await layout(),stable,'leaving the strip keeps the same readout space, including narrow layouts');
+  }
+  await page.setViewportSize({width:1440,height:900});
   await timeFull();await setYBounds(page,'#frame-plot',.1,4);
   const y=async()=>Promise.all(['scale','y-min','y-max'].map(field=>plot.locator('[data-field="'+field+'"]').inputValue())),locked=await y();
   await focus(2);assert.match(await info.innerText(),/帧 24–35/);
+  const selectedReadout=await readout.locator('dd').allTextContents(),selectedEdges=await edges(),selectedLayout=await layout(),selectedBox=await strip.boundingBox();
+  await strip.hover({position:{x:selectedBox.width*.9,y:16}});
+  assert.equal(await readout.locator('dd').first().textContent(),'3');
+  assert.equal(await index.inputValue(),'2','hovering another GOP does not change the explicit selection');
+  await plot.locator('[data-op="reset"]').hover();
+  assert.deepEqual(await readout.locator('dd').allTextContents(),selectedReadout,'leaving restores the explicitly selected GOP');
+  assert.deepEqual(await edges(),selectedEdges);assert.deepEqual(await layout(),selectedLayout);
   await plot.locator('[data-op="reset"]').click();await timeFull();assert.deepEqual(await y(),locked);
   await focus(1);await plot.locator('canvas').dblclick({position:{x:150,y:70}});await timeFull();
   await focus(3);await plot.locator('[data-field="x-scale"]').selectOption('manual');await plot.locator('[data-field="x-scale"]').selectOption('full');await timeFull();
@@ -1663,7 +1936,7 @@ scenario('[gop-view] custom frame viewports highlight only intersecting GOPs wit
   assert.equal(await index.inputValue(),'');assert.equal(await info.innerText(),'主图：自定义范围');assert.deepEqual(await highlighted(),[1,2]);
   const box=await strip.boundingBox();await strip.hover({position:{x:box.width*.9,y:16}});
   assert.match(await page.locator('#gop-overview .chart-label').innerText(),/3/);
-  await plot.locator('[data-op="reset"]').hover();assert.equal(await page.locator('#gop-overview .chart-label').textContent(),'','leaving a hover does not leave a false focused GOP');
+  await plot.locator('[data-op="reset"]').hover();await emptyReadout();
   assert.deepEqual(await highlighted(),[1,2],'hovering another GOP does not change the viewport highlights');
   await plot.locator('[data-op="right"]').click();await plot.locator('[data-op="right"]').click();assert.deepEqual(await highlighted(),[2,3]);
   await plot.locator('[data-op="reset"]').click();await timeFull();
@@ -1685,7 +1958,7 @@ scenario('[packet-distribution] actual audio packets, optional rates and frame a
   const {report}=await analyze(page,app);
   assert.equal(await page.locator('#frame-plot canvas').count(),1,'video reuses the existing graph');
   const frameReadout=page.locator('#frame-plot .chart-label'),frameCanvas=page.locator('#frame-plot canvas');
-  await frameCanvas.hover({position:{x:76,y:40}});
+  await frameCanvas.hover({position:{x:77,y:40}});
   const frameUnit=quantityScale(report.frames.map(f=>f.bytes)).unit;
   assert.deepEqual(await frameReadout.locator('dt').allTextContents(),['呈现时间（s）','显示帧','预测类型','访问类型',`关联包大小（${frameUnit}）`]);
   assert.equal(await frameReadout.locator('dd').nth(0).textContent(),quantityNumber(report.frames[0].t,6));
@@ -1693,6 +1966,29 @@ scenario('[packet-distribution] actual audio packets, optional rates and frame a
   assert.equal(await frameReadout.locator('dd').nth(4).locator('[title]').getAttribute('title'),byteEvidence(report.frames[0].bytes));
   assert.doesNotMatch(await frameReadout.textContent(),/[·|]/,'real frame evidence has no duplicated axis prefix or loose separators');
   await frameReadout.screenshot({path:path.join(dir,'real-frame-readout.png')});
+  await frameCanvas.click({position:{x:77,y:40}});
+  const pinnedFrame=await frameReadout.textContent();
+  await frameCanvas.hover({position:{x:250,y:40}});
+  assert.equal(await frameReadout.textContent(),pinnedFrame,'a real frame readout stays on the explicitly pinned record');
+  await page.locator('#frame-plot [data-op="reset"]').hover();
+  assert.equal(await page.locator('#frame-plot .plot-hover-line.is-pinned').isVisible(),true);
+  await page.locator('#frame-plot [data-op="reset"]').click();
+  assert.equal(await frameReadout.textContent(),pinnedFrame,'full view preserves a real pinned frame');
+  await page.locator('#frame-plot [data-op="in"]').click();
+  assert.equal(await page.locator('#frame-plot .plot-hover-line.is-pinned').count(),1);
+  assert.equal(await page.locator('#frame-plot .plot-hover-line').isVisible(),false);
+  assert.equal(await frameReadout.textContent(),pinnedFrame,'an excluded real frame retains its evidence');
+  await page.locator('#frame-plot [data-op="reset"]').click();
+  assert.equal(await page.locator('#frame-plot .plot-hover-line').isVisible(),true);
+  await frameCanvas.click({position:{x:250,y:40}});
+  const relocatedFrame=Number(await frameReadout.locator('dd').nth(1).textContent());
+  assert.ok(relocatedFrame>0&&relocatedFrame<report.frames.length,'clicking a different real frame directly replaces the pin');
+  assert.equal(await frameReadout.locator('dd').nth(0).textContent(),quantityNumber(report.frames[relocatedFrame].t,6));
+  assert.equal(Number(await page.locator('#frame-detail tbody tr').first().locator('td').first().textContent()),relocatedFrame,'the original frame-details action follows the new pin');
+  const frameDetail=await page.locator('#frame-detail').textContent(),fixedLine=await page.locator('#frame-plot .plot-hover-line').boundingBox();
+  await page.mouse.click(fixedLine.x+fixedLine.width/2,fixedLine.y+20);
+  assert.ok((await frameReadout.locator('dd').allTextContents()).every(value=>value==='—'));
+  assert.equal(await page.locator('#frame-detail').textContent(),frameDetail,'canceling the pin preserves the existing selected-frame evidence');
   assert.equal(await page.locator('#bitrate-optional').evaluate(el=>el.open),true);
   assert.equal(await page.locator('#audio-packets-optional').evaluate(el=>el.open),false);
   assert.equal(await page.locator('#audio-packets-optional').getAttribute('class'),'report-section-body');
@@ -1714,7 +2010,7 @@ scenario('[packet-distribution] actual audio packets, optional rates and frame a
     assert.deepEqual(rows.slice(1).map(row=>row.split(',').slice(1,5)),d.packets.map(row=>row.map(v=>v??'')));
   }
   await page.locator('#frame-axis').selectOption('frame');assert.match(await page.locator('#frame-plot canvas').getAttribute('aria-label'),/显示帧/);
-  await frameCanvas.hover({position:{x:76,y:40}});
+  await frameCanvas.hover({position:{x:77,y:40}});
   assert.deepEqual(await frameReadout.locator('dt').allTextContents(),['显示帧','呈现时间（s）','预测类型','访问类型',`关联包大小（${frameUnit}）`]);
   await page.locator('#frame-axis').selectOption('time');
   await page.locator('#gop-next').click();assert.equal(await page.locator('#gop-index').inputValue(),'0');

@@ -190,9 +190,10 @@ export function plot(
     '<div class="plot-controls"><div class="plot-actions"><button data-op="in" class="secondary">＋ 放大</button><button data-op="out" class="secondary">－ 缩小</button><button data-op="left" class="secondary" title="向左平移">←</button><button data-op="right" class="secondary" title="向右平移">→</button><button data-op="reset" class="secondary" title="恢复横轴全览，保留纵轴设置">全览</button></div>' +
     '<div class="plot-range"><label>X 轴<select data-field="x-scale" title="自动：收起起止输入，切回时恢复全览；自定义：显示当前起止范围，可修改并应用。"><option value="full">自动</option><option value="manual">自定义</option></select></label><div class="plot-x-bounds hidden"><label>起点 <input data-field="from" aria-label="X 起点" type="number" step="any"></label><label>终点 <input data-field="to" aria-label="X 终点" type="number" step="any"></label><button data-op="apply" class="secondary">应用</button></div></div>' +
     '<div class="plot-y-controls"><label>Y 轴<select data-field="scale" title="自动：全部曲线的范围；随 X 缩放：当前横轴区间的范围；锁定：固定当前范围，可修改上下限。"><option value="full">自动</option><option value="visible">随 X 缩放</option><option value="manual">锁定</option></select></label><div class="plot-y-bounds hidden"><label>下限 <input data-field="y-min" aria-label="Y 下限" type="number" step="any"></label><label>上限 <input data-field="y-max" aria-label="Y 上限" type="number" step="any"></label><button data-op="apply-y" class="secondary">应用</button></div></div></div>' +
-    '<div class="plot-y-status" role="status"></div><div class="plot-axis-y"></div><canvas aria-label="可缩放分析曲线"></canvas><div class="chart-label" aria-live="polite"></div>';
+    '<div class="plot-y-status" role="status"></div><div class="plot-axis-y"></div><div class="plot-surface"><canvas aria-label="可缩放分析曲线"></canvas><div class="plot-hover-line" aria-hidden="true" hidden></div></div><div class="chart-label" aria-live="polite"></div>';
   placeAxisControls();
   const canvas = host.querySelector("canvas"),
+    hoverLine = host.querySelector(".plot-hover-line"),
     label = host.querySelector(".chart-label"),
     from = host.querySelector("[data-field=from]"),
     to = host.querySelector("[data-field=to]");
@@ -201,7 +202,8 @@ export function plot(
   xScale.value = xMode;
   if (height) canvas.style.height = height + "px";
   host.querySelector(".plot-axis-y").textContent = "纵轴：" + unit;
-  canvas.setAttribute("aria-label", "横轴：" + axis + "；纵轴：" + unit);
+  const axisLabel = "横轴：" + axis + "；纵轴：" + unit;
+  canvas.setAttribute("aria-label", axisLabel + '；单击新位置固定读数，单击固定线取消。');
   const scale = host.querySelector("[data-field=scale]");
   const yMin = host.querySelector('[data-field="y-min"]'),
     yMax = host.querySelector('[data-field="y-max"]'),
@@ -217,7 +219,7 @@ export function plot(
       item.style.color = s.color;
       legend.append(item);
     }
-    canvas.before(legend);
+    canvas.parentElement.before(legend);
   }
   const minimum = data[0][0],
     last = Number.isFinite(xEnd) && xEnd > data.at(-1)[0] ? xEnd : intervals ? data.at(-1)[2].end : data.at(-1)[0] + (frames ? 1 : 0),
@@ -227,12 +229,56 @@ export function plot(
     b = maximum,
     w = 0,
     drag = null,
+    hoverX = null,
+    pinned = false,
     currentY = null;
   const fullExtent = extent(data, frames || stems || integerY);
   const left = 76,
     right = 25;
   const xValue = (x) =>
     a + ((x - left) / Math.max(1, w - left - right)) * (b - a);
+  const clickPins = [];
+  const snapshotPin = () => pinned ? {
+    x: hoverX,
+    readout: [...label.childNodes].map(node => node.cloneNode(true)),
+  } : null;
+  const restorePin = (snapshot) => {
+    hoverX = snapshot.x;
+    label.replaceChildren(...snapshot.readout);
+    setPinned(true);
+  };
+  const setPinned = (value) => {
+    pinned = value;
+    hoverLine.classList.toggle('is-pinned', pinned);
+    canvas.setAttribute('aria-label', axisLabel + (pinned ? '；读数已固定，单击新位置移动，单击固定线取消。' : '；单击新位置固定读数，单击固定线取消。'));
+  };
+  const clearHover = (clearReadout = false) => {
+    setPinned(false);
+    hoverX = null;
+    hoverLine.hidden = true;
+    if (clearReadout) {
+      // Keep field geometry stable while making an inactive readout explicit.
+      for (const value of label.querySelectorAll('dd')) {
+        if (value.textContent !== '—') value.textContent = '—';
+        value.removeAttribute('title');
+      }
+    }
+  };
+  const positionHover = () => {
+    hoverLine.hidden = hoverX === null || hoverX < a || hoverX > b;
+    if (!hoverLine.hidden)
+      hoverLine.style.left = (left + (hoverX - a) / (b - a) * (w - left - right)) + 'px';
+  };
+  const inPlot = (e) => e.offsetX >= left && e.offsetX <= w - right &&
+    e.offsetY >= 12 && e.offsetY <= canvas.clientHeight - 50;
+  const hitsPinnedLine = (e) => {
+    if (!pinned || hoverLine.hidden) return false;
+    const rect = hoverLine.getBoundingClientRect();
+    // Hit the displayed line, not merely another click selecting the same bin
+    // or snapped sample. A small CSS-pixel target also works at plot edges.
+    return e.clientY >= rect.top && e.clientY <= rect.bottom &&
+      Math.abs(e.clientX - (rect.left + rect.width / 2)) <= 6;
+  };
   const setRange = (lo, hi, notify = true) => {
     if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) return;
     const span = Math.min(maximum - minimum, Math.max(minSpan, hi - lo));
@@ -240,6 +286,7 @@ export function plot(
     b = span===maximum-minimum ? maximum : a + span;
     from.value = +a.toFixed(6);
     to.value = +b.toFixed(6);
+    if (!pinned) clearHover(true);
     draw();
     if (notify) onRangeChange?.({from:a,to:b,full:a===minimum&&b===maximum});
   };
@@ -434,16 +481,32 @@ export function plot(
       xd = Math.min(
         6,
         Math.max(0, Math.ceil(-Math.log10((b - a) / ticks)) + 1),
-      );
+      ),
+      zeroX = a < 0 && b > 0 ? px(0) : null,
+      zeroLabelWidth = c.measureText('0').width;
     for (let i = 0; i <= ticks; i++) {
-      const x = left + ((w - left - right) * i) / ticks;
+      const x = left + ((w - left - right) * i) / ticks,
+        text = n(a + ((b - a) * i) / ticks, xd);
       c.strokeStyle = "rgba(128, 128, 128, 0.25)";
-      c.beginPath();
-      c.moveTo(x, top);
-      c.lineTo(x, base + 4);
-      c.stroke();
+      if (zeroX === null || Math.abs(x - zeroX) > 1) {
+        c.beginPath();
+        c.moveTo(x, top);
+        c.lineTo(x, base + 4);
+        c.stroke();
+      }
       c.textAlign = "center";
-      c.fillText(n(a + ((b - a) * i) / ticks, xd), x, base + 18);
+      if (zeroX === null || Math.abs(x - zeroX) > (c.measureText(text).width + zeroLabelWidth) / 2 + 8)
+        c.fillText(text, x, base + 18);
+    }
+    // Zero is a coordinate reference, not a replacement for the source start.
+    // Merge nearby grid marks/labels instead of moving zero or the viewport.
+    if (zeroX !== null) {
+      c.strokeStyle = 'rgba(152, 167, 186, 0.5)';
+      c.beginPath();
+      c.moveTo(zeroX, top);
+      c.lineTo(zeroX, base + 4);
+      c.stroke();
+      c.fillText('0', zeroX, base + 18);
     }
     c.textAlign = "center";
     c.fillText("横轴：" + axis, left + (w - left - right) / 2, h - 7);
@@ -458,8 +521,10 @@ export function plot(
         base - top,
       );
     }
+    positionHover();
   };
   const hover = (e) => {
+    if (!inPlot(e)) { if (!pinned) clearHover(true); return null; }
     const x = xValue(e.offsetX);
     let idx = Math.min(
       data.length - 1,
@@ -472,8 +537,16 @@ export function plot(
       Math.abs(data[idx - 1][0] - x) < Math.abs(data[idx][0] - x)
     )
       idx--;
-    const p = data[idx],
-      atX = series.length ? visiblePoints(data, p[0], p[0]) : [p];
+    const p = data[idx];
+    if (intervals ? !(p[0] <= x && x < p[2].end) : p[0] < a || p[0] > b || frames && x >= b) {
+      if (!pinned) clearHover(true);
+      return null;
+    }
+    // Interval readouts describe the whole bin. Point readouts snap to an
+    // actual observation, including a recorded missing/infinite value.
+    hoverX = intervals ? x : p[0];
+    positionHover();
+    const atX = series.length ? visiblePoints(data, p[0], p[0]) : [p];
     label.replaceChildren();
     for (const point of (atX.length ? atX : [p])) {
       const row = document.createElement('dl');
@@ -490,35 +563,59 @@ export function plot(
   };
   canvas.onpointerdown = (e) => {
     if (e.button !== 0) return;
-    drag = { start: e.offsetX, end: e.offsetX };
+    // A native double-click first emits two single clicks. Keep their prior
+    // pin states so full view can restore the record that preceded the gesture.
+    clickPins.push(snapshotPin());
+    if (clickPins.length > 2) clickPins.shift();
+    if (!(inPlot(e) || hitsPinnedLine(e))) return;
+    if (!pinned) clearHover();
+    const start = Math.max(left, Math.min(w - right, e.offsetX));
+    drag = { start, end: start };
     canvas.setPointerCapture(e.pointerId);
   };
   canvas.onpointermove = (e) => {
-    hover(e);
     if (drag) {
       drag.end = Math.max(left, Math.min(w - right, e.offsetX));
+      if (!pinned && Math.abs(drag.end - drag.start) > 8) clearHover(true);
       draw();
-    }
+    } else if (!pinned) hover(e);
   };
+  canvas.onpointerleave = () => { if (!pinned) clearHover(true); };
   canvas.onpointerup = (e) => {
     if (!drag) return;
     const d = drag;
     drag = null;
-    if (Math.abs(d.end - d.start) > 8)
+    if (Math.abs(d.end - d.start) > 8) {
       setRange(
         xValue(Math.min(d.start, d.end)),
         xValue(Math.max(d.start, d.end)),
       );
-    else {
-      onPick?.(hover(e),{x:xValue(e.offsetX)});
-      draw();
+      return;
     }
+    if (hitsPinnedLine(e)) clearHover(true);
+    else if (inPlot(e)) {
+      const p = hover(e);
+      if (p) {
+        setPinned(true);
+        // Preserve existing frame/packet details and repeat-frame navigation.
+        onPick?.(p,{x:xValue(e.offsetX)});
+      }
+    } else if (!pinned) clearHover(true);
+    draw();
   };
   canvas.onpointercancel = () => {
     drag = null;
+    if (!pinned) clearHover(true);
     draw();
   };
-  canvas.ondblclick = resetRange;
+  canvas.ondblclick = () => {
+    if (clickPins.length === 2) {
+      if (clickPins[0]) restorePin(clickPins[0]);
+      else clearHover(true);
+    }
+    clickPins.length = 0;
+    resetRange();
+  };
   canvas.addEventListener(
     "wheel",
     (e) => {
@@ -589,7 +686,7 @@ export function gopOverview(host, gops, total, onSelect) {
     '<canvas class="gop-canvas" aria-label="GOP 全片概览"></canvas><div class="chart-label"></div>';
   const canvas = host.querySelector("canvas"),
     label = host.querySelector(".chart-label");
-  let selected = null, visible = null;
+  let selected = null, visible = null, hovered = null;
   const draw = () => {
     const w = canvas.clientWidth,
       d = devicePixelRatio || 1;
@@ -612,36 +709,53 @@ export function gopOverview(host, gops, total, onSelect) {
       }
     }
     c.globalAlpha = 1;
+    if (hovered) {
+      const x = (hovered.start / total) * w,
+        width = Math.max(1, (hovered.count / total) * w - 1);
+      c.strokeStyle = getComputedStyle(canvas).getPropertyValue('--text').trim() || '#edf2f9';
+      c.lineWidth = 1;
+      c.strokeRect(x + 0.5, 6.5, Math.max(0, width - 1), 34);
+    }
   };
-  const pick = (x) =>
-    gops.find((g) => ((g.end + 1) / total) * canvas.clientWidth >= x) ||
-    gops.at(-1);
+  // Frame ranges are displayed as inclusive indices; pointer intervals are
+  // [start,end+1), so a shared boundary belongs only to the following GOP.
+  const pick = (x, y) => y >= 6 && y < 41 && x >= 0 && x < canvas.clientWidth
+    ? gops.find(g => (g.start / total) * canvas.clientWidth <= x && x < ((g.end + 1) / total) * canvas.clientWidth)
+    : undefined;
   const describe = (g) => {
-    if (!g) {label.replaceChildren();return;}
     const row = document.createElement('dl');row.className = 'chart-readout-row';
     for (const field of [
-      {label:'GOP',value:g.index,digits:0,width:9},
-      {label:'访问类型',value:g.label,width:20},
-      {label:'显示帧区间',value:`${g.start}–${g.end}`,width:20},
-      {label:'帧数',value:g.count,digits:0,width:10},
+      {label:'GOP',value:g?.index ?? '—',digits:0,width:9},
+      {label:'访问类型',value:g?.label ?? '—',width:20},
+      {label:'显示帧区间',value:g ? `${g.start}–${g.end}` : '—',width:20},
+      {label:'帧数',value:g?.count ?? '—',digits:0,width:10},
     ]) row.append(readoutField(field));
     label.replaceChildren(row);
   };
-  canvas.onmousemove = (e) => describe(pick(e.offsetX));
-  canvas.onmouseleave = () => describe(gops.find(g=>g.index===selected));
+  const hover = (g) => {
+    g ??= null;
+    if (hovered === g) return;
+    hovered = g;
+    describe(hovered || gops.find(g=>g.index===selected));
+    draw();
+  };
+  canvas.onmousemove = (e) => hover(pick(e.offsetX, e.offsetY));
+  canvas.onmouseleave = () => hover(null);
   canvas.onclick = (e) => {
-    const g=pick(e.offsetX);if(g)onSelect(g.index);
+    const g=pick(e.offsetX,e.offsetY);if(g)onSelect(g.index);
   };
   const ro = new ResizeObserver(() => {
     if (!canvas.isConnected) ro.disconnect();
     else if (canvas.clientWidth && canvas.clientHeight) draw();
   });
   ro.observe(canvas);
+  describe();
   draw();
   return {
     select: (i, visibleGops = null) => {
       selected = i;
       visible = visibleGops === null ? null : new Set(visibleGops);
+      hovered = null;
       canvas.setAttribute('aria-label',i!==null?`GOP 全片概览；当前定位 GOP ${i}`:visible===null?'GOP 全片概览；未定位单个 GOP':`GOP 全片概览；自定义范围涉及 ${visible.size} 个 GOP`);
       describe(gops.find(g=>g.index===i));
       draw();

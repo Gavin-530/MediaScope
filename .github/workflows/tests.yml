@@ -3,6 +3,7 @@ name: MediaScope tests
 on:
   push:
     branches: ['**']
+    tags: ['verify-main-*']
   pull_request:
   merge_group:
   workflow_dispatch:
