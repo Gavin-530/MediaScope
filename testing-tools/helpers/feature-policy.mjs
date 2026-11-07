@@ -1,4 +1,4 @@
-import assert from 'node:assert/strict';
+import assert from './assert.mjs';
 
 // Set by the snapshot runner, never inferred from missing DOM or a version string.
 export function requireFeature(t,available,description,{historical=process.env.MEDIASCOPE_TEST_SOURCE_KIND==='git'}={}){

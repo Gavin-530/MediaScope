@@ -43,8 +43,8 @@ switch($Action){
   }
   Clean {
     $src=Assert-Local $Source
-    $allowed=Join-Path (Get-EvidencePendingRoot $project) 'test-runs'
-    if((Split-Path -Parent $src) -ne $allowed -or (Split-Path -Leaf $src) -notmatch '^\d{8}T\d{6}(?:\d{3}|\.[0-9]+)?Z-(?:[a-f0-9]{4}|[a-f0-9]{8})$'){throw 'Invalid test sandbox'}
+    $allowed=@((Join-Path $project '.build/test-runs'),(Join-Path (Get-EvidencePendingRoot $project) 'test-runs'))
+    if((Split-Path -Parent $src) -notin $allowed -or (Split-Path -Leaf $src) -notmatch '^\d{8}T\d{6}(?:\d{3}|\.[0-9]+)?Z-(?:[a-f0-9]{4}|[a-f0-9]{8})$'){throw 'Invalid test sandbox'}
     foreach($item in Get-ChildItem -LiteralPath $src -Recurse -Force){if($item.Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Linked sandbox entry'}}
     Remove-Item -LiteralPath $src -Recurse -Force
   }

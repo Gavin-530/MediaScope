@@ -4,7 +4,9 @@ $project=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..')).TrimEnd('\')
 . (Join-Path $PSScriptRoot 'evidence-lib.ps1')
 $root=Initialize-EvidenceArchive $project
 $pending=Get-EvidencePendingRoot $project
-$work=Join-Path $pending "test-runs/$RunId"
+$workCandidates=@(@((Join-Path $project ".build/test-runs/$RunId"),(Join-Path $pending "test-runs/$RunId")) | Where-Object {Test-Path -LiteralPath $_})
+if($workCandidates.Count -gt 1){throw 'Ambiguous current and legacy execution workspaces; inspect both before recovery'}
+$work=if($workCandidates.Count){$workCandidates[0]}else{Join-Path $project ".build/test-runs/$RunId"}
 if(Test-Path -LiteralPath (Join-Path $pending 'test-run.lock')){throw 'Inspect the active/interrupted test lock before recovery'}
 $active=@(Get-CimInstance Win32_Process -Filter "Name='node.exe' OR Name='ffmpeg.exe' OR Name='ffprobe.exe'" | Where-Object {$_.CommandLine -and $_.CommandLine.IndexOf($work,[StringComparison]::OrdinalIgnoreCase) -ge 0})
 if($active.Count){throw 'This test sandbox still has an active process'}

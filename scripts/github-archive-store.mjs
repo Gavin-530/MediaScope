@@ -102,9 +102,38 @@ export async function fileHash(file){
 }
 export async function readJson(file){await noLinks(file);return JSON.parse(await fs.readFile(file,'utf8'))}
 export async function exists(file){try{await fs.lstat(file);return true}catch(e){if(e.code==='ENOENT')return false;throw e}}
-export async function writeJson(file,value){
+async function renameChecked(from,to,check,{rename=fs.rename,pause=ms=>new Promise(resolve=>setTimeout(resolve,ms))}={}){
+  for(let attempt=1;attempt<=8;attempt++){
+    await check();
+    try{await rename(from,to);return attempt}
+    catch(error){
+      if(process.platform!=='win32'||!['EPERM','EACCES','EBUSY'].includes(error.code)||attempt===8)throw error;
+      console.warn(`Windows filesystem publication attempt ${attempt} blocked (${error.code}); source retained`);
+      await pause(125);
+    }
+  }
+}
+// New-path publication preserves the source on persistent errors and rejects target races.
+export async function publishNewPath(root,from,to,options){
+  inside(root,from);inside(root,to);
+  return renameChecked(from,to,async()=>{
+    await noLinks(from);await noLinks(to);
+    if(await exists(to))throw Error('Publication refuses to overwrite an existing target path');
+  },options);
+}
+async function jsonTargetFingerprint(file){
+  await noLinks(file);
+  try{if(!(await fs.lstat(file)).isFile())throw Error('Atomic JSON target is not a plain file');return hash(await fs.readFile(file))}
+  catch(error){if(error.code==='ENOENT')return null;throw error}
+}
+export async function writeJson(file,value,options){
   await noLinks(file);await fs.mkdir(path.dirname(file),{recursive:true});const temp=file+'.'+randomUUID()+'.tmp';
-  await fs.writeFile(temp,jsonBytes(value),{flag:'wx'});await fs.rename(temp,file);
+  const before=await jsonTargetFingerprint(file),bytes=jsonBytes(value),expected=hash(bytes);
+  await fs.writeFile(temp,bytes,{flag:'wx'});
+  await renameChecked(temp,file,async()=>{
+    if(await jsonTargetFingerprint(file)!==before)throw Error('Atomic JSON target changed; candidate and current original preserved');
+    await noLinks(temp);if(hash(await fs.readFile(temp))!==expected)throw Error('Atomic JSON candidate changed; originals preserved');
+  },options);
 }
 export function assertIdentity(value){
   if(value.host!==TARGET.host||value.repository!==TARGET.repository||String(value.repositoryId)!==TARGET.repositoryId)throw Error('Repository identity mismatch');
@@ -175,14 +204,14 @@ export async function seal(root,relative,content,metadata={}){
   await fs.writeFile(path.join(candidate,'archive-manifest.json'),jsonBytes(manifest),{flag:'wx'});
   const checks=await tree(candidate);await fs.writeFile(path.join(candidate,'SHA256SUMS.txt'),checks.map(f=>f.sha256+'  '+f.path).join('\n')+'\n',{flag:'wx'});
   await verifySnapshot(candidate);const name=now().replace(/[-:]/g,'')+'-'+digest.slice(0,16),destination=path.join(revisions,name);
-  await fs.rename(candidate,destination);await verifySnapshot(destination);
+  await publishNewPath(root,candidate,destination);await verifySnapshot(destination);
   await writeJson(path.join(object,'latest.json'),{format:FORMAT,revision:'revisions/'+name,lastCheckedAt:now(),contentSha256:digest});
   await insideCleanup(root,pending);return {state:'saved',path:relative+'/revisions/'+name,bytes:checks.reduce((n,f)=>n+f.bytes,0)+Buffer.byteLength(checks.map(f=>f.sha256+'  '+f.path).join('\n')+'\n')};
 }
 export async function insideCleanup(root,dir){
   const pending=path.join(root,'pending');inside(pending,dir);await noLinks(dir);const owner=await readJson(path.join(dir,'owner.json'));
   if(owner.owner!=='mediascope-github-archive')throw Error('Unowned pending cleanup refused');await tree(dir);
-  await fs.rm(dir,{recursive:true});
+  await fs.rm(dir,{recursive:true,maxRetries:8,retryDelay:125});
 }
 export async function verifyArchive(root){
   const records=await snapshots(root),errors=[],dependencies=[];let bytes=0;

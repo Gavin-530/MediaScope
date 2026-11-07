@@ -1,2 +1,3 @@
-// Explicit expensive qualification. See docs/repeat-analysis.md for scope.
-await import('./helpers/repeat-resource-run.mjs');
+// Compatibility entry: explicit developer selection; no implicit workloads.
+import {runExtension} from './extensions/index.mjs';
+await runExtension(process.argv.slice(2));

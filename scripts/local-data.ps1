@@ -158,7 +158,8 @@ function Get-Candidates([string]$Kind) {
     if(Test-Path -LiteralPath $target){
       # Older tools may have left unique receipts or interrupted evidence here.
       $legacy=@(Get-ChildItem -LiteralPath $target -Force | Where-Object {
-        $_.Name -in @('evidence-staging','test-runs','github-evidence-import','test-run.lock','evidence-recording.lock') -or
+        if($_.Name -in @('test-runs','deployment-runs') -and $_.PSIsContainer -and !($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -and @(Get-ChildItem -LiteralPath $_.FullName -Force).Count -eq 0){return $false}
+        $_.Name -in @('evidence-staging','test-runs','deployment-runs','github-evidence-import','test-run.lock','evidence-recording.lock') -or
         $_.Name -like 'evidence-maintenance-*' -or $_.Name -like 'pr-*-review-*'
       })
       if($legacy.Count){throw 'Legacy recovery data in .build; recover or explicitly move it before cleanup'}

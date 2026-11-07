@@ -3,7 +3,7 @@ import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {execFileSync} from 'node:child_process';
-import {TARGET,now,canonical,hash,fileHash,tree,exists,noLinks,inside,safeRelative,readJson,writeJson,assertIdentity,assertRoot,verifySnapshot,verifySnapshotLocation,insideCleanup,seal,lock,resolveArchivePath} from './github-archive-store.mjs';
+import {TARGET,now,canonical,hash,fileHash,tree,exists,noLinks,inside,safeRelative,readJson,writeJson,assertIdentity,assertRoot,verifySnapshot,verifySnapshotLocation,insideCleanup,seal,lock,resolveArchivePath,publishNewPath} from './github-archive-store.mjs';
 import {verifyEvidence,evidenceIdentity} from './github-archive-migration.mjs';
 
 const digest=files=>hash(JSON.stringify(canonical(files)));
@@ -129,7 +129,7 @@ export async function applyPrune(project,root,plan,{validate=verifyEvidence,onSt
     if(await exists(checked.source)){
       if(await exists(detached)||!same(await tree(checked.source),row.files))throw Error('Source changed or removal staging conflicts');
       row.state='detaching';await writeJson(journalFile,journal);await fs.mkdir(path.dirname(detached),{recursive:true});
-      await noLinks(checked.source);await fs.rename(checked.source,detached);
+      await noLinks(checked.source);await publishNewPath(project,checked.source,detached);
       row.state='detached';await writeJson(journalFile,journal);await onStage('detached',row);
     }
     if(await exists(detached)){
@@ -161,8 +161,11 @@ export async function restorePrunedSource(project,root,plan,source,{validate=ver
   const task=await fs.mkdtemp(path.join(root,'pending','prune-restore-'));await writeJson(path.join(task,'owner.json'),{owner:'mediascope-github-archive',state:'restore-original-path'});
   const restored=path.join(task,'original');await fs.cp(checked.original,restored,{recursive:true,errorOnExist:true,force:false});
   if(!same(await tree(restored),row.files))throw Error('Restored original bytes differ');await validate(project,restored,checked.relative);
-  await noLinks(checked.source);await fs.mkdir(path.dirname(checked.source),{recursive:true});await fs.rename(restored,checked.source);await insideCleanup(root,task);
-  return {source:row.source,restoredPath:path.relative(project,checked.source).replaceAll('\\','/'),restoredAt:now(),bytes:row.bytes};
+  await noLinks(checked.source);await fs.mkdir(path.dirname(checked.source),{recursive:true});
+  const publishAttempts=await publishNewPath(project,restored,checked.source);
+  if(!same(await tree(checked.source),row.files))throw Error('Published original bytes differ; recovery sources preserved');
+  await validate(project,checked.source,checked.relative);await insideCleanup(root,task);
+  return {source:row.source,restoredPath:path.relative(project,checked.source).replaceAll('\\','/'),restoredAt:now(),bytes:row.bytes,publishAttempts};
 }
 
 async function main(){

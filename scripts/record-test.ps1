@@ -89,7 +89,7 @@ if($Kind -in @('Package','Deployment','OnlineDeployment')){
   $Arguments+=@('-ResultPath',(Join-Path $staging 'deployment-results.json'))
   if($Kind -ne 'Package'){$Arguments+='-ManagedEvidence'}
 }
-$buildRoot=[IO.Path]::GetFullPath((Join-Path (Get-EvidencePendingRoot $project) 'deployment-runs')).TrimEnd('\')
+$buildRoot=[IO.Path]::GetFullPath((Join-Path $project '.build/deployment-runs')).TrimEnd('\')
 New-Item -ItemType Directory -Path $buildRoot -Force | Out-Null
 $buildBefore=@(Get-ChildItem -LiteralPath $buildRoot -Directory -Force | ForEach-Object {$_.FullName})
 $originalLocation=Get-Location;$previousPreference=$ErrorActionPreference

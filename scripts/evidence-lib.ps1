@@ -174,7 +174,7 @@ function Test-EvidenceRecord($Root,$Relative) {
   $outcomes=if($manifest.schema -eq 3){@('passed','failed','blocked')}else{@('passed','failed')}
   if($manifest.outcome -notin $outcomes -or ($manifest.outcome -eq 'passed') -ne ($manifest.exitCode -eq 0)){throw "Run outcome mismatch: $Relative"}
   if($manifest.schema -eq 3){
-    if($manifest.scope -notin @('full','core','browser','gpu')){throw "Invalid test scope: $Relative"}
+    if($manifest.scope -notin @('full','core','browser','gpu','native','selected')){throw "Invalid test scope: $Relative"}
     if($manifest.outcome -eq 'blocked' -and $manifest.exitCode -ne 2){throw "Invalid blocked outcome: $Relative"}
     if($manifest.outcome -ne 'blocked' -and (!$manifest.testSummary -or $manifest.testSummary.tests -le 0)){throw "Missing structured test results: $Relative"}
     if($manifest.outcome -eq 'passed' -and ($manifest.testSummary.failed -ne 0 -or $manifest.testSummary.cancelled -ne 0 -or $manifest.testSummary.passed -le 0)){throw "Passed run contains failures or no executed passes: $Relative"}
@@ -201,6 +201,23 @@ function Test-EvidenceRecord($Root,$Relative) {
         $mapped=$mode -in @('full-regression','gpu-regression')
         $features=Get-Content -LiteralPath (Join-Path $Root 'features.json') -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson
         $failed=($manifest.testSummary.passed -le 0 -or $manifest.testSummary.failed -gt 0 -or $manifest.testSummary.cancelled -gt 0 -or ($null -ne $validation.processExitCode -and $validation.processExitCode -ne 0))
+        if($manifest.selection){
+          $caseCoverage=Get-Content -LiteralPath (Join-Path $Root 'case-coverage.json') -Raw -Encoding UTF8 | ConvertFrom-EvidenceJson
+          $requiredIds=@($manifest.selection.caseIds)
+          if(!$requiredIds.Count -or @($requiredIds | Select-Object -Unique).Count -ne $requiredIds.Count -or $manifest.selection.extensionsIncluded -ne $false){throw 'Invalid formal case selection'}
+          $selectedComplete=(@($caseCoverage.cases).Count -eq $requiredIds.Count -and @($caseCoverage.unexpected).Count -eq 0)
+          $identitiesComplete=$selectedComplete
+          $historicalNotApplicable=($manifest.source.kind -eq 'git')
+          foreach($caseId in $requiredIds){
+            $entry=@($caseCoverage.cases | Where-Object {$_.id -ceq $caseId})
+            $actual=@($results.cases | Where-Object {$_.id -ceq $caseId})
+            if($entry.Count -ne 1 -or $actual.Count -ne 1 -or $entry[0].status -ne 'passed' -or $actual[0].status -ne 'passed'){$selectedComplete=$false}
+            if($entry.Count -ne 1 -or $actual.Count -ne 1 -or $entry[0].file -cne $actual[0].file -or $entry[0].name -cne $actual[0].name -or $entry[0].status -in @('missing-or-duplicate','mismatched-identity')){$identitiesComplete=$false}
+            if($entry.Count -ne 1 -or $actual.Count -ne 1 -or $entry[0].status -notin @('passed','skipped') -or $actual[0].status -notin @('passed','skipped')){$historicalNotApplicable=$false}
+          }
+          if($caseCoverage.accepted -ne $selectedComplete){throw 'Stable case coverage disagrees with actual results'}
+          if(!$selectedComplete -and !($historicalNotApplicable -and $identitiesComplete)){$failed=$true}
+        }
         $incomplete=($manifest.testSummary.skipped -gt 0 -or $manifest.testSummary.todo -gt 0)
         $complete=(!$failed -and !$incomplete -and @($features.features).Count -gt 0 -and @($features.features | Where-Object {$_.status -ne 'passed'}).Count -eq 0)
         $expectedStatus=if($failed){'failed'}elseif($mapped){if($complete){'complete'}else{'incomplete'}}elseif($incomplete){'incomplete'}else{'partial'}
@@ -480,6 +497,8 @@ function New-EvidenceRunId([string]$Project,[scriptblock]$TokenGenerator={ [guid
         if($dir.Name -eq $id){$dir}
       }}
     })
+    $currentWork=Assert-EvidencePath $Project (Join-Path $Project ('.build/test-runs/'+$id))
+    if(Test-Path -LiteralPath $currentWork){$unfinished+=Get-Item -LiteralPath $currentWork -Force}
     if(!$unfinished.Count){return $id}
   }
   throw 'Could not allocate a unique four-character run identity; no record overwritten'
@@ -568,7 +587,7 @@ function Publish-EvidenceRecord($Project,$Source,$OriginalRelative,[string]$Tran
   # Hosted CI and explicitly isolated protocol/transport receivers remain temporary workspaces.
   $permanentProject=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..')).TrimEnd('\')
   $sourceManifest=Join-Path $Source 'manifest.json'
-  if([IO.Path]::GetFullPath($Project).TrimEnd('\') -eq $permanentProject -and $permanentProject -notmatch '[\\/](?:test-work|\.build[\\/]testing-work)[\\/](github-evidence|independent-evidence|archive-layout)-[A-Za-z0-9]{6}([\\/]|$)' -and (Test-Path -LiteralPath $sourceManifest)){
+  if([IO.Path]::GetFullPath($Project).TrimEnd('\') -eq $permanentProject -and $permanentProject -notmatch '[\\/](?:test-work|\.build[\\/]testing-work)[\\/](?:[a-f0-9]{8}[\\/])?(github-evidence|independent-evidence|archive-layout)-[A-Za-z0-9]{6}([\\/]|$)' -and (Test-Path -LiteralPath $sourceManifest)){
     $incoming=Get-Content -LiteralPath $sourceManifest -Raw -Encoding UTF8|ConvertFrom-EvidenceJson
     if($incoming.github -and !($env:GITHUB_ACTIONS -eq 'true' -and $env:RUNNER_ENVIRONMENT -eq 'github-hosted')){throw 'Cloud evidence must use github:import; old permanent evidence destination refused'}
   }

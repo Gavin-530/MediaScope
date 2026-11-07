@@ -15,8 +15,12 @@ trap {Save-DeploymentResult 'failed' $_.Exception.Message;throw $_}
 $project=Split-Path $PSScriptRoot
 . (Join-Path $PSScriptRoot 'evidence-lib.ps1')
 # Keep native executable paths below the Windows process-launch boundary.
-$work=Join-Path $project ('evidence-archive/pending/deployment-runs/deployment-test-'+[guid]::NewGuid().ToString('N').Substring(0,12))
+$work=Join-Path $project ('.build/deployment-runs/deployment-test-'+[guid]::NewGuid().ToString('N').Substring(0,12))
 New-Item -ItemType Directory -Force $work | Out-Null
+$previousTmp=$env:TMP;$previousTemp=$env:TEMP
+$temporary=Join-Path $work 'tmp';New-Item -ItemType Directory -Force $temporary | Out-Null
+$env:TMP=$temporary;$env:TEMP=$temporary
+try {
 $homeDir=Join-Path $work 'home with spaces'
 $script:passed=0
 function Assert($Value,$Message){$script:checks+=@{name=$Message;status=$(if($Value){'passed'}else{'failed'})};if(!$Value){throw "FAIL: $Message"};$script:passed++;Write-Host "PASS: $Message"}
@@ -180,3 +184,4 @@ Invoke-Manager $app Check
  Assert ($LASTEXITCODE -eq 0) 'packaged launcher HTTP and in-memory report export'
 Write-Host "Deployment verification: $script:passed passed. Evidence preserved: $work"
 Save-DeploymentResult 'passed' $null
+} finally {$env:TMP=$previousTmp;$env:TEMP=$previousTemp}

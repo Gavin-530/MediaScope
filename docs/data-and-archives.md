@@ -31,7 +31,8 @@
 | `local-test-archive` | 旧位置；明确迁移并验证前保留 |
 | `test-work/acceptance-20260921` | 历史验收资料；清理保护 |
 | `test-work` | 旧生成项与历史验收资料混存；不承接新用例输出，只清理明确识别的生成项 |
-| `.build` | 可重建的构建中间文件、测试沙箱及下载缓存；无任务运行时可整目录删除 |
+| `.build` | 可重建的构建中间文件、测试沙箱及下载缓存；清理前须确认无活动或待恢复测试 |
+| `.build/test-runs`、`.build/deployment-runs` | 通用/GPU与包/部署的临时工作区；封存结果后回收本次目录，未完成目录阻止广泛清理 |
 | `.build/testing-fixtures`、`.build/testing-work` | 可重新下载校验的固定输入缓存 / 新用例生成文件；不是研究原件或正式记录的长期位置 |
 | `.build/downloads`、`node_modules` | 下载缓存 / 可由锁文件重建的开发依赖 |
 
@@ -45,7 +46,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/local-data.ps1 -Acti
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/local-data.ps1 -Action Clean -Category TestGenerated
 ```
 
-`Clean` 默认预览，核对后加 `-Apply`。`TestGenerated` 仅选择已知生成命名；`Build` 清理整个 `.build`（包括下载缓存），`BuildStages` 仅清理已识别的构建暂存，`Downloads` 仅清理下载缓存。保留路径边界、目录链接、受保护资料和活动进程检查。通用清理不得删除平台档案根、其子目录或包含它的上级目录。`archive-test-generated.ps1` 是特殊情况下的显式素材快照工具，不是普通清理前置要求；`.build` 禁止写入唯一原件、正式回执和恢复必需资料；这些资料分别进入归档和 pending。普通临时日志可随构建产物删除。`scripts/maintain-build.ps1` 是 `Clean -Category Build` 的兼容入口，默认预览，不要求为可重建文件创建永久副本。
+`Clean` 默认预览，核对后加 `-Apply`。`TestGenerated` 仅选择已知生成命名；`Build` 清理整个 `.build`（包括下载缓存），`BuildStages` 仅清理已识别的构建暂存，`Downloads` 仅清理下载缓存。保留路径边界、目录链接、受保护资料和活动进程检查。通用清理不得删除平台档案根、其子目录或包含它的上级目录。`archive-test-generated.ps1` 是特殊情况下的显式素材快照工具，不是普通清理前置要求；`.build` 禁止写入唯一原件和正式回执；这些资料分别进入归档和 pending。测试运行暂存在上述专用目录，归档失败保留并阻止清理；须先恢复或核对处置，不能将其视为普通缓存。普通临时日志可随构建产物删除。`scripts/maintain-build.ps1` 是 `Clean -Category Build` 的兼容入口，默认预览，不要求为可重建文件创建永久副本。
 
 旧工作区中的恢复资料、未完成事务及评审资料须先恢复或移出，整目录清理会拒绝已知的这些历史位置。
 

@@ -1,2 +1,15 @@
 # Deterministic source bytes across Windows and CI checkouts.
 * text=auto eol=lf
+
+# Reviewed file roles for CI. Unclassified files require full regression.
+README.md mediascope-validation=docs
+docs/*.md mediascope-validation=docs
+# Policy and machine-consumed documents keep full validation.
+docs/README.md mediascope-validation=full
+docs/contributing.md mediascope-validation=full
+docs/testing.md mediascope-validation=full
+docs/releasing.md mediascope-validation=full
+docs/data-and-archives.md mediascope-validation=full
+docs/repeat-analysis.md mediascope-validation=full
+# Locked fixture hashes apply to the exact repository bytes.
+testing-tools/data/*.json -text !eol whitespace=cr-at-eol

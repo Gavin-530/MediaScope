@@ -31,7 +31,7 @@ try {
     $entries+=@(Get-EvidenceCatalogEntry @{source=$destination;relative=$payload.relative})
   }
   $diagnostics=Join-Path $pending 'ci-diagnostics'
-  $work=Join-Path $pending 'test-runs'
+  $work=Join-Path $project '.build/test-runs'
   $unfinished=@(Get-ChildItem -LiteralPath $work -Directory -ErrorAction SilentlyContinue)
   if($entries.Count -gt 1 -or ($entries.Count -and $unfinished.Count) -or $unfinished.Count -gt 1){throw 'Ambiguous runner records; export refused'}
   if(!$entries.Count){

@@ -9,7 +9,7 @@ const {createBitrateAccumulator,bitrateView}=await import(pathToFileURL(path.joi
 const summary=JSON.parse(await fs.readFile(path.join(root,'suite-summary.json'),'utf8'));
 for(const c of summary.cases) {
   const data=JSON.parse(gunzipSync(await fs.readFile(path.join(root,c.file))));
-  if(c.name==='timestamp-faults')for(const fault of data){const a=createBitrateAccumulator(fault.timeBase,100);a.add(fault.packet);assert.deepEqual(a.finish(),fault.result);assert.equal(fault.result.status,'unavailable');}
+  if(c.name==='timestamp-faults')for(const fault of (Array.isArray(data)?data:data.cases)){const a=createBitrateAccumulator(fault.timeBase,100);a.add(fault.packet);assert.deepEqual(a.finish(),fault.result);assert.equal(fault.result.status,'unavailable');}
   else for(const track of data.tracks){
     const stream=data.probe.raw.streams.find(s=>s.index===track.index),fine=createBitrateAccumulator(stream.time_base,100),coarse=createBitrateAccumulator(stream.time_base,1000);
     for(const p of data.packets.packets.filter(p=>p.stream_index===track.index)){fine.add(p);coarse.add(p)}

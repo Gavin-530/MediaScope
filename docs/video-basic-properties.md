@@ -47,7 +47,7 @@ GOP、码率、SI/TI 等用户请求的分析仍按各自流程执行；基础�
 
 新报告文件统一使用 [0.5 协议](json-format.md)，读取兼容 0.4，拒绝 0.3 及更早封装。探测证据、工具版本、命令及未知字段保留；解析器核对状态及样本计数。报告缺少的字段不补造测量；显式保存的抽样记录保留原始状态、预算和时间证据，不表示当前新任务仍执行抽样。
 
-[`testing-tools/basic-properties.test.mjs`](../testing-tools/basic-properties.test.mjs) 验证真实 YUV 420/422/444 × 8/10/12-bit、RGB、灰度、透明、半平面、不等分量位深，以及色彩标签、SAR、旋转、扫描标记、多轨道和附加图像。HDR 帧附加数据用明确的旧抽样报告验证兼容，不宣称当前基础探测进行了帧抽样。
+[`testing-tools/modules/media-info/basic-properties.test.mjs`](../testing-tools/modules/media-info/basic-properties.test.mjs) 验证真实 YUV 420/422/444 × 8/10/12-bit、RGB、灰度、透明、半平面、不等分量位深，以及色彩标签、SAR、旋转、扫描标记、多轨道和附加图像。HDR 帧附加数据用明确的旧抽样报告验证兼容，不宣称当前基础探测进行了帧抽样。
 
 缺失、未知、零值、非法值、样本差异和未知字段使用明确标记的约定输入；损坏媒体、补充查询超时和取消使用真实进程。报告和浏览器测试验证新旧内容保存、展开、轨道切换和导入导出。覆盖映射见 [`testing-tools/coverage.json`](../testing-tools/coverage.json)，正式通过结论按[测试规范](testing.md)保存。
 

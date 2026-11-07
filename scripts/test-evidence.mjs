@@ -1,10 +1,13 @@
+import {caseCatalog} from '../testing-tools/helpers/case-catalog.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import {gzipSync} from 'node:zlib';
+import {gzipSync,gunzipSync} from 'node:zlib';
+import {saveObservedMeasurements} from '../testing-tools/helpers/measurement-store.mjs';
 
 // Explicit measurement locations, not a recursive extension-based archive of fixtures.
 export function measurementFile(relative) {
   const name=path.posix.basename(relative),top=relative.split('/')[0];
+  if(/^bitrate-validation-[A-Za-z0-9]{6}$/.test(top))return /\.json(?:\.gz)?$/.test(name);
   if(/^(psnr|ssim|vmaf)\.(log|json)$/.test(name)&&(!relative.includes('/')||['bitdepth','trial','trial-libx265','trial-libaom-av1'].includes(top)))return true;
   if(/^(metrics-equivalence|reference-cache|vfr-equivalence|structure-equivalence|siti-parallel|siti-gpu|siti-p910|bitrate-equivalence|vmaf-official|repeat-analysis)-[A-Za-z0-9]{6}$/.test(top))return name.endsWith('.json');
   if(['browser','server-reports','chroma-assumption','portable','report-validation'].includes(top))return name==='report.json'||/^theme-.*\.json$/.test(name)||name==='sidebar-links.json';
@@ -16,44 +19,9 @@ export function measurementFile(relative) {
   return false;
 }
 
-export const criticalMeasurements = [
-  {testName:'[repeat-analysis] locked NIST SHA256 vectors and exact upstream freezedetect FATE case pass product integration',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/official-vectors\.json$/},
-  {testName:'[repeat-analysis] complete runtime layout intersection matches native upstream or lossless equivalence and every enabled freeze layout',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/layout-coverage\.json$/},
-  {testName:'[repeat-analysis] every code value in every component round trips through equivalent layouts with exact integer difference relations',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/full-code-domain\.json$/},
-  {testName:'[repeat-analysis] CSV includes every record at the exact UTF8 byte limit and rejects one byte beyond it',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/csv-capacity\.json$/},
-  {testName:'[repeat-analysis] native byte budget rejects the first byte over the declared frame limit before decoding',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/byte-budget\.json$/},
-  {testName:'[repeat-analysis] cancellation during interval aggregation and final validation never returns a complete result',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/aggregation-cancel\.json$/},
-  {testName:'[repeat-analysis] direct samples and component block integers match independent oracle for 103 layouts and all corners',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/direct-samples\.json$/},
-  {testName:'[repeat-analysis] constant state uses observed PTS and exact predicate survives a forced digest collision',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/constant-state\.json$/},
-  {testName:'[repeat-analysis] ambiguous source histories remain unclassified and numerical bands are not reuse labels',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/source-ambiguity\.json$/},
-  {testName:'[repeat-analysis] native MSAD cross-check and file identity agree with independent integer evidence',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/msad-identity\.json$/},
-  {testName:'[repeat-analysis] cursor subtitle slow changes noise and scene cuts stay nonzero with independent source-time state',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/content-states\.json$/},
-  {testName:'[repeat-analysis] v2 moving 1080p 4K and exact 8K boundaries preserve evidence and bounded cancellation',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/resource-v2\.json$/},
-  {testName:'[repeat-analysis] native integer layouts preserve every plane, alpha, edge and LSB against independent known bytes',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/native-layouts\.json$/},
-  {testName:'[repeat-analysis] original PTS, offset and VFR holds agree with separate FFprobe integer evidence',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/timestamps\.json$/},
-  {testName:'[repeat-analysis] missing source PTS never borrows generated framehash timestamps',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/missing-pts\.json$/},
-  {testName:'[repeat-analysis] freezedetect metadata matches upstream events and preserves open EOF in native 8, 10, 12, 16-bit and alpha',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/freeze\.json$/},
-  {testName:'[repeat-analysis] P010 P012 P016 native raw paths match official hashes and reject non-sample bits without a container claim',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/semiplanar-raw\.json$/},
-  {testName:'[repeat-analysis] closed and open freeze events reproduce upstream strings, event frames and durations',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/closed-freeze\.json$/},
-  {testName:'[repeat-analysis] bad padding, truncated decode, unsupported representation and mid-process cancel cannot succeed',pathPattern:/^repeat-analysis-[A-Za-z0-9]{6}\/failure-boundaries\.json$/},
-  {testName:'[bd-rate] exact integer pixel oracle 8-bit tv: frame mean, peak, zero MSE and bitstream bytes',pathPattern:/^bd-reference\/known-8-tv-false-[A-Za-z0-9]{6}\/bd-measurement\.json$/},
-  {testName:'[bd-rate] exact integer pixel oracle 8-bit pc: frame mean, peak, zero MSE and bitstream bytes',pathPattern:/^bd-reference\/known-8-pc-false-[A-Za-z0-9]{6}\/bd-measurement\.json$/},
-  {testName:'[bd-rate] exact integer pixel oracle 10-bit tv: frame mean, peak, zero MSE and bitstream bytes',pathPattern:/^bd-reference\/known-10-tv-false-[A-Za-z0-9]{6}\/bd-measurement\.json$/},
-  {testName:'[bd-rate] exact integer pixel oracle 10-bit pc: frame mean, peak, zero MSE and bitstream bytes',pathPattern:/^bd-reference\/known-10-pc-false-[A-Za-z0-9]{6}\/bd-measurement\.json$/},
-  {testName:'[bd-rate] 801 original JVET workbook cells: 780 numerical answers and 21 original errors',pathPattern:/^bd-reference\/jvet-[A-Za-z0-9]{6}\/bd-reference\.json$/},
-  {testName:'[bd-rate] real SDR trial, strict adapter, legacy compatibility and tamper-detecting JSON round trip',pathPattern:/^bd-reference\/trial-[A-Za-z0-9]{6}\/bd-trial-report\.json$/},
-  {testName:'[analysis-limits] SI/TI really decodes the 8192x4320 boundary and matches analytic PQ edge statistics',pathPattern:/^siti-p910-[A-Za-z0-9]{6}\/8k-boundary\.json$/},
-  {testName:'[analysis-limits] SI/TI processes two million real frames and saves every result without one giant JSON string',pathPattern:/^siti-p910-[A-Za-z0-9]{6}\/two-million-boundary\.json$/},
-  {testName:'GPU SI/TI hardware measures real 8192x4320 frames against analytic values and CPU',pathPattern:/^siti-gpu-[A-Za-z0-9]{6}\/8k-boundary\.json$/},
-  {testName:'SI/TI independent byte oracle validates 150 layouts and 900 CPU input cases',pathPattern:/^siti-p910-[A-Za-z0-9]{6}\/independent-layout-cpu\.json$/},
-  {testName:'SI/TI invalid NUT layout fixtures are rejected before CPU or GPU calculation',pathPattern:/^siti-p910-[A-Za-z0-9]{6}\/fixture-rejections\.json$/},
-  {testName:'real video and two audio tracks: 100 ms aggregation matches direct 1 s without changing legacy accounting',pathPattern:/^bitrate-equivalence-[A-Za-z0-9]{6}\/measured-equivalence\.json$/},
-  {testName:'GPU SI/TI hardware validates real frames against CPU without accepting CPU fallback',pathPattern:/^siti-gpu-[A-Za-z0-9]{6}\/hardware-equivalence\.json$/},
-  {testName:'P.910 SI/TI CPU decodes lossless native SDR frames and preserves source time and reference values',pathPattern:/^siti-p910-[A-Za-z0-9]{6}\/normative-cpu\.json$/},
-  {testName:'P.910 SI/TI CPU frame parallel preserves every unrounded value, overlap TI and source VFR time',pathPattern:/^siti-p910-[A-Za-z0-9]{6}\/parallel-equivalence\.json$/},
-  {testName:'SI/TI explicitly selected BWDIF measures progressive output with preserved frames and time',pathPattern:/^siti-p910-[A-Za-z0-9]{6}\/deinterlace-equivalence\.json$/}
-];
-export async function saveMeasurements(generated,evidence,{failed=false,requiredMeasurements=[]}={}) {
+export const criticalMeasurements=caseCatalog.cases.flatMap(c=>(c.artifacts??[]).map(pattern=>({caseId:c.id,testName:c.name,pathPattern:new RegExp(pattern)})));
+export async function saveMeasurements(generated,evidence,{failed=false,requiredMeasurements=[],observationRoot,caseIds}={}) {
+  if(observationRoot)return saveObservedMeasurements(generated,evidence,{failed,requiredMeasurements,observationRoot,caseIds});
   const entries=[],diagnostics=[];
   async function visit(directory) {
     for(const item of await fs.readdir(directory,{withFileTypes:true})) {
@@ -65,7 +33,7 @@ export async function saveMeasurements(generated,evidence,{failed=false,required
         if(relative.split('/')[0].match(/^(archive-layout|local-import|github-evidence|test-system|independent-evidence)-/))continue;
         await visit(file);
       } else if(measurementFile(relative)) {
-        const raw=await fs.readFile(file,'utf8');
+        const bytes=await fs.readFile(file),raw=(relative.endsWith('.gz')?gunzipSync(bytes):bytes).toString('utf8');
         if(relative.endsWith('.log')){
           let data;try{data=JSON.parse(raw)}catch{data=raw}
           entries.push({path:relative,data});
@@ -89,5 +57,5 @@ export async function saveMeasurements(generated,evidence,{failed=false,required
 }
 
 export function compactResults(counts,cases) {
-  return {counts,cases:cases.map((item,index)=>({id:index+1,name:item.name,file:item.file,status:item.skip?'skipped':item.todo?'todo':item.event==='test:pass'?'passed':/cancelled/.test(item.details?.error?.failureType||'')?'cancelled':'failed',durationMs:item.details?.duration_ms,skipReason:item.skip||undefined,todoReason:item.todo||undefined,error:item.details?.error,classification:item.classification}))};
+  return {counts,cases:cases.map((item,index)=>({id:item.caseId??index+1,name:item.name,file:item.file,status:item.skip?'skipped':item.todo?'todo':item.event==='test:pass'?'passed':/cancelled/.test(item.details?.error?.failureType||'')?'cancelled':'failed',durationMs:item.details?.duration_ms,skipReason:item.skip||undefined,todoReason:item.todo||undefined,error:item.details?.error,classification:item.classification}))};
 }

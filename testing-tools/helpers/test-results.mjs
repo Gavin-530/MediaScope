@@ -1,14 +1,4 @@
 // These are evidence/protocol checks, not simulated media measurements.
-export function featureResults(coverage,cases,suite){
-  return coverage.features.filter(feature=>(feature.scope==='gpu')===(suite==='gpu')).map(feature=>{
-    const selected=cases.filter(c=>feature.files.includes(c.file)&&new RegExp(feature.names,'i').test(c.name));
-    const missingFiles=feature.files.filter(file=>!selected.some(c=>c.file===file));
-    const checks=selected.map(c=>({name:c.name,file:c.file,status:c.skip?'skipped':c.event==='test:pass'?'passed':'failed',skipReason:c.skip||undefined}));
-    const status=!selected.length?'not-run':checks.some(c=>c.status==='failed')?'failed':checks.every(c=>c.status==='skipped')?'skipped':missingFiles.length||checks.some(c=>c.status==='skipped')?'partial':'passed';
-    return {...feature,checks,missingFiles,status};
-  });
-}
-
 export function releaseReadiness(counts,features){
   const reasons=[];
   if(!counts||counts.tests<=0||counts.passed<=0)reasons.push('No executed passing checks');
@@ -16,11 +6,6 @@ export function releaseReadiness(counts,features){
   for(const feature of features)if(feature.status!=='passed')reasons.push(`${feature.id}: ${feature.status}`);
   if(!features.length)reasons.push('Feature mapping is empty');
   return {ready:reasons.length===0,reasons};
-}
-
-export function testSuiteFiles(names,suite){
-  const browserFiles=['browser.test.mjs','desktop-browser.test.mjs','runtime-data-browser.test.mjs'];
-  return names.filter(name=>name.endsWith('.test.mjs')&&(suite==='gpu'?name==='siti-gpu-hardware.test.mjs':name!=='siti-gpu-hardware.test.mjs'&&(suite==='full'||(suite==='browser')===browserFiles.includes(name)))).sort();
 }
 
 // General and GPU coverage have separate gates; neither record alone accepts a release.

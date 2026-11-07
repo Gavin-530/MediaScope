@@ -1,6 +1,6 @@
 import {mkdir,writeFile} from 'node:fs/promises';
 import path from 'node:path';
-import {FF,run,probe} from '../../engine.mjs';
+import {FF,run,probe} from './subject.mjs';
 // Real encoded files and real probe output; never manufacture measured reports.
 export async function makeMedia(directory) {
   await mkdir(directory,{recursive:true});

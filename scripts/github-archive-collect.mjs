@@ -17,7 +17,26 @@ export function attachments(value){
   return [...found].map(url=>({url,status:'not-downloaded',reason:'Attachment adapter not supported; offline dependency'}));
 }
 function redactHook(hook){const {config,...rest}=hook;const clean={...config};delete clean.secret;for(const k of Object.keys(clean)){if(/token|password|authorization/i.test(k))delete clean[k];if(k==='url'){try{const url=new URL(clean[k]);url.username='';url.password='';url.search='';clean[k]=url.href}catch{clean[k]='unavailable'}}}return {...rest,config:clean}}
-export async function sync(project,root,{budgetMs,maxBytes,reader=new GitHubReader({root,budgetMs,maxBytes})}={}){
+export function documentationOnlyAttempt(run,data,jobs,artifacts,attempt){
+  if(run.path!=='.github/workflows/tests.yml'||run.event!=='push'||data.status!=='completed'||data.conclusion!=='success'||jobs.length!==1)return false;
+  return artifacts.some(entry=>{
+    const r=entry.scopeReport;
+    return entry.artifact.name==='mediascope-ci-scope-'+run.id+'-'+attempt&&entry.content?.state==='available'&&
+      r?.schema===1&&r.scope==='docs-only'&&r.testedSha===run.head_sha&&r.productRegressionPerformed===false&&r.releaseAcceptance===false&&
+      r.github?.repository===TARGET.repository&&r.github.runId===String(run.id)&&r.github.runAttempt===String(attempt)&&
+      r.github.job==='full-regression'&&/^[a-f0-9]{40}$/.test(r.base)&&r.base!==r.testedSha&&
+      Array.isArray(r.files)&&r.files.length>0&&new Set(r.files).size===r.files.length&&r.files.every(f=>typeof f==='string'&&f.endsWith('.md'))&&
+      r.documentationChecks?.documents===r.files.length&&['whitespace','utf8','fences'].every(k=>r.documentationChecks[k]==='passed');
+  });
+}
+export function readScopeTransport(project,zip,task){
+  const destination=path.join(task,'scope');
+  const output=execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-Command',
+    '. $env:MEDIASCOPE_SCOPE_LIBRARY; Expand-GitHubEvidenceZip $env:MEDIASCOPE_SCOPE_ZIP $env:MEDIASCOPE_SCOPE_DEST; [IO.File]::ReadAllText((Join-Path $env:MEDIASCOPE_SCOPE_DEST "ci-scope.json"))'],
+    {encoding:'utf8',windowsHide:true,maxBuffer:1024*1024,env:{...process.env,MEDIASCOPE_SCOPE_LIBRARY:path.join(project,'scripts/github-evidence-lib.ps1'),MEDIASCOPE_SCOPE_ZIP:zip,MEDIASCOPE_SCOPE_DEST:destination}});
+  return JSON.parse(output);
+}
+export async function sync(project,root,{budgetMs,maxBytes,reader=new GitHubReader({root,budgetMs,maxBytes}),readScope=readScopeTransport}={}){
   const inventory=await latestInventory(project),repository=(await reader.get('')).data;
   if(String(repository.id)!==TARGET.repositoryId||repository.full_name!==TARGET.repository)throw Error('Remote repository ID/name mismatch');
   const report={format:1,...TARGET,captureStartedAt:now(),captureCompletedAt:null,atomicSnapshot:false,counts:{saved:0,unchanged:0,waiting:0,expired:0,missing:0,'no-permission':0,error:0},categories:{},gaps:[],queue:[],pages:reader.pages,addedBytes:0,downloadBytes:0,sourceHistory:'Only previously preserved history and currently retrievable observations; never all past GitHub changes'};
@@ -114,14 +133,15 @@ export async function sync(project,root,{budgetMs,maxBytes,reader=new GitHubRead
         const artifacts=allArtifacts.filter(a=>String(a.workflow_run?.id)===String(run.id));
         const expected=artifacts.filter(a=>a.name==='mediascope-test-evidence-'+run.id+'-'+attempt);
         for(const artifact of artifacts){
-          const namedAttempt=artifact.name.match(/^mediascope-test-evidence-\d+-(\d+)$/)?.[1];
-          if(namedAttempt&&artifact.name.match(/^mediascope-test-evidence-(\d+)-/)[1]!==String(run.id))throw Error('Artifact name and platform run identity mismatch');
+          const namedAttempt=artifact.name.match(/^mediascope-(?:test-evidence|ci-scope)-\d+-(\d+)$/)?.[1];
+          const scopeArtifact=artifact.name===`mediascope-ci-scope-${run.id}-${attempt}`;
+          if(namedAttempt&&artifact.name.match(/^mediascope-(?:test-evidence|ci-scope)-(\d+)-/)[1]!==String(run.id))throw Error('Artifact name and platform run identity mismatch');
           if(artifact.workflow_run?.head_sha&&artifact.workflow_run.head_sha!==run.head_sha)throw Error('Artifact platform head SHA mismatch');
           if(namedAttempt&&Number(namedAttempt)!==attempt)continue;
           if(!namedAttempt&&attempt!==run.run_attempt)continue;
           associated.add(String(artifact.id));const entry={artifact:stable(artifact),attemptAssociation:namedAttempt?'validated-by-platform-run-and-transport':'unknown-generic-artifact-attempt'};
           if(artifact.expired){report.counts.expired++;entry.content={state:'expired',reason:'Platform artifact expired'};report.gaps.push({category:'actions',identity:String(artifact.id),...entry.content})}
-          else if(namedAttempt){
+          else if(namedAttempt&&!scopeArtifact){
             if(run.path!=='.github/workflows/tests.yml'||jobs.length!==1||jobs[0].name!=='Windows full regression'){
               // The exporter supports one product job. Do not silently accept a future matrix.
               entry.content=gap('actions',artifact.id,Error('Unrecognized product job layout; exporter identity adapter requires review'));
@@ -138,13 +158,16 @@ export async function sync(project,root,{budgetMs,maxBytes,reader=new GitHubRead
             }
           }else{
             let task;try{task=await downloadTask(root,'artifact-'+artifact.id);const zip=path.join(task,'artifact.zip'),check=await reader.download('actions/artifacts/'+artifact.id+'/zip',zip,{digest:artifact.digest});
-              if(run.run_attempt!==1){const error=Error('Generic artifact attempt cannot be confirmed; original download retained in owned pending');error.state='unresolved-attempt';entry.content=gap('actions',artifact.id,error)}
-              else{const saved=await save('actions/'+run.id+'/attempts/1/artifacts/'+artifact.id,{'artifact.zip':{archiveSourceFile:zip},'artifact.json':stable(artifact),'validation.json':check});entry.attemptAssociation='unique-platform-attempt';entry.content={state:'available',path:saved.path,validation:check.validation};await insideCleanup(root,task)}
+              if(run.run_attempt!==1&&!scopeArtifact){const error=Error('Generic artifact attempt cannot be confirmed; original download retained in owned pending');error.state='unresolved-attempt';entry.content=gap('actions',artifact.id,error)}
+              else{if(scopeArtifact)entry.scopeReport=await readScope(project,zip,task);const saved=await save('actions/'+run.id+'/attempts/'+attempt+'/artifacts/'+artifact.id,{'artifact.zip':{archiveSourceFile:zip},'artifact.json':stable(artifact),'validation.json':check});entry.attemptAssociation=scopeArtifact?'validated-by-platform-run-and-scope-name':'unique-platform-attempt';entry.content={state:'available',path:saved.path,validation:check.validation};await insideCleanup(root,task)}
             }catch(e){entry.content=gap('actions',artifact.id,e)}
           }
           metadata.artifacts.push(entry);
         }
-        if(run.path==='.github/workflows/tests.yml'&&!expected.length){const state=data.status==='completed'?'missing':'waiting';report.counts[state]++;metadata.productEvidence={state,reason:state==='waiting'?'Artifact not yet uploaded':'No located evidence artifact; workflow state does not substitute for test data'};report.gaps.push({category:'actions',identity:run.id+'/'+attempt,...metadata.productEvidence})}
+        if(run.path==='.github/workflows/tests.yml'&&!expected.length){
+          if(documentationOnlyAttempt(run,data,jobs,metadata.artifacts,attempt))metadata.productEvidence={state:'not-applicable',reason:'Documentation checks completed and product regression was intentionally not run; scope transport archived separately, not a product test result'};
+          else{const state=data.status==='completed'?'missing':'waiting';report.counts[state]++;metadata.productEvidence={state,reason:state==='waiting'?'Artifact not yet uploaded':'No located evidence artifact; workflow state does not substitute for test data'};report.gaps.push({category:'actions',identity:run.id+'/'+attempt,...metadata.productEvidence})}
+        }
         runContent.attempts.push(metadata);
       }
       await save('actions/'+run.id,{'run.json':runContent},{sourceCreatedAt:run.created_at??null,sourceUpdatedAt:run.updated_at??null});

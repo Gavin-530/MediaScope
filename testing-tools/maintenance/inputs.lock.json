@@ -1,0 +1,33 @@
+{
+  "schema": 2,
+  "scope": "reference-maintenance",
+  "files": [
+    {
+      "path": "siti/vqeg-pq.json",
+      "bytes": 155332,
+      "sha256": "833f55146238cbac79dc5b46dfa0f9227817f990e8a4afd361d80ab5f675dea0",
+      "url": "https://raw.githubusercontent.com/Gavin-530/MediaScope/0f0f77e33e7156294c7313101cb50d7795c6e2a5/test/reference/siti/vqeg-pq.json",
+      "role": "independent-reference",
+      "consumerGroup": "siti",
+      "scope": "maintenance"
+    },
+    {
+      "path": "siti/vqeg-reference.py",
+      "bytes": 27316,
+      "sha256": "84557e030e302fa14e28a1cd1227f3320986050c4cf5f5f4d590215971329873",
+      "url": "https://raw.githubusercontent.com/Gavin-530/MediaScope/0f0f77e33e7156294c7313101cb50d7795c6e2a5/test/reference/siti/vqeg-reference.py",
+      "role": "upstream-source",
+      "consumerGroup": "siti",
+      "scope": "maintenance"
+    },
+    {
+      "path": "descriptor/av-15.1.0.whl",
+      "bytes": 31336093,
+      "sha256": "d5921aa45f4c1f8c1a8d8185eb347e02aa4c3071278a2e2dd56368d54433d643",
+      "url": "https://files.pythonhosted.org/packages/15/74/6f8e38a3b0aea5f28e72813672ff45b64615f2c69e6a4a558718c95edb9f/av-15.1.0-cp312-cp312-win_amd64.whl",
+      "role": "independent-reference-runtime",
+      "consumerGroup": "descriptor",
+      "scope": "maintenance"
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+// Observes the real production functions. No substitute calculations or answers.
+import * as engine from '../../engine.mjs';
+import * as analysis from '../../analysis.mjs';
+import * as siti from '../../siti.mjs';
+import * as repeat from '../../repeat.mjs';
+import * as bd from '../../bd-measure.mjs';
+import {observed} from './observations.mjs';
+
+export const {FF,FP,decodeThreadCount,checkAnalysisMemory,normalizeMediaPath,video,segmentInput,segmentFilter,validateComparableStreams,resolveChromaAssumptions,alignment,playbackAlignment,comparisonProfile,bitDepthPlan,bitDepthReductionFilter,createComparisonSession,summarize}=engine;
+export const run=observed('engine.run',engine.run);
+export const probe=observed('engine.probe',engine.probe,{fileArguments:[0]});
+export const readPixelFormats=observed('engine.pixel-formats',engine.readPixelFormats);
+export const scan=observed('engine.scan',engine.scan,{fileArguments:[0]});
+export const scanSegment=observed('engine.scan-segment',engine.scanSegment,{inputFiles:a=>[a[0]?.file??a[0]?.raw?.format?.filename].filter(Boolean)});
+export const assertSegmentUnchanged=engine.assertSegmentUnchanged;
+export const packets=observed('engine.packets',engine.packets,{fileArguments:[0]});
+export const compare=observed('engine.compare',engine.compare,{fileArguments:[0,1]});
+export const verifyBitDepthReduction=observed('engine.bitdepth-reduction',engine.verifyBitDepthReduction);
+export const {distribution,av1ShortRefs,createTraceParser,mapStructure,buildGops,metadataSummary,trialOptions}=analysis;
+export const allPackets=observed('analysis.all-packets',analysis.allPackets,{fileArguments:[0]});
+export const traceStructure=observed('analysis.trace',analysis.traceStructure,{fileArguments:[0]});
+export const structure=observed('analysis.structure',analysis.structure,{fileArguments:[0]});
+export const complexity=observed('analysis.complexity',analysis.complexity,{fileArguments:[0]});
+export const trial=observed('analysis.trial',analysis.trial,{inputFiles:a=>[a[0]?.file].filter(Boolean)});
+export const {sitiWorkerCount,sitiGpuRequest,closeSitiGpu}=siti;
+export const sitiGpuCapability=observed('siti.capability',siti.sitiGpuCapability);
+export const measureSiti=observed('siti.measure',siti.measureSiti,{fileArguments:[0]});
+export const {MAX_REPEAT_FRAME_BYTES,repeatFileSignature,verifyRepeatPadding}=repeat;
+export const repeatContentSha256=observed('repeat.file-hash',repeat.repeatContentSha256,{fileArguments:[0]});
+export const analyzeRepeats=observed('repeat.analyze',repeat.analyzeRepeats,{fileArguments:[0]});
+export const repeatPreview=observed('repeat.preview',repeat.repeatPreview,{inputFiles:a=>[a[0]?.file].filter(Boolean)});
+export const {bdMeasurementReason}=bd;
+export const measureBdPoint=observed('bd.measure-point',bd.measureBdPoint,{fileArguments:[0,1]});

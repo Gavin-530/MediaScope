@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "scope": "reference-generation-only",
+  "platform": "win32-x64",
+  "python": "CPython 3.12",
+  "dependencies": [
+    {
+      "name": "numpy",
+      "version": "2.1.3",
+      "metadata": "https://pypi.org/pypi/numpy/2.1.3/json",
+      "url": "https://files.pythonhosted.org/packages/a6/84/fa11dad3404b7634aaab50733581ce11e5350383311ea7a7010f464c0170/numpy-2.1.3-cp312-cp312-win_amd64.whl",
+      "file": "numpy-2.1.3-cp312-cp312-win_amd64.whl",
+      "size": 12566858,
+      "sha256": "0d30c543f02e84e92c4b1f415b7c6b5326cbe45ee7882b6b77db7195fb971e3a"
+    },
+    {
+      "name": "scipy",
+      "version": "1.14.1",
+      "metadata": "https://pypi.org/pypi/scipy/1.14.1/json",
+      "url": "https://files.pythonhosted.org/packages/aa/7d/43ab67228ef98c6b5dd42ab386eae2d7877036970a0d7e3dd3eb47a0d530/scipy-1.14.1-cp312-cp312-win_amd64.whl",
+      "file": "scipy-1.14.1-cp312-cp312-win_amd64.whl",
+      "size": 44521212,
+      "sha256": "2ff38e22128e6c03ff73b6bb0f85f897d2362f8c052e3b8ad00532198fbdae3f"
+    }
+  ],
+  "descriptorReference": {
+    "name": "PyAV libavutil 59",
+    "version": "15.1.0",
+    "url": "https://files.pythonhosted.org/packages/15/74/6f8e38a3b0aea5f28e72813672ff45b64615f2c69e6a4a558718c95edb9f/av-15.1.0-cp312-cp312-win_amd64.whl",
+    "bytes": 31336093,
+    "sha256": "d5921aa45f4c1f8c1a8d8185eb347e02aa4c3071278a2e2dd56368d54433d643",
+    "dll": "av.libs/avutil-59-7a7ccc29eb93e5eb7c701b6318a81c68.dll",
+    "dllSha256": "dc671467a8bf479b5a55456fac81fa2ff482c21da82e069ff14b8ff989ca5744"
+  }
+}

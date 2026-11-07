@@ -3,6 +3,25 @@ import {writeFile,mkdir} from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {reportFromPortable} from '../../public/portable.js';
+import {createServer} from 'node:http';
+import {recordObservation,fileIdentity} from './observations.mjs';
+export const fetchBlocksPort=error=>error?.cause?.message==='bad port';
+
+// Only a transport precondition is selected here; no product process or assertion is retried.
+export async function browserPort(){
+  for(let attempt=1;attempt<=10;attempt++){
+    const probe=createServer((request,response)=>{response.setHeader('Connection','close');response.end('test-port-preflight')});
+    await new Promise((resolve,reject)=>{probe.once('error',reject);probe.listen(0,'127.0.0.1',resolve)});
+    const port=probe.address().port;
+    try{
+      const response=await fetch('http://127.0.0.1:'+port,{signal:AbortSignal.timeout(3000)});
+      if(await response.text()!=='test-port-preflight')throw Error('Unexpected port probe response');
+      return port;
+    }catch(error){if(!fetchBlocksPort(error))throw error;console.log('Port precondition rejected '+port+' by Fetch before product launch')}
+    finally{await new Promise(resolve=>probe.close(resolve))}
+  }
+  throw Error('TEST_INFRA: no browser-compatible loopback port');
+}
 export async function startServer(dataDirectory,{port=0,attempt=1,env={}}={}) {
   await mkdir(dataDirectory,{recursive:true});
   const app=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../..');
@@ -24,18 +43,23 @@ export async function startServer(dataDirectory,{port=0,attempt=1,env={}}={}) {
   catch(e){
     // PORT=0 can select a port blocked by Fetch: https://fetch.spec.whatwg.org/#port-blocking.
     // Retry only this confirmed setup condition, before any product assertion; retain every rejected startup.
-    if(e.cause?.message==='bad port'){
+    if(fetchBlocksPort(e)){
       logFile=`server-rejected-port-${attempt}.log`;await stop();
       if(attempt>=10)throw Error('TEST_INFRA: no Fetch-compatible random HTTP port after 10 starts',{cause:e});
       return startServer(dataDirectory,{attempt:attempt+1,env});
     }
     await stop();throw Error('TEST_INFRA: application HTTP/session startup failed',{cause:e});
   }
-  const request=async(url,method='GET',input)=>{
-    const response=await fetch(base+'/api/'+url,{method,headers:{'x-mediascope-token':token,'content-type':'application/json'},body:input===undefined?undefined:JSON.stringify(input)});
-    const data=await response.json();if(!response.ok)throw Error(`API ${method} ${url}: ${response.status} ${JSON.stringify(data)}`);return url==='probe'||/^jobs\/[^/]+\/report$/.test(url)?reportFromPortable(data):data;
+  const request=async(url,method='GET',input,{jsonSpace}={})=>{
+    const started=performance.now();
+    const body=input===undefined?undefined:JSON.stringify(input,null,jsonSpace);
+    const response=await fetch(base+'/api/'+url,{method,headers:{'x-mediascope-token':token,'content-type':'application/json'},body});
+    const data=await response.json();
+    const inputs=await Promise.all(['file','reference','candidate'].filter(k=>typeof input?.[k]==='string').map(k=>fileIdentity(input[k])));
+    await recordObservation('api.response',{method,url,input,inputs,requestBytes:body===undefined?0:Buffer.byteLength(body),status:response.status,result:data,elapsedMs:performance.now()-started});
+    if(!response.ok)throw Error(`API ${method} ${url}: ${response.status} ${JSON.stringify(data)}`);return url==='probe'||/^jobs\/[^/]+\/report$/.test(url)?reportFromPortable(data):data;
   };
-  return {base,token,request,stop};
+  return {base,token,request,stop,pid:child.pid};
 }
 export async function waitForJob(request,id) {
   const deadline=Date.now()+60000;

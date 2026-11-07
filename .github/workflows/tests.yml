@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: read
+  checks: read
 
 concurrency:
   group: mediascope-tests-${{ github.run_id }}-${{ github.run_attempt }}
@@ -27,14 +28,21 @@ jobs:
       - name: Check out the exact tested commit
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          fetch-depth: 0
           persist-credentials: false
+      - name: Select validation scope
+        id: scope
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/ci-scope.mjs
       - name: Prepare locked runtime and testing tools, then run general regression
         id: regression
+        if: steps.scope.outputs.scope != 'docs-only'
         timeout-minutes: 75
         run: ./scripts/run-ci-tests.ps1
       - name: Export independent results or interruption diagnostics
         id: evidence_export
-        if: always()
+        if: always() && steps.regression.outcome != 'skipped'
         env:
           TEST_STEP_OUTCOME: ${{ steps.regression.outcome }}
         run: ./scripts/export-github-test-evidence.ps1 -TestStepOutcome $env:TEST_STEP_OUTCOME
@@ -46,5 +54,15 @@ jobs:
           path: evidence-archive/pending/cloud-export/bundle.zip
           retention-days: 90
           compression-level: 0
+          if-no-files-found: error
+          overwrite: false
+      - name: Save validation scope
+        if: always() && steps.scope.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mediascope-ci-scope-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .build/ci-scope.json
+          include-hidden-files: true
+          retention-days: 90
           if-no-files-found: error
           overwrite: false

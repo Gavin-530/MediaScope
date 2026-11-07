@@ -147,9 +147,9 @@
           >
         </div>
         <p id="siti-device-status" class="hint" role="status" aria-live="polite">优先使用 GPU；运行前自检，不可用或设备执行失败时回退 CPU。</p>
-        <details id="siti-scene-settings" class="siti-options">
-          <summary>场景范围</summary>
-        <div class="row siti-options">
+        <details id="siti-input-settings" class="siti-options">
+          <summary>场景范围与 SI/TI 输入设置</summary>
+        <div id="siti-scene-settings" class="row siti-options">
           <label for="siti-scenes">场景范围<select id="siti-scenes" disabled>
             <option value="unconfirmed">边界未确认（全片参考）</option>
             <option value="single">已确认只有一个场景</option>
@@ -158,9 +158,6 @@
           <label id="siti-scene-frames-label" class="hidden" for="siti-scene-frames">各场景起始帧（从 1 计数，须包含 1）<input id="siti-scene-frames" placeholder="例如 1, 101, 251" disabled /></label>
         </div>
         <p id="siti-scene-hint" class="hint">未确认场景边界，剪辑点可能影响 TI。</p>
-        </details>
-        <details id="siti-input-settings" class="siti-options">
-          <summary>SI/TI 输入设置</summary>
           <p class="hint">默认按文件声明解释输入；声明缺失或不准确时，请核实后在此确认。</p>
           <div class="row siti-input-grid">
             <label>亮度范围<select id="siti-range" disabled><option value="auto">按文件声明</option><option value="tv">用户确认：有限范围</option><option value="pc">用户确认：全范围</option></select></label>
@@ -176,11 +173,8 @@
           </div>
           <div id="repeat-options" class="analysis-target-settings hidden">
             <h3>重复帧与时间诊断设置</h3>
-            <details open>
-              <summary>静止画面筛查</summary>
-              <label><input id="freeze-enabled" type="checkbox" disabled /> 筛查持续静止画面（至少 2 秒）</label>
-              <p class="hint">静止筛查按画面变化阈值生成候选，供人工复核；正常静态画面也可能命中。</p>
-            </details>
+            <label><input id="freeze-enabled" type="checkbox" disabled /> 筛查持续静止画面（至少 2 秒）</label>
+            <p class="hint">静止筛查按画面变化阈值生成候选，供人工复核；正常静态画面也可能命中。</p>
           </div>
           </div>
         </fieldset>

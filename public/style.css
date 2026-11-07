@@ -1295,7 +1295,7 @@ h4 {
   }
 }
 
-#siti-scene-settings .row > label {
+#siti-scene-settings > label {
   min-width: 0;
   flex: 1 1 220px;
 }

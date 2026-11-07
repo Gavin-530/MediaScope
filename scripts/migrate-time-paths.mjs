@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {execFileSync,spawnSync} from 'node:child_process';
-import {canonicalTimePath,canonical,hash,now,inside,noLinks,exists,tree,fileHash,readJson,writeJson,snapshots,verifySnapshot,verifySnapshotLocation,verifyArchive,seal,lock,insideCleanup} from './github-archive-store.mjs';
+import {canonicalTimePath,canonical,hash,now,inside,noLinks,exists,tree,fileHash,readJson,writeJson,snapshots,verifySnapshot,verifySnapshotLocation,verifyArchive,seal,lock,insideCleanup,publishNewPath} from './github-archive-store.mjs';
 import {evidenceRecords,verifyEvidence} from './github-archive-migration.mjs';
 
 const digest=value=>hash(JSON.stringify(canonical(value)));
@@ -93,7 +93,7 @@ export async function rollbackTimePaths(project,{verify=verifyCurrent}={}){
     if(oldExists===newExists)throw Error('Ambiguous or missing rollback source: '+row.from);
     const source=newExists?to:from;
     if(digest(await inventoryAt(source))!==row.inventorySha256)throw Error('Changed rollback source; original retained: '+row.from);
-    if(newExists){await fs.mkdir(path.dirname(from),{recursive:true});await fs.rename(to,from);}
+    if(newExists){await fs.mkdir(path.dirname(from),{recursive:true});await publishNewPath(project,to,from);}
   }
   for(const saved of journal.controls){
     const name=inside(project,path.join(project,saved.path));await noLinks(name);
@@ -156,7 +156,7 @@ export async function applyTimePaths(project,{verify=verifyCurrent,onStage=async
       if(digest(await inventoryAt(from))!==row.inventorySha256||await exists(to))throw Error('Migration source or destination changed');
       const missing=[];for(let p=path.dirname(to);!await exists(p);p=path.dirname(p))missing.unshift(p);
       for(const p of missing){journal.createdParents.push(relative(github,p));await saveJournal(file,journal);await fs.mkdir(p);}
-      await noLinks(to);await fs.rename(from,to);await onStage('moved',row);
+      await noLinks(to);await publishNewPath(project,from,to);await onStage('moved',row);
       if(digest(await inventoryAt(to))!==row.inventorySha256)throw Error('Moved record bytes changed');
       await saveJournal(file,journal);
     }
