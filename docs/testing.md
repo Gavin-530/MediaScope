@@ -255,7 +255,11 @@ full（默认通用阶段）/core/browser/gpu/native是执行阶段过滤；--mo
 | [scripts/recover-test-evidence.ps1](<../scripts/recover-test-evidence.ps1>) | 开发/运维工具 | 恢复中断的正式记录 |
 | [scripts/rename-evidence-records.ps1](<../scripts/rename-evidence-records.ps1>) | 开发/运维工具 | 显式规范化记录名并维护映射/别名 |
 | [scripts/replay-bitrate-evidence.mjs](<../scripts/replay-bitrate-evidence.mjs>) | 开发/运维工具 | 重放已有逐包/窗口证据，核对数值而非重新声称媒体测量 |
-| [scripts/run-ci-tests.ps1](<../scripts/run-ci-tests.ps1>) | 开发/运维工具 | 现有 Actions 执行包装和结构化状态；本轮不重设其职责 |
+| [scripts/run-ci-tests.ps1](<../scripts/run-ci-tests.ps1>) | 开发/运维工具 | 旧 Actions 全量入口及结构化状态 |
+| [scripts/split-tests.mjs](<../scripts/split-tests.mjs>) | 开发/运维工具 | 分工计划、本地执行、云端预检、合并核验与发布复核入口 |
+| [scripts/split-test-plan.mjs](<../scripts/split-test-plan.mjs>) | 测试基础设施 | 由确切比较基线和登记用例计算本地、云端及提交自测的无重叠清单 |
+| [scripts/split-test-receipts.mjs](<../scripts/split-test-receipts.mjs>) | 测试基础设施 | 复核实际执行证据、同源部署包及维护者签名 |
+| [scripts/split-test-github.mjs](<../scripts/split-test-github.mjs>) | 测试基础设施 | 核验 GitHub 工作流、尝试、作业、产物摘要与同 SHA 复用 |
 | [scripts/run-project.mjs](<../scripts/run-project.mjs>) | 开发/运维工具 | npm 统一入口，选择运行时后分派启动/测试 |
 | [scripts/runtime-data.mjs](<../scripts/runtime-data.mjs>) | 运行源码/配置 / jobs | 产品报告/设置/本机运行数据保存和清理 |
 | [scripts/start-source.ps1](<../scripts/start-source.ps1>) | 开发/运维工具 | 源码启动入口 |
@@ -987,6 +991,29 @@ inputs是允许读取的固定输入；[]表示由源码中明确控制数据或
 现有必需 job 始终执行，实际范围写入摘要及 `mediascope-ci-scope-<run>-<attempt>` 产物。轻量结果明确声明未运行产品回归，不能替代发布验收；发布须有确切提交的完整回归记录，必要时手动触发。归档核对范围产物的结构、提交、仓库、run/attempt 和检查结果，保存传输原件后才将该次产品记录标为不适用；缺失或身份不符继续记录缺口，不从步骤显示名称推断。
 
 本地专项入口：`node --test testing-tools/tooling/test-system/ci-scope.test.mjs`。首次引入本调整及后续修改规则/CI 时仍执行完整回归；远端在配置提交推送后才采用新规则。
+
+## 本地与 Actions 分工验收
+
+分工入口采用同一候选 SHA 和同一比较基线。本地固定 2 路运行产品计算及依赖真实媒体的流程。Windows Actions 固定 1 路运行获审的非计算用例。`Commit messages` 独立运行自己的提交检查器自测。三组稳定 ID 不重叠，合计覆盖本次应跑范围。其他尚未审查的用例归本地。涉及桌面、安装、启动或卸载时追加原生交互及两轮部署。涉及 GPU 的改动追加真实硬件验证。测试门禁本身变更时执行全部阶段。部署阶段使用同一确切 ZIP。
+
+分工用于 `verify-main-*` 标签预检、对同一标签手动核验及其后的 `main` push。`verify-main-pilot-*` 标签可在主线切换前独立试跑，其余分工事件在仓库变量 `MEDIASCOPE_SPLIT_ENABLED=true` 后启用。分工必须配置 `MEDIASCOPE_SPLIT_PUBLIC_KEY` 为获审维护者的 Ed25519 公钥。启用后缺公钥会导致分工验收失败。普通 PR、合并队列及其他分支仍提供原全量回归；切换后的 `main` 直推采用独立必需检查 `MediaScope split acceptance`，旧结果不能满足该检查。若需要由 PR 或合并队列交付，先保留原门禁，直到该路径有等价验收。
+
+可选仓库变量 `MEDIASCOPE_SPLIT_BASELINE` 只登记已有合格完整分工验收的确切祖先 SHA。留空时分工按完整范围执行。登记后，只有相对实际基线及登记基线均满足准入的已登记文档或 `public/bitrate-model.js` 单文件修改可缩小范围。Actions 核验该基线的完整验收回执；回执缺失、过期或只有部分验收时轻量档失败，可用完整标签重跑。码率档覆盖整个登记的码率模块及关联集成用例。
+
+1. 冻结候选提交，核对最新 `origin/main`。在干净检出执行 `npm run test:split -- plan --base <main-SHA>` 预览。云端若登记了全量基线，本地使用同一 `MEDIASCOPE_SPLIT_BASELINE` 或 `--anchor <SHA>`。完整预检标签用 `verify-main-full-*`，本地传 `--full`。发布标签预检用 `verify-main-release-*`，本地传 `--release` 和 `--archive <ZIP>`。
+2. 使用获授权的预检标签启动 Actions，同时本地执行 `npm run test:split -- local --base <main-SHA> --key <私钥文件>`，按计划提供 `--archive <ZIP>`。私钥由执行并审阅本地测试的维护者保管在项目外。只将公钥配到 GitHub。维护者签名证明回执来源，源码、用例、实际结果和已封存回执由本地入口核对。云端预检独立完成并保留证据。文档轻量档由云端检查，本地审阅文义和链接。
+3. 两侧结束后对同一标签手动运行 `MediaScope tests`，提交 `local-receipt.txt` 中的一行签名回执作为 `local_receipt`。文档轻量档留空。`MediaScope split acceptance` 核验签名、候选和范围、云端作业的实际通过状态以及产物摘要。缺项、失败、旧 SHA 或错范围均阻止放行。核验和提交说明都通过后，重新确认 `origin/main` 与验收基线一致，再普通快进更新 `main`。主线同 SHA 核验通过时引用原执行回执。失败或被拒绝的原记录独立保留。
+
+发布继续要求完整范围、真实 GPU、原生交互、同一 ZIP 的离线与真实首次联网部署。分工发布复核入口为 `npm run test:split -- release --archive <ZIP>`，读取对应 GitHub 验收及本地签名，并复核实际 ZIP。单侧范围记录仍标为部分测试，验收范围在分工回执中记录。
+
+部署前从 `runtime-lock.json` 指定的来源准备 `.build/downloads/node.zip` 和 `.build/downloads/ffmpeg.zip`。本地入口在开始长回归前核对这两个离线传输夹具的 SHA-256。联网阶段仍使用真实锁定下载。
+
+首次切换按以下顺序执行。
+
+1. 按现有 `Windows full regression` 和 `Commit messages` 门禁验证并合入实现。保持分工开关关闭及轻量基线空白。审阅确切提交中的工作流、验收脚本和测试分组。GitHub Actions 来源限制只能识别运行来源，仍须审阅候选内对工作流和验证器的修改。
+2. 配置维护者公钥。用 `verify-main-pilot-release-*` 在同一 SHA 实跑本地和 GitHub 全部分工。先核对缺签名或错签名会令核验失败，再用真实签名回执确认通过，并复核原始结果、归档、同包部署和覆盖。
+3. 暂停 `main` 更新，在同一次保护规则更新中将 `Windows full regression` 换为限定 GitHub Actions 来源的 `MediaScope split acceptance`，保留 `Commit messages`、管理员约束及其他保护，随后打开 `MEDIASCOPE_SPLIT_ENABLED`。核对服务器规则和候选的两项必需检查，再恢复交付。在第一笔正常快进时确认主线复用同一 SHA。启用轻量基线须另行验证。
+4. 若需回退，暂停 `main` 更新，关闭分工开关并恢复原必需检查及来源。候选按原门禁补齐对应 SHA 的结果后恢复交付。保留试点、失败和已完成验收的原始记录。
 
 ## 验收回执
 

@@ -24,6 +24,15 @@ if(args[0]==='--complete'){
   const {runExtension}=await import('../testing-tools/extensions/index.mjs');await runExtension(args.slice(1));
 }else{
 let suite='full',ref,affected,requireClean=false,release=false,maxLogMiB=16,warnTotalMiB=1024,list=false,dryRun=false,jobs=1;const modules=[],caseIds=[],requirements=[];
+if(args[0]==='--case-file'){
+  args.shift();
+  const file=path.resolve(project,args.shift()??'');
+  const build=path.join(project,'.build');
+  if(!file.startsWith(build+path.sep)||!(await fs.lstat(file)).isFile()||!(await fs.realpath(file)).startsWith((await fs.realpath(build))+path.sep))throw Error('Case list must be a regular file in .build');
+  const ids=JSON.parse(await fs.readFile(file,'utf8'));
+  if(!Array.isArray(ids)||!ids.length||ids.length>caseCatalog.cases.length||new Set(ids).size!==ids.length||ids.some(id=>typeof id!=='string'))throw Error('Invalid case list');
+  caseIds.push(...ids);
+}
 while(args.length){const a=args.shift();if(a==='--suite')suite=args.shift();else if(a==='--module'||a==='--case'||a==='--requirement'){const value=args.shift();if(!value||value.startsWith('--'))throw Error('Missing selection value');(a==='--module'?modules:a==='--requirement'?requirements:caseIds).push(...value.split(','))}else if(a==='--affected'){affected=args.shift();if(!affected||affected.startsWith('-'))throw Error('Missing valid --affected reference')}else if(a==='--jobs')jobs=Number(args.shift());else if(a==='--list')list=true;else if(a==='--dry-run')dryRun=true;else if(a==='--source-ref'){ref=args.shift();if(!ref)throw Error('Missing source ref')}else if(a==='--require-clean')requireClean=true;else if(a==='--release'){release=true;requireClean=true}else if(a==='--max-log-mib')maxLogMiB=Number(args.shift());else if(a==='--warn-total-mib')warnTotalMiB=Number(args.shift());else throw Error('Unknown test argument: '+a)}
 if(!['full','core','browser','gpu','native'].includes(suite))throw Error('Suite must be full, core, browser, gpu or native');
 if(!list&&!dryRun)execFileSync(process.execPath,[path.join(project,'scripts','local-notes.mjs'),'check'],{cwd:project,stdio:'inherit',windowsHide:true});

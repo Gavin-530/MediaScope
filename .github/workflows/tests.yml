@@ -7,10 +7,16 @@ on:
   pull_request:
   merge_group:
   workflow_dispatch:
+    inputs:
+      local_receipt:
+        description: Signed local test receipt for the verification tag
+        type: string
+        required: false
 
 permissions:
   contents: read
   checks: read
+  actions: read
 
 concurrency:
   group: mediascope-tests-${{ github.run_id }}-${{ github.run_attempt }}
@@ -18,26 +24,66 @@ concurrency:
 
 jobs:
   full-regression:
-    name: Windows full regression
+    # A skipped job can satisfy branch protection. Use one job with distinct check names.
+    name: >-
+      ${{ (vars.MEDIASCOPE_SPLIT_ENABLED == 'true' || startsWith(github.ref, 'refs/tags/verify-main-pilot-'))
+          && (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/verify-main-') && 'MediaScope cloud preflight'
+              || (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/tags/verify-main-')
+                  || github.event_name == 'push' && github.ref == 'refs/heads/main') && 'MediaScope split acceptance')
+          || 'Windows full regression' }}
     runs-on: windows-2022
     timeout-minutes: 90
     defaults:
       run:
         shell: powershell
+    env:
+      SPLIT_ENABLED: >-
+        ${{ (vars.MEDIASCOPE_SPLIT_ENABLED == 'true' || startsWith(github.ref, 'refs/tags/verify-main-pilot-'))
+            && (github.event_name == 'push' && github.ref == 'refs/heads/main'
+                || (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && startsWith(github.ref, 'refs/tags/verify-main-')) }}
     steps:
       - name: Check out the exact tested commit
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Run split preflight or verify both sides
+        id: split
+        if: env.SPLIT_ENABLED == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MEDIASCOPE_SPLIT_PUBLIC_KEY: ${{ vars.MEDIASCOPE_SPLIT_PUBLIC_KEY }}
+          MEDIASCOPE_SPLIT_BASELINE: ${{ vars.MEDIASCOPE_SPLIT_BASELINE }}
+          MEDIASCOPE_SPLIT_RECEIPT: ${{ inputs.local_receipt }}
+        run: node scripts/split-tests.mjs ci
+      - name: Retain cloud partition evidence
+        if: steps.split.outcome == 'success' && steps.split.outputs.cloud_record != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mediascope-split-record-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.split.outputs.cloud_record }}
+          retention-days: 90
+          if-no-files-found: error
+      - name: Retain failed split diagnostics
+        if: always() && steps.split.outcome == 'failure'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mediascope-split-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .build/split-*/full-cloud.log
+            evidence-archive/records/
+          include-hidden-files: true
+          retention-days: 90
+          if-no-files-found: ignore
       - name: Select validation scope
         id: scope
+        if: env.SPLIT_ENABLED != 'true'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/ci-scope.mjs
       - name: Prepare locked runtime and testing tools, then run general regression
         id: regression
-        if: steps.scope.outputs.scope != 'docs-only'
+        if: env.SPLIT_ENABLED != 'true' && steps.scope.outputs.scope != 'docs-only'
         timeout-minutes: 75
         run: ./scripts/run-ci-tests.ps1
       - name: Export independent results or interruption diagnostics
@@ -57,7 +103,7 @@ jobs:
           if-no-files-found: error
           overwrite: false
       - name: Save validation scope
-        if: always() && steps.scope.outcome == 'success'
+        if: always() && (steps.scope.outcome == 'success' || steps.split.outcome == 'success')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: mediascope-ci-scope-${{ github.run_id }}-${{ github.run_attempt }}

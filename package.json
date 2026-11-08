@@ -12,6 +12,7 @@
     "test:gpu": "node scripts/run-project.mjs test --suite gpu",
     "test:gpu:release": "node scripts/test.mjs --suite gpu --require-clean",
     "test:acceptance": "node scripts/verify-source-tests.mjs",
+    "test:split": "node scripts/split-tests.mjs",
     "check:commits": "node scripts/check-commits.mjs",
     "test:commits": "node --test testing-tools/tooling/test-system/check-commits.test.mjs",
     "evidence:list": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/list-test-evidence.ps1",
