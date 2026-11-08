@@ -27,9 +27,11 @@ jobs:
     # A skipped job can satisfy branch protection. Use one job with distinct check names.
     name: >-
       ${{ (vars.MEDIASCOPE_SPLIT_ENABLED == 'true' || startsWith(github.ref, 'refs/tags/verify-main-pilot-'))
-          && (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/verify-main-') && 'MediaScope cloud preflight'
+          && (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/verify-main-')
+              && !startsWith(github.ref, 'refs/tags/verify-main-accepted-') && 'MediaScope cloud preflight'
               || (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/tags/verify-main-')
-                  || github.event_name == 'push' && github.ref == 'refs/heads/main') && 'MediaScope split acceptance')
+                  || github.event_name == 'push' && (github.ref == 'refs/heads/main'
+                      || startsWith(github.ref, 'refs/tags/verify-main-accepted-'))) && 'MediaScope split acceptance')
           || 'Windows full regression' }}
     runs-on: windows-2022
     timeout-minutes: 90

@@ -39,7 +39,8 @@ export function splitAttempt(run,data,jobs,artifacts,attempt){
     return 'Cloud partition executed; separate split receipt and original cloud record archived when applicable';
   }
   const acceptance=r.kind==='split-acceptance'&&run.event==='workflow_dispatch'&&r.github.ref.startsWith('refs/tags/verify-main-');
-  const reuse=r.kind==='split-reused'&&run.event==='push'&&r.github.ref==='refs/heads/main'&&r.previousAcceptance;
+  const reuse=r.kind==='split-reused'&&run.event==='push'&&
+    (r.github.ref==='refs/heads/main'||r.github.ref.startsWith('refs/tags/verify-main-accepted-'))&&r.previousAcceptance;
   if((acceptance||reuse)&&jobs[0].name==='MediaScope split acceptance'&&r.cloud&&r.commits&&r.expected){
     return 'Split acceptance receipt archived; no independent full cloud regression was claimed';
   }

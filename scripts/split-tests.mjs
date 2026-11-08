@@ -96,8 +96,8 @@ async function ci(){
   const dir=await scratch(),identity=await identities(repo);
   const api=new SplitGitHub(repo,dir);
   let report;
-  if(eventName==='push'&&github.ref==='refs/heads/main'){
-    const base=comparisonBase(eventName,event,sha);
+  if(eventName==='push'&&(github.ref==='refs/heads/main'||github.ref.startsWith('refs/tags/verify-main-accepted-'))){
+    const base=github.ref==='refs/heads/main'?comparisonBase(eventName,event,sha):mainSha();
     const {origin,row}=await api.previousAcceptance(sha);
     const plan=splitPlan(repo,{sha,base,anchor,...profile(origin.head_branch)});
     const prior=row.proof;

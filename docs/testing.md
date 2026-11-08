@@ -1002,7 +1002,8 @@ inputs是允许读取的固定输入；[]表示由源码中明确控制数据或
 
 1. 冻结候选提交，核对最新 `origin/main`。在干净检出执行 `npm run test:split -- plan --base <main-SHA>` 预览。云端若登记了全量基线，本地使用同一 `MEDIASCOPE_SPLIT_BASELINE` 或 `--anchor <SHA>`。完整预检标签用 `verify-main-full-*`，本地传 `--full`。发布标签预检用 `verify-main-release-*`，本地传 `--release` 和 `--archive <ZIP>`。
 2. 使用获授权的预检标签启动 Actions，同时本地执行 `npm run test:split -- local --base <main-SHA> --key <私钥文件>`，按计划提供 `--archive <ZIP>`。私钥由执行并审阅本地测试的维护者保管在项目外。只将公钥配到 GitHub。维护者签名证明回执来源，源码、用例、实际结果和已封存回执由本地入口核对。云端预检独立完成并保留证据。文档轻量档由云端检查，本地审阅文义和链接。
-3. 两侧结束后对同一标签手动运行 `MediaScope tests`，提交 `local-receipt.txt` 中的一行签名回执作为 `local_receipt`。文档轻量档留空。`MediaScope split acceptance` 核验签名、候选和范围、云端作业的实际通过状态以及产物摘要。缺项、失败、旧 SHA 或错范围均阻止放行。核验和提交说明都通过后，重新确认 `origin/main` 与验收基线一致，再普通快进更新 `main`。主线同 SHA 核验通过时引用原执行回执。失败或被拒绝的原记录独立保留。
+3. 两侧结束后对同一标签手动运行 `MediaScope tests`，提交 `local-receipt.txt` 中的一行签名回执作为 `local_receipt`。文档轻量档留空。核验签名、候选和范围、云端作业的实际通过状态以及产物摘要。缺项、失败、旧 SHA 或错范围均阻止验收。
+4. 手动验收通过后，将同一 SHA 推送到新的 `verify-main-accepted-*` 标签。该次 `push` 的 `MediaScope split acceptance` 复核已有验收，提供服务器认可的必需检查。GitHub 不用手动事件的成功结果满足此门禁。两项必需检查都通过后，重新确认 `origin/main` 与验收基线一致，再普通快进更新 `main`。放行标签和主线复用同一 SHA 的回执。失败或被拒绝的原记录独立保留。
 
 发布继续要求完整范围、真实 GPU、原生交互、同一 ZIP 的离线与真实首次联网部署。分工发布复核入口为 `npm run test:split -- release --archive <ZIP>`，读取对应 GitHub 验收及本地签名，并复核实际 ZIP。单侧范围记录仍标为部分测试，验收范围在分工回执中记录。
 
@@ -1012,7 +1013,7 @@ inputs是允许读取的固定输入；[]表示由源码中明确控制数据或
 
 1. 按现有 `Windows full regression` 和 `Commit messages` 门禁验证并合入实现。保持分工开关关闭及轻量基线空白。审阅确切提交中的工作流、验收脚本和测试分组。GitHub Actions 来源限制只能识别运行来源，仍须审阅候选内对工作流和验证器的修改。
 2. 配置维护者公钥。用 `verify-main-pilot-release-*` 在同一 SHA 实跑本地和 GitHub 全部分工。先核对缺签名或错签名会令核验失败，再用真实签名回执确认通过，并复核原始结果、归档、同包部署和覆盖。
-3. 暂停 `main` 更新，在同一次保护规则更新中将 `Windows full regression` 换为限定 GitHub Actions 来源的 `MediaScope split acceptance`，保留 `Commit messages`、管理员约束及其他保护，随后打开 `MEDIASCOPE_SPLIT_ENABLED`。核对服务器规则和候选的两项必需检查，再恢复交付。在第一笔正常快进时确认主线复用同一 SHA。启用轻量基线须另行验证。
+3. 暂停 `main` 更新并打开 `MEDIASCOPE_SPLIT_ENABLED`，先保持原保护。推送同 SHA 的 `verify-main-accepted-*` 标签，确认实际 `push` 的两项检查成功后，在同一次保护规则更新中将 `Windows full regression` 换为限定 GitHub Actions 来源的 `MediaScope split acceptance`，保留 `Commit messages`、管理员约束及其他保护。核对服务器规则后再恢复交付，在第一笔正常快进时确认主线复用同一 SHA。启用轻量基线须另行验证。
 4. 若需回退，暂停 `main` 更新，关闭分工开关并恢复原必需检查及来源。候选按原门禁补齐对应 SHA 的结果后恢复交付。保留试点、失败和已完成验收的原始记录。
 
 ## 验收回执

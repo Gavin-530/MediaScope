@@ -18,7 +18,9 @@ jobs:
     env:
       SPLIT_TAG: >-
         ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/verify-main-')
+            && !startsWith(github.ref, 'refs/tags/verify-main-accepted-')
             && (vars.MEDIASCOPE_SPLIT_ENABLED == 'true' || startsWith(github.ref, 'refs/tags/verify-main-pilot-')) }}
+      SPLIT_REUSE: ${{ vars.MEDIASCOPE_SPLIT_ENABLED == 'true' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/verify-main-accepted-') }}
     steps:
       - name: Check out history
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -26,7 +28,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Test the commit checker
-        if: env.SPLIT_TAG != 'true' && (vars.MEDIASCOPE_SPLIT_ENABLED != 'true' || github.event_name != 'push' || github.ref != 'refs/heads/main')
+        if: env.SPLIT_TAG != 'true' && env.SPLIT_REUSE != 'true' && (vars.MEDIASCOPE_SPLIT_ENABLED != 'true' || github.event_name != 'push' || github.ref != 'refs/heads/main')
         run: npm run test:commits
       - name: Run commit self-tests once and record their IDs
         id: split
