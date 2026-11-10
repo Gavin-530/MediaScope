@@ -1,11 +1,11 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {comparisonBase,checkDocuments} from './ci-scope.mjs';
+import {comparisonBase,checkDocuments,forcedMainRecovery,mainRecovery} from './ci-scope.mjs';
 import {clean,commitCases,git,head,splitPlan} from './split-test-plan.mjs';
-import {deploymentBinding,executeCommitCases,executeDeployment,executeFormal,identities,makeSignature,
+import {deploymentBinding,executeCommitCases,executeDeployment,executeFormal,identities,
   read,repository,verifyOfflineInputs} from './split-test-receipts.mjs';
-import {SplitGitHub,splitGitHubIdentity,verifyAcceptance} from './split-test-github.mjs';
+import {SplitGitHub,isRecoveryPreflightTag,splitGitHubIdentity,verifyAcceptance} from './split-test-github.mjs';
 
 const repo = fileURLToPath(new URL('../',import.meta.url));
 const build = path.join(repo,'.build');
@@ -21,17 +21,26 @@ const parseTag = ref => {
   return match[1];
 };
 const profile = tag => ({release:/^verify-main-(?:pilot-)?release-/.test(tag),forceFull:/^verify-main-(?:pilot-)?full-/.test(tag)});
+const acceptedRecoveryTag = /^verify-main-accepted-recovery-/;
+const recoveryConfig = () => process.env.MEDIASCOPE_MAIN_RECOVERY;
+const recoveryOptions = recovery => ({base:recovery.base,forceFull:true,recovery});
 const assertClean = () => {if(!clean(repo))throw Error('Split verification requires the clean candidate commit');};
+
+function prepareRecovery(sha) {
+  const recovery = mainRecovery(recoveryConfig(),mainSha(),sha);
+  git(repo,'merge-base','--is-ancestor',recovery.base,recovery.before);
+  return recovery;
+}
 
 function options(argv){
   const settings = {};
   for(let i=0;i<argv.length;i++){
     const flag=argv[i];
-    if(flag==='--release'||flag==='--full'){
-      const key=flag==='--release'?'release':'forceFull';
+    if(['--release','--full','--recovery'].includes(flag)){
+      const key=flag==='--full'?'forceFull':flag.slice(2);
       if(key in settings)throw Error('Duplicate '+flag);
       settings[key]=true;
-    }else if(['--base','--anchor','--key','--archive'].includes(flag)){
+    }else if(['--base','--anchor','--archive'].includes(flag)){
       const key=flag.slice(2),value=argv[++i];
       if(!value||value.startsWith('--')||key in settings)throw Error('Missing or duplicate '+flag);
       settings[key]=value;
@@ -43,14 +52,15 @@ function options(argv){
 async function local(command,args){
   const opts=options(args);
   const sha=head(repo);
-  const plan=splitPlan(repo,{...opts,sha,base:opts.base??mainSha(),anchor:opts.anchor??process.env.MEDIASCOPE_SPLIT_BASELINE});
+  if(opts.recovery&&['base','anchor','release','forceFull'].some(key=>key in opts)){
+    throw Error('--recovery supplies its own baseline and full non-release scope');
+  }
+  const settings=opts.recovery?recoveryOptions(prepareRecovery(sha)):
+    {...opts,base:opts.base??mainSha(),anchor:opts.anchor??process.env.MEDIASCOPE_SPLIT_BASELINE};
+  const plan=splitPlan(repo,{...settings,sha});
   if(command==='plan'){console.log(JSON.stringify(plan,null,2));return;}
   assertClean();
   if(plan.scope==='docs-only'){console.log('Documentation-only plan; Actions checks the documents and no local test receipt is required.');return;}
-  if(!opts.key)throw Error('--key requires a maintainer-controlled Ed25519 private key outside this project');
-  const key=await fs.realpath(opts.key);
-  const relative=path.relative(await fs.realpath(repo),key);
-  if(!relative.startsWith('..'+path.sep)&&!path.isAbsolute(relative))throw Error('Keep the signing key outside the project');
   const dir=await scratch(), identity=await identities(repo);
   if(plan.stages.includes('package')&&!opts.archive)throw Error('--archive is required for the deployment stages');
   if(plan.stages.includes('package'))await verifyOfflineInputs(repo);
@@ -67,8 +77,7 @@ async function local(command,args){
   assertClean();
   if(head(repo)!==sha||JSON.stringify(await identities(repo))!==JSON.stringify(identity))throw Error('Candidate changed during local verification');
   const payload={schema:1,side:'local',repository,sha,plan:plan.hash,identity,general:general?.summary??null,stages};
-  const privatePem=await fs.readFile(key);
-  const token=makeSignature(payload,privatePem);
+  const token=Buffer.from(JSON.stringify(payload)).toString('base64url');
   const tokenPath=path.join(dir,'local-receipt.txt');
   await fs.writeFile(tokenPath,token+'\n',{flag:'wx'});
   await write(path.join(dir,'local-records.json'),records);
@@ -91,35 +100,51 @@ async function ci(){
   if(sha!==process.env.GITHUB_SHA)throw Error('GitHub and checkout SHA differ');
   const eventName=process.env.GITHUB_EVENT_NAME,event=await read(process.env.GITHUB_EVENT_PATH);
   const anchor=process.env.MEDIASCOPE_SPLIT_BASELINE;
-  const publicKey=process.env.MEDIASCOPE_SPLIT_PUBLIC_KEY;
-  if(!publicKey)throw Error('Trusted local receipt public key is not configured');
   const dir=await scratch(),identity=await identities(repo);
   const api=new SplitGitHub(repo,dir);
-  let report;
-  if(eventName==='push'&&(github.ref==='refs/heads/main'||github.ref.startsWith('refs/tags/verify-main-accepted-'))){
-    const base=github.ref==='refs/heads/main'?comparisonBase(eventName,event,sha):mainSha();
-    const {origin,row}=await api.previousAcceptance(sha);
-    const plan=splitPlan(repo,{sha,base,anchor,...profile(origin.head_branch)});
+  let report,recovery;
+  const mainPush=eventName==='push'&&github.ref==='refs/heads/main';
+  if(eventName==='push'&&(mainPush||github.ref.startsWith('refs/tags/verify-main-accepted-'))){
+    if(mainPush&&event.forced===true) recovery=forcedMainRecovery(recoveryConfig(),event,sha);
+    if(acceptedRecoveryTag.test(github.ref.slice('refs/tags/'.length))){
+      if(event.ref!==github.ref)throw Error('Recovery acceptance ref differs from the push event');
+      recovery=prepareRecovery(sha);
+      comparisonBase(eventName,event,sha,recovery.base);
+    }
+    const base=recovery?.base??(mainPush?comparisonBase(eventName,event,sha):mainSha());
+    const {origin,row,approval}=await api.previousAcceptance(sha,{recovery:Boolean(recovery)});
     const prior=row.proof;
-    verifyAcceptance(prior,plan,identity,publicKey);
+    const settings=recovery?recoveryOptions(recovery):{base,anchor:prior.scope==='full'?prior.anchor:anchor,...profile(origin.head_branch)};
+    const plan=splitPlan(repo,{sha,...settings});
+    verifyAcceptance(prior,plan,identity);
     await api.verifyAnchor(plan);
-    report={...prior,kind:'split-reused',github,previousAcceptance:{runId:row.runId,attempt:row.attempt,artifactSha256:row.artifactSha256}};
+    report={...prior,kind:'split-reused',github,approval,previousAcceptance:{runId:row.runId,attempt:row.attempt,artifactSha256:row.artifactSha256}};
   }else{
     const tag=parseTag(github.ref);
-    const base=mainSha();
-    const plan=splitPlan(repo,{sha,base,anchor,...profile(tag)});
+    if(isRecoveryPreflightTag(tag)) recovery=prepareRecovery(sha);
+    const settings=recovery?recoveryOptions(recovery):{base:mainSha(),anchor,...profile(tag)};
+    const plan=splitPlan(repo,{sha,...settings});
     if(eventName==='push'){
-      comparisonBase(eventName,event,sha,base);
+      comparisonBase(eventName,event,sha,plan.base);
       await api.verifyAnchor(plan);
       report=await cloudReceipt(plan,identity,dir,github);
     }else if(eventName==='workflow_dispatch'){
+      if(github.runAttempt!=='1'||tag.startsWith('verify-main-accepted-'))throw Error('Dispatch a fresh acceptance on the preflight tag');
       const token=process.env.MEDIASCOPE_SPLIT_RECEIPT?.trim()||null;
-      report={...await api.accept({plan,identity,tag,token,publicKey}),github};
+      report={...await api.prepareAcceptance({plan,identity,tag,token}),github};
     }else throw Error('Unsupported split workflow event');
   }
+  if(recovery)report.recovery=recovery;
   assertClean();
   await write(path.join(build,'ci-scope.json'),report);
-  const summary='## '+report.kind+'\n\nCandidate `'+sha+'`\n\nScope `'+report.scope+'`\n';
+  let summary='## '+report.kind+'\n\nCandidate `'+sha+'`\n\nScope `'+report.scope+'`\n';
+  if(recovery)summary+='\nRecovery from `'+recovery.before+'` to `'+recovery.after+'`\n\nRecovery baseline `'+recovery.base+'`\n';
+  if(report.kind==='split-acceptance'&&report.localReceipt!==null){
+    summary+='\nPlan `'+report.plan+'`\n\nLocal receipt SHA-256 `'+report.localReceiptSha256+'`\n\n'+
+      'Local general cases: '+report.expected.local+'\n\nLocal stages: '+(report.expected.stages.join(', ')||'none')+'\n\n'+
+      'Before approving, verify the sealed local records and confirm the local receipt digest matches this run.\n';
+    await fs.appendFile(process.env.GITHUB_OUTPUT,'review_required=true\n');
+  }
   if(process.env.GITHUB_STEP_SUMMARY)await fs.appendFile(process.env.GITHUB_STEP_SUMMARY,summary);
   console.log(summary);
 }
@@ -138,15 +163,13 @@ async function commits(){
 async function release(args){
   const opts=options(args);
   if(!opts.archive||Object.keys(opts).length!==1)throw Error('Release verification requires --archive <ZIP>');
-  const publicKey=process.env.MEDIASCOPE_SPLIT_PUBLIC_KEY;
-  if(!publicKey)throw Error('Set MEDIASCOPE_SPLIT_PUBLIC_KEY to the reviewed public key');
   assertClean();
   const sha=head(repo),dir=await scratch(),identity=await identities(repo);
   const {row}=await new SplitGitHub(repo,dir).previousAcceptance(sha);
   const prior=row.proof;
   if(prior.release!==true||prior.scope!=='full')throw Error('Exact release requires full split acceptance and all local stages');
   const plan=splitPlan(repo,{sha,base:prior.base,anchor:prior.anchor,release:true});
-  const localReceipt=verifyAcceptance(prior,plan,identity,publicKey);
+  const localReceipt=verifyAcceptance(prior,plan,identity);
   const packageSha256=await deploymentBinding(repo,path.resolve(opts.archive));
   if(localReceipt.stages.package.packageSha256!==packageSha256||localReceipt.stages.online.packageSha256!==packageSha256)throw Error('Release ZIP differs from the tested artifact');
   await write(path.join(dir,'release-acceptance.json'),{sha,packageSha256,run:row.runId,attempt:row.attempt,accepted:true});
@@ -159,7 +182,7 @@ try {
   else if(command==='commits'&&!args.length)await commits();
   else if(command==='plan'||command==='local')await local(command,args);
   else if(command==='release')await release(args);
-  else throw Error('Usage: npm run test:split -- plan|local [--base <sha>] [--anchor <verified-sha>] [--full|--release] [--key <file>] [--archive <ZIP>]');
+  else throw Error('Usage: npm run test:split -- plan|local [--base <sha>] [--anchor <verified-sha>] [--full|--release|--recovery] [--archive <ZIP>]');
 }catch(error){
   console.error(error.message);
   process.exitCode=1;

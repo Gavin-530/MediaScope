@@ -8,6 +8,24 @@ const validSha = value => /^[a-f0-9]{40}$/.test(value || '') && !/^0+$/.test(val
 const git = (repo, ...args) => execFileSync('git', ['-C', repo, ...args],
   {windowsHide: true, maxBuffer: 4 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe']});
 
+export function mainRecovery(config, before, after) {
+  if (!config) throw Error('Main history recovery is not authorized');
+  const authorization = JSON.parse(config);
+  if (!authorization || Object.keys(authorization).sort().join(',') !== 'after,base,before' ||
+      ![authorization.before, authorization.after, authorization.base].every(sha => typeof sha === 'string' && validSha(sha)) ||
+      before === after || authorization.before !== before || authorization.after !== after) {
+    throw Error('Main history recovery does not match the authorized SHA pair');
+  }
+  return {before, after, base: authorization.base};
+}
+
+export function forcedMainRecovery(config, event, sha) {
+  if (event.ref !== 'refs/heads/main' || event.deleted !== false || event.forced !== true || event.after !== sha) {
+    throw Error('Invalid main history recovery event');
+  }
+  return mainRecovery(config, event.before, sha);
+}
+
 export function comparisonBase(eventName, event, sha, mainSha) {
   if (!validSha(sha)) throw Error('Missing exact tested SHA');
   if (eventName === 'push') {

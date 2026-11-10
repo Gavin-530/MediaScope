@@ -19,7 +19,7 @@
    先完成候选提交整理，再固定发布 SHA；验证后追加修改、squash、rebase 或改变合并结果时，须重新核对新 SHA 的验收。提交历史调整不会自动改变 ZIP 内容，但旧 SHA 的通过不能替代新 SHA 的来源验收。
 2. 按当前门禁核对确切发布 SHA。切换前，Actions 运行 `npm run test:release`，本地干净工作区运行 `npm run test:gpu:release`。导入或下载云端独立记录后，执行 `npm run test:acceptance -- <通用记录目录> <GPU记录目录> <发布SHA>` 校验两类记录及相同源码和验证器身份。切换后使用第 4 步的完整分工验收。GPU 不可用、CPU 回退、任何失败、取消、跳过、TODO、不完整覆盖或归档阻塞均不能满足对应验收。
 3. 首次构建执行 `scripts/package.ps1 -Version <版本>`，生成一个 Windows x64 联网部署 ZIP；符合下述逐项输入核对条件的已有 ZIP 可复用，并继续完成附件验收。已有包及暂存目录不覆盖。构建机使用系统 .NET Framework 4 x64 编译器生成应用启动器，临时文件留在当前工作区 `.build`，不下载编译工具；编译失败须修复后重新打包。启动器、引导脚本和构建摘要纳入包清单。发行校验只允许摘要与构建记录一致的 `scripts/MediaScope.Launcher.exe`，其他 EXE/DLL 仍不得入包，Node.js/FFmpeg 仍按运行时清单安装。
-4. 对确切附件核对 ZIP 摘要、字节数及离线和真实首次联网部署结果。已切换的发布按[分工验收](testing.md#本地与-actions-分工验收)，使用 `verify-main-release-*` 和本地 `--release --archive <ZIP>` 收集全量回归、GPU、原生交互和同包部署，再执行 `npm run test:split -- release --archive <ZIP>` 复核确切提交、签名及实际 ZIP。切换前分别执行下列两项，并在锁定私有环境下验证应用。离线运输夹具不能证明联网下载通过。
+4. 对确切附件核对 ZIP 摘要、字节数及离线和真实首次联网部署结果。已切换的发布按[分工验收](testing.md#本地与-actions-分工验收)，使用 `verify-main-release-*` 和本地 `--release --archive <ZIP>` 收集全量回归、GPU、原生交互和同包部署，再执行 `npm run test:split -- release --archive <ZIP>` 复核确切提交、GitHub 审批及实际 ZIP。切换前分别执行下列两项，并在锁定私有环境下验证应用。离线运输夹具不能证明联网下载通过。
 
    ```powershell
    powershell -NoProfile -ExecutionPolicy Bypass -File scripts/record-test.ps1 -Kind Package -Archive <zip> -RequireClean

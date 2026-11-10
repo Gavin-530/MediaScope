@@ -7,7 +7,11 @@ import {read, repository, verifyCaseSummary, verifyLocalReceipt} from './split-t
 
 const workflow = '.github/workflows/tests.yml';
 const commitWorkflow = '.github/workflows/commit-messages.yml';
-const acceptanceJob = 'MediaScope split acceptance';
+const preparationJob = 'Prepare MediaScope acceptance';
+const reviewJob = 'Review MediaScope local evidence';
+const reviewEnvironment = 'mediascope-local-evidence';
+export const isRecoveryPreflightTag = tag => /^verify-main-recovery-/.test(tag ?? '');
+const isAcceptanceTag = tag => /^verify-main-(?!accepted-)/.test(tag ?? '');
 const unique = (rows, label) => {
   if(rows.length!==1)throw Error('Expected one '+label);
   return rows[0];
@@ -16,6 +20,12 @@ const positive = value => /^\d+$/.test(String(value)) && Number.isSafeInteger(Nu
 const trustedRun = (run, {file, event, sha, ref}) => run.path===file && run.event===event && run.head_sha===sha &&
   run.repository?.full_name===repository && run.head_repository?.full_name===repository &&
   (!ref || run.head_branch===ref);
+
+function passingJob(jobs,name,run,sha) {
+  const job=unique(jobs.filter(j=>j.name===name),'GitHub job '+name);
+  if(job.status!=='completed'||job.conclusion!=='success'||job.head_sha!==sha||
+     job.run_id!==run.id||job.run_attempt!==run.run_attempt)throw Error('Expected GitHub job did not pass for candidate: '+name);
+}
 
 export function verifyCloudReceipt(proof, plan, identity, origin) {
   if(proof.schema!==1||proof.kind!=='split-cloud'||proof.sha!==plan.sha||proof.plan!==plan.hash||
@@ -43,8 +53,8 @@ export function verifyCommitReceipt(proof, plan, origin) {
 const expectedCoverage = plan => ({local:plan.local.length,cloud:plan.cloud.length,commits:plan.commits.length,stages:plan.stages});
 const validOrigin = value => positive(value?.runId) && positive(value?.attempt) && /^[0-9a-f]{64}$/.test(value?.artifactSha256);
 
-export function verifyAcceptance(proof, plan, identity, publicKey) {
-  if(proof.schema!==1||proof.kind!=='split-acceptance'||proof.sha!==plan.sha||proof.base!==plan.base||
+export function verifyAcceptance(proof, plan, identity) {
+  if(proof.schema!==2||proof.kind!=='split-acceptance'||proof.sha!==plan.sha||proof.base!==plan.base||
      proof.anchor!==plan.anchor||proof.scope!==plan.scope||proof.release!==plan.release||proof.forceFull!==plan.forceFull||
      proof.plan!==plan.hash||JSON.stringify(proof.identity)!==JSON.stringify(identity)||
      JSON.stringify(proof.expected)!==JSON.stringify(expectedCoverage(plan))||!validOrigin(proof.cloud)||!validOrigin(proof.commits)){
@@ -54,8 +64,8 @@ export function verifyAcceptance(proof, plan, identity, publicKey) {
     if(proof.localReceipt!==null||proof.localReceiptSha256!==null)throw Error('Unexpected local receipt for documentation scope');
     return null;
   }
-  const local=verifyLocalReceipt(proof.localReceipt,publicKey,plan,identity);
-  if(proof.localReceiptSha256!==digest(proof.localReceipt))throw Error('Signed local receipt digest differs from prior acceptance');
+  const local=verifyLocalReceipt(proof.localReceipt,plan,identity);
+  if(proof.localReceiptSha256!==digest(proof.localReceipt))throw Error('Local receipt digest differs from prior acceptance');
   return local;
 }
 
@@ -72,11 +82,11 @@ export class SplitGitHub {
     this.api=api;
   }
 
-  async latest({file,event,sha,ref}) {
+  async latest({file,event,sha,ref,matchesRef = () => true}) {
     const name=file.slice(file.lastIndexOf('/')+1);
     const {data}=await this.api.get('actions/workflows/'+name+'/runs?head_sha='+sha+'&event='+event+'&per_page=100');
     if(!Array.isArray(data.workflow_runs)||data.total_count!==data.workflow_runs.length)throw Error('Incomplete GitHub run list');
-    const rows=data.workflow_runs.filter(run=>trustedRun(run,{file,event,sha,ref}))
+    const rows=data.workflow_runs.filter(run=>trustedRun(run,{file,event,sha,ref})&&matchesRef(run.head_branch))
       .sort((a,b)=>Date.parse(b.created_at)-Date.parse(a.created_at)||b.id-a.id);
     if(!rows.length)throw Error('Required GitHub execution has not been recorded: '+name);
     return rows[0];
@@ -89,9 +99,7 @@ export class SplitGitHub {
     const route='actions/runs/'+run.id;
     const {data}=await this.api.get(route+'/attempts/'+run.run_attempt+'/jobs?per_page=100');
     if(data.total_count!==data.jobs?.length)throw Error('Incomplete GitHub job list');
-    const proofJob=unique(data.jobs.filter(j=>j.name===job),'GitHub job '+job);
-    if(proofJob.status!=='completed'||proofJob.conclusion!=='success'||proofJob.head_sha!==sha||
-       proofJob.run_id!==run.id||proofJob.run_attempt!==run.run_attempt)throw Error('Expected GitHub job did not pass for candidate');
+    passingJob(data.jobs,job,run,sha);
     const name=artifact+'-'+run.id+'-'+run.run_attempt;
     const {data:artifacts}=await this.api.get(route+'/artifacts?name='+name+'&per_page=100');
     if(artifacts.total_count!==artifacts.artifacts?.length)throw Error('Incomplete GitHub artifact list');
@@ -108,18 +116,29 @@ export class SplitGitHub {
       {env,cwd:this.repo,windowsHide:true,stdio:'pipe'});
     const files=await fs.readdir(extracted);
     if(files.length!==1||files[0]!==entry||!(await fs.lstat(path.join(extracted,entry))).isFile())throw Error('Unexpected receipt artifact entries');
-    return {proof:await read(path.join(extracted,entry)),artifactSha256:artifactRow.digest.slice(7),runId:run.id,attempt:run.run_attempt};
+    return {proof:await read(path.join(extracted,entry)),artifactSha256:artifactRow.digest.slice(7),runId:run.id,attempt:run.run_attempt,jobs:data.jobs};
   }
 
-  async previousAcceptance(sha) {
-    const origin=await this.latest({file:workflow,event:'workflow_dispatch',sha});
-    if(!/^verify-main-/.test(origin.head_branch??''))throw Error('Prior acceptance was not run on a verification tag');
+  async previousAcceptance(sha, {recovery = false} = {}) {
+    const origin=await this.latest({file:workflow,event:'workflow_dispatch',sha,
+      matchesRef:tag=>isAcceptanceTag(tag)&&isRecoveryPreflightTag(tag)===recovery});
+    // Approval history is per run, so only fresh dispatches can provide acceptance.
+    if(origin.run_attempt!==1)throw Error('Acceptance requires a fresh verification-tag dispatch');
     const row=await this.receipt(origin,{file:workflow,event:'workflow_dispatch',sha,ref:origin.head_branch,
-      job:acceptanceJob,artifact:'mediascope-ci-scope'});
-    if(row.proof.schema!==1||row.proof.kind!=='split-acceptance'||row.proof.sha!==sha||
+      job:preparationJob,artifact:'mediascope-ci-scope'});
+    if(row.proof.schema!==2||row.proof.kind!=='split-acceptance'||row.proof.sha!==sha||
        row.proof.github?.repository!==repository||row.proof.github.runId!==String(origin.id)||
        row.proof.github.runAttempt!==String(origin.run_attempt)||row.proof.github.ref!=='refs/tags/'+origin.head_branch)throw Error('Prior acceptance artifact identity mismatch');
-    return {origin,row};
+    let approval=null;
+    if(row.proof.scope!=='docs-only'){
+      passingJob(row.jobs,reviewJob,origin,sha);
+      const [{data:repo},{data:reviews}]=await Promise.all([this.api.get(''),this.api.get('actions/runs/'+origin.id+'/approvals')]);
+      if(repo.full_name!==repository||repo.owner?.type!=='User'||!positive(repo.owner.id)||!Array.isArray(reviews))throw Error('Missing GitHub reviewer identity or approval history');
+      const review=unique(reviews.filter(entry=>entry.state==='approved'&&entry.user?.id===repo.owner.id&&
+        entry.environments?.some(env=>env.name===reviewEnvironment)),'repository owner approval for local evidence');
+      approval={reviewerId:review.user.id,environment:reviewEnvironment};
+    }
+    return {origin,row,approval};
   }
 
   async verifyAnchor(plan) {
@@ -128,10 +147,10 @@ export class SplitGitHub {
     if(row.proof.scope!=='full')throw Error('Scope reduction requires a completed full acceptance for the anchor SHA');
   }
 
-  async accept({plan,identity,tag,token,publicKey}) {
+  async prepareAcceptance({plan,identity,tag,token}) {
     if(plan.scope==='docs-only'){
       if(token!==null)throw Error('Unexpected local receipt for documentation scope');
-    }else verifyLocalReceipt(token,publicKey,plan,identity);
+    }else verifyLocalReceipt(token,plan,identity);
     await this.verifyAnchor(plan);
     const cloudQuery={file:workflow,event:'push',sha:plan.sha,ref:tag};
     const commitsQuery={file:commitWorkflow,event:'push',sha:plan.sha,ref:tag};
@@ -143,7 +162,7 @@ export class SplitGitHub {
     verifyCloudReceipt(cloud.proof,plan,identity,cloudRun);
     verifyCommitReceipt(commits.proof,plan,commitRun);
     const origin=({runId,attempt,artifactSha256})=>({runId,attempt,artifactSha256});
-    return {schema:1,kind:'split-acceptance',sha:plan.sha,base:plan.base,anchor:plan.anchor,scope:plan.scope,
+    return {schema:2,kind:'split-acceptance',sha:plan.sha,base:plan.base,anchor:plan.anchor,scope:plan.scope,
       release:plan.release,forceFull:plan.forceFull,plan:plan.hash,identity,
       localReceipt:token,localReceiptSha256:token?digest(token):null,cloud:origin(cloud),commits:origin(commits),
       expected:expectedCoverage(plan)};

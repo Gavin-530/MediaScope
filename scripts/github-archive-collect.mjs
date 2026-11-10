@@ -17,8 +17,15 @@ export function attachments(value){
   return [...found].map(url=>({url,status:'not-downloaded',reason:'Attachment adapter not supported; offline dependency'}));
 }
 function redactHook(hook){const {config,...rest}=hook;const clean={...config};delete clean.secret;for(const k of Object.keys(clean)){if(/token|password|authorization/i.test(k))delete clean[k];if(k==='url'){try{const url=new URL(clean[k]);url.username='';url.password='';url.search='';clean[k]=url.href}catch{clean[k]='unavailable'}}}return {...rest,config:clean}}
+const localReviewJob='Review MediaScope local evidence';
+export function productJobs(jobs){
+  if(jobs.length===2&&jobs.some(job=>job.name===localReviewJob&&job.status==='completed'&&job.conclusion==='skipped')){
+    return jobs.filter(job=>job.name!==localReviewJob);
+  }
+  return jobs;
+}
 export function documentationOnlyAttempt(run,data,jobs,artifacts,attempt){
-  if(run.path!=='.github/workflows/tests.yml'||run.event!=='push'||data.status!=='completed'||data.conclusion!=='success'||jobs.length!==1)return false;
+  if(run.path!=='.github/workflows/tests.yml'||run.event!=='push'||data.status!=='completed'||data.conclusion!=='success'||productJobs(jobs).length!==1)return false;
   return artifacts.some(entry=>{
     const r=entry.scopeReport;
     return entry.artifact.name==='mediascope-ci-scope-'+run.id+'-'+attempt&&entry.content?.state==='available'&&
@@ -29,20 +36,36 @@ export function documentationOnlyAttempt(run,data,jobs,artifacts,attempt){
       r.documentationChecks?.documents===r.files.length&&['whitespace','utf8','fences'].every(k=>r.documentationChecks[k]==='passed');
   });
 }
-export function splitAttempt(run,data,jobs,artifacts,attempt){
-  if(run.path!=='.github/workflows/tests.yml'||data.status!=='completed'||data.conclusion!=='success'||jobs.length!==1||jobs[0].conclusion!=='success')return null;
+export function splitAttempt(run,data,jobs,artifacts,attempt,reviewerId,reviews){
+  if(run.path!=='.github/workflows/tests.yml'||data.status!=='completed'||data.conclusion!=='success')return null;
   const records=artifacts.filter(entry=>entry.artifact.name==='mediascope-ci-scope-'+run.id+'-'+attempt&&entry.content?.state==='available');
   const r=records.length===1?records[0].scopeReport:null;
-  if(r?.schema!==1||r.sha!==run.head_sha||r.github?.repository!==TARGET.repository||r.github.runId!==String(run.id)||r.github.runAttempt!==String(attempt)||typeof r.github.ref!=='string'||!['full','selected','docs-only'].includes(r.scope)||!/^[a-f0-9]{64}$/.test(r.plan))return null;
-  if(r.kind==='split-cloud'&&run.event==='push'&&r.github.ref.startsWith('refs/tags/verify-main-')&&jobs[0].name==='MediaScope cloud preflight'){
+  if(![1,2].includes(r?.schema)||r.sha!==run.head_sha||r.github?.repository!==TARGET.repository||r.github.runId!==String(run.id)||r.github.runAttempt!==String(attempt)||typeof r.github.ref!=='string'||!['full','selected','docs-only'].includes(r.scope)||!/^[a-f0-9]{64}$/.test(r.plan))return null;
+  const primary=productJobs(jobs);
+  const passed=name=>primary.length===1&&primary[0].name===name&&primary[0].conclusion==='success';
+  if(r.kind==='split-cloud'&&r.schema===1&&run.event==='push'&&r.github.ref.startsWith('refs/tags/verify-main-')&&passed('MediaScope cloud preflight')){
     if(r.general&&!artifacts.some(e=>e.artifact.name==='mediascope-split-record-'+run.id+'-'+attempt&&e.content?.state==='available'))return null;
     return 'Cloud partition executed; separate split receipt and original cloud record archived when applicable';
   }
   const acceptance=r.kind==='split-acceptance'&&run.event==='workflow_dispatch'&&r.github.ref.startsWith('refs/tags/verify-main-');
   const reuse=r.kind==='split-reused'&&run.event==='push'&&
     (r.github.ref==='refs/heads/main'||r.github.ref.startsWith('refs/tags/verify-main-accepted-'))&&r.previousAcceptance;
-  if((acceptance||reuse)&&jobs[0].name==='MediaScope split acceptance'&&r.cloud&&r.commits&&r.expected){
+  if(!r.cloud||!r.commits||!r.expected)return null;
+  if(r.schema===1&&(acceptance||reuse)&&passed('MediaScope split acceptance')){
     return 'Split acceptance receipt archived; no independent full cloud regression was claimed';
+  }
+  if(r.schema===2&&reuse&&passed('MediaScope split acceptance')&&
+    (r.scope==='docs-only'?r.approval===null:Number.isSafeInteger(reviewerId)&&r.approval?.reviewerId===reviewerId&&r.approval?.environment==='mediascope-local-evidence')){
+    return 'Split acceptance reuse archived with its approval status';
+  }
+  if(r.schema===2&&acceptance&&attempt===1){
+    if(r.scope==='docs-only'&&passed('Prepare MediaScope acceptance'))return 'Documentation-only split acceptance archived';
+    const successful=new Set(jobs.filter(job=>job.status==='completed'&&job.conclusion==='success').map(job=>job.name));
+    if(r.scope!=='docs-only'&&jobs.length===2&&successful.has('Prepare MediaScope acceptance')&&successful.has(localReviewJob)&&
+       Number.isSafeInteger(reviewerId)&&Array.isArray(reviews)&&reviews.filter(entry=>entry.state==='approved'&&entry.user?.id===reviewerId&&
+         entry.environments?.some(env=>env.name==='mediascope-local-evidence')).length===1){
+      return 'Split acceptance receipt and native approval archived';
+    }
   }
   return null;
 }
@@ -141,7 +164,9 @@ export async function sync(project,root,{budgetMs,maxBytes,reader=new GitHubRead
         for(const job of jobs){
           if(String(job.run_id)!==String(run.id)||job.run_attempt!==attempt)throw Error('Job/run/attempt mismatch');numeric(job.id);report.categories.actions.jobs++;
           const content={'job.json':stable(job)};let task;
-          if(job.status==='completed'){
+          if(job.conclusion==='skipped'){
+            content['log-status.json']={state:'not-applicable',reason:'Job skipped without executing steps'};
+          }else if(job.status==='completed'){
             try{task=await downloadTask(root,'job-'+job.id);const file=path.join(task,'log.txt');const validation=await reader.download('actions/jobs/'+job.id+'/logs',file);content['log.txt']={archiveSourceFile:file};content['log-validation.json']=validation}catch(e){content['log-status.json']=gap('actions',run.id+'/'+attempt+'/job/'+job.id,e)}
           }else{report.counts.waiting++;content['log-status.json']={state:'waiting',reason:'Job has not completed'};report.gaps.push({category:'actions',identity:run.id+'/'+attempt+'/job/'+job.id,...content['log-status.json']})}
           await save('actions/'+run.id+'/attempts/'+attempt+'/jobs/'+job.id,content,{sourceCreatedAt:job.created_at??null,sourceUpdatedAt:job.completed_at??null});
@@ -160,7 +185,8 @@ export async function sync(project,root,{budgetMs,maxBytes,reader=new GitHubRead
           associated.add(String(artifact.id));const entry={artifact:stable(artifact),attemptAssociation:namedAttempt?'validated-by-platform-run-and-transport':'unknown-generic-artifact-attempt'};
           if(artifact.expired){report.counts.expired++;entry.content={state:'expired',reason:'Platform artifact expired'};report.gaps.push({category:'actions',identity:String(artifact.id),...entry.content})}
           else if(namedAttempt&&artifact.name.startsWith('mediascope-test-evidence-')){
-            if(run.path!=='.github/workflows/tests.yml'||jobs.length!==1||jobs[0].name!=='Windows full regression'){
+            const primary=productJobs(jobs);
+            if(run.path!=='.github/workflows/tests.yml'||primary.length!==1||primary[0].name!=='Windows full regression'){
               // The exporter supports one product job. Do not silently accept a future matrix.
               entry.content=gap('actions',artifact.id,Error('Unrecognized product job layout; exporter identity adapter requires review'));
             }else{
@@ -183,7 +209,10 @@ export async function sync(project,root,{budgetMs,maxBytes,reader=new GitHubRead
           metadata.artifacts.push(entry);
         }
         if(run.path==='.github/workflows/tests.yml'&&!expected.length){
-          const split=splitAttempt(run,data,jobs,metadata.artifacts,attempt);
+          if(run.event==='workflow_dispatch'&&attempt===1&&jobs.some(job=>job.name===localReviewJob&&job.conclusion==='success')){
+            try{metadata.approvals=stable((await reader.get('actions/runs/'+run.id+'/approvals')).data)}catch(e){gap('actions',run.id+'/approvals',e)}
+          }
+          const split=splitAttempt(run,data,jobs,metadata.artifacts,attempt,repository.owner?.id,metadata.approvals);
           if(split)metadata.productEvidence={state:'not-applicable',reason:split};
           else if(documentationOnlyAttempt(run,data,jobs,metadata.artifacts,attempt))metadata.productEvidence={state:'not-applicable',reason:'Documentation checks completed and product regression was intentionally not run; scope transport archived separately, not a product test result'};
           else{const state=data.status==='completed'?'missing':'waiting';report.counts[state]++;metadata.productEvidence={state,reason:state==='waiting'?'Artifact not yet uploaded':'No located evidence artifact; workflow state does not substitute for test data'};report.gaps.push({category:'actions',identity:run.id+'/'+attempt,...metadata.productEvidence})}

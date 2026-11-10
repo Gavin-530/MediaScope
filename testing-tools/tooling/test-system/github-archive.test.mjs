@@ -9,7 +9,7 @@ import {TARGET,initialize,seal,verifySnapshot,verifyArchive,tree,inside,safeRela
 import {GitHubReader,apiUrl,downloadUrl} from '../../../scripts/github-archive-api.mjs';
 import {mergeCopy,preparedRecord} from '../../../scripts/github-archive-migration.mjs';
 import {repositoryGraphql} from '../../../scripts/github-archive-graphql.mjs';
-import {sync,attachments,documentationOnlyAttempt} from '../../../scripts/github-archive-collect.mjs';
+import {sync,attachments,documentationOnlyAttempt,splitAttempt} from '../../../scripts/github-archive-collect.mjs';
 import {preparePrune,applyPrune,restorePrunedSource} from '../../../scripts/github-archive-prune.mjs';
 import {evidenceIdentity} from '../../../scripts/github-archive-migration.mjs';
 import {boundaryBaseline} from '../../../scripts/github-archive-migration.mjs';
@@ -333,6 +333,21 @@ test('documentation absence uses structured scope identity instead of display st
     {...scopeReport(),productRegressionPerformed:true}])assert.equal(documentationOnlyAttempt(run,data,[{}],[{...entry,scopeReport:r}],2),false);
   assert.equal(documentationOnlyAttempt(run,data,[{}],[],2),false);
   assert.equal(documentationOnlyAttempt(run,{...data,conclusion:'failure'},[{}],[entry],2),false);
+  const review={name:'Review MediaScope local evidence',status:'completed',conclusion:'skipped'};
+  assert.equal(documentationOnlyAttempt(run,data,[{},review],[entry],2),true);
+  assert.equal(documentationOnlyAttempt(run,data,[{},{...review,conclusion:'success'}],[entry],2),false);
+
+  const dispatch={...run,event:'workflow_dispatch'};
+  const preparation={name:'Prepare MediaScope acceptance',status:'completed',conclusion:'success'};
+  const acceptance={...entry,artifact:{name:'mediascope-ci-scope-40-1'},scopeReport:{schema:2,kind:'split-acceptance',scope:'full',
+    sha:run.head_sha,plan:'c'.repeat(64),cloud:{},commits:{},expected:{},
+    github:{...scopeReport(1).github,ref:'refs/tags/verify-main-review'}}};
+  const approvals=[{state:'approved',user:{id:7},environments:[{name:'mediascope-local-evidence'}]}];
+  assert.equal(splitAttempt(dispatch,data,[preparation,review],[acceptance],1,7,approvals),null);
+  const jobs=[preparation,{...review,conclusion:'success'}];
+  assert.equal(splitAttempt(dispatch,data,jobs,[acceptance],1,7,[]),null);
+  assert.equal(splitAttempt(dispatch,data,jobs,[acceptance],1,8,approvals),null);
+  assert.ok(splitAttempt(dispatch,data,jobs,[acceptance],1,7,approvals));
 });
 
 test('documentation scope artifacts retain exact rerun attempts without fabricating product records or missing-evidence gaps',async t=>{

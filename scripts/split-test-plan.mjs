@@ -52,8 +52,11 @@ function localStages(files, release) {
   return ['gpu', 'native', 'package', 'online'].filter(id => release || stages.has(id));
 }
 
-export function splitPlan(repo, {sha, base, anchor, release = false, forceFull = false}) {
+export function splitPlan(repo, {sha, base, anchor, release = false, forceFull = false, recovery}) {
   if (sha !== head(repo)) throw Error('Checkout differs from candidate SHA');
+  if (recovery && (recovery.after !== sha || recovery.base !== base || anchor || release || !forceFull)) {
+    throw Error('Main history recovery requires its authorized baseline and full non-release acceptance');
+  }
   const diff = changes(repo, base, sha);
   const anchorDiff = anchor ? changes(repo, anchor, sha) : [];
   const canNarrow = !forceFull && !release && Boolean(anchor) && diff.length > 0 && anchorDiff.length > 0;
@@ -75,12 +78,13 @@ export function splitPlan(repo, {sha, base, anchor, release = false, forceFull =
       cloud.push(c.id);
     } else local.push(c.id);
   }
-  const stages = docsOnly ? [] : localStages(diff, release);
+  const stages = docsOnly ? [] : localStages(diff, release || Boolean(recovery));
   const stageCases = Object.fromEntries(stages.filter(id => ['gpu','native'].includes(id))
     .map(id => [id, selectCases({suite:id}).caseIds.sort()]));
   const plan = {schema:1, sha, base, anchor:anchor || null, scope:docsOnly ? 'docs-only' : bounded ? 'selected' : 'full', release, forceFull,
     files:diff.map(c => c.file), local:local.sort(), cloud:cloud.sort(), commits:commitCases(), stages, stageCases,
     runtimeLock:digest(fs.readFileSync(path.join(repo,'runtime-lock.json')))};
+  if (recovery) plan.recovery = recovery;
   const combined = [...plan.local,...plan.cloud,...plan.commits];
   const required = new Set([...selection.caseIds,...plan.commits]);
   if (new Set(combined).size !== combined.length || combined.length !== required.size || combined.some(id => !required.has(id))) {

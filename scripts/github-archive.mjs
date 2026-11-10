@@ -6,7 +6,7 @@ import {execFileSync} from 'node:child_process';
 import {TARGET,now,initialize,assertRoot,lock,verifyArchive,verifySnapshot,snapshots,readJson,writeJson,exists,inside,noLinks,tree,seal,hash,safeRelative,canonicalTimePath} from './github-archive-store.mjs';
 import {inventory,latestInventory} from './github-archive-inventory.mjs';
 import {migrate,boundaryBaseline,evidenceRecords,verifyEvidence,importTransport,mergeCopy} from './github-archive-migration.mjs';
-import {sync} from './github-archive-collect.mjs';
+import {productJobs,sync} from './github-archive-collect.mjs';
 import {GitHubReader} from './github-archive-api.mjs';
 import {capacityReport} from './github-archive-capacity.mjs';
 
@@ -63,7 +63,7 @@ export async function main(args=process.argv.slice(2)){
       const reader=new GitHubReader({root,budgetMs:5*60000}),repo=(await reader.get('')).data;if(String(repo.id)!==TARGET.repositoryId)throw Error('Repository identity mismatch');
       const run=(await reader.get('actions/runs/'+opts.run+'/attempts/'+opts.attempt)).data;
       if(String(run.repository.id)!==TARGET.repositoryId||String(run.id)!==opts.run||String(run.run_attempt)!==opts.attempt)throw Error('Run identity mismatch');
-      const jobs=await reader.list('actions/runs/'+opts.run+'/attempts/'+opts.attempt+'/jobs','jobs');if(jobs.length!==1||jobs[0].name!=='Windows full regression'||run.path!=='.github/workflows/tests.yml')throw Error('Product job layout not supported');
+      const jobs=productJobs(await reader.list('actions/runs/'+opts.run+'/attempts/'+opts.attempt+'/jobs','jobs'));if(jobs.length!==1||jobs[0].name!=='Windows full regression'||run.path!=='.github/workflows/tests.yml')throw Error('Product job layout not supported');
       const artifacts=await reader.list('actions/runs/'+opts.run+'/artifacts','artifacts'),digest='sha256:'+await fileHashInput(opts.archive),artifact=artifacts.find(a=>a.name==='mediascope-test-evidence-'+opts.run+'-'+opts.attempt&&a.digest===digest);
       if(!artifact)throw Error('Transport has no matching platform digest; source retained as unverified, no formal import');
       const result=await importTransport(project,root,path.resolve(opts.archive),{repository:TARGET.repository,runId:opts.run,attempt:opts.attempt,commit:opts.commit??(['push','workflow_dispatch','schedule'].includes(run.event)?run.head_sha:undefined)},{reader,artifact:{id:artifact.id,digest:artifact.digest}});console.log(path.join(root,result.path));return result;

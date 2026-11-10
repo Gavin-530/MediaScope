@@ -7,7 +7,10 @@ import path from 'node:path';
 import {execFileSync, spawn} from 'node:child_process';
 import {createServer} from 'node:http';
 import {fileURLToPath} from 'node:url';
-import {assessScope, baselinePassed, checkDocuments, comparisonBase, documentationChanges} from '../../../scripts/ci-scope.mjs';
+import {assessScope, baselinePassed, checkDocuments, comparisonBase, documentationChanges, forcedMainRecovery} from '../../../scripts/ci-scope.mjs';
+import {SplitGitHub} from '../../../scripts/split-test-github.mjs';
+import {splitPlan} from '../../../scripts/split-test-plan.mjs';
+import {repository} from '../../../scripts/split-test-receipts.mjs';
 
 const a = 'a'.repeat(40), b = 'b'.repeat(40), c = 'c'.repeat(40);
 const successfulCheck = sha => ({name: 'Windows full regression', head_sha: sha,
@@ -35,6 +38,17 @@ test('manual/release events, invalid identities, new main and force pushes requi
     ['pull_request', {pull_request: {base: {ref: 'other', sha: a}, head: {sha: c}}}, b],
     ['merge_group', {merge_group: {base_ref: 'refs/heads/main', base_sha: a, head_sha: c}}, b],
   ]) assert.throws(() => comparisonBase(name, event, sha, main));
+  const recovery = {before:a, after:b, base:c};
+  const forced = {...pushEvent(a, b), forced:true};
+  const config = JSON.stringify(recovery);
+  assert.deepEqual(forcedMainRecovery(config, forced, b), recovery);
+  assert.throws(() => forcedMainRecovery('', forced, b), /not authorized/);
+  assert.throws(() => forcedMainRecovery(config, {...forced, before:c}, b), /authorized SHA pair/);
+  assert.throws(() => forcedMainRecovery(config, {...forced, after:c}, c), /authorized SHA pair/);
+  for (const invalid of [{...forced, forced:false}, {...forced, deleted:true}, {...forced, ref:'refs/heads/topic'}]) {
+    assert.throws(() => forcedMainRecovery(config, invalid, b), /Invalid main history recovery event/);
+  }
+  assert.throws(() => forcedMainRecovery(JSON.stringify({...recovery, base:'main'}), forced, b), /authorized SHA pair/);
 });
 
 test('only existing regular Markdown modifications are documentation candidates', () => {
@@ -49,13 +63,64 @@ test('only existing regular Markdown modifications are documentation candidates'
   ]) assert.equal(documentationChanges(value), null, value);
 });
 
-test('baseline requires completed successful checks from the expected SHA and GitHub app', () => {
+test('baseline requires completed successful checks from the expected SHA and GitHub app', async t => {
   assert.equal(baselinePassed([successfulCheck(a)], a), true);
   for (const checks of [[], [successfulCheck(b)], [{...successfulCheck(a), app: {slug: 'other'}}],
     [{...successfulCheck(a), name: 'Other check'}], [{...successfulCheck(a), status: 'in_progress'}],
     ...['failure', 'cancelled', 'skipped', 'neutral', null].map(conclusion => [{...successfulCheck(a), conclusion}]),
     [successfulCheck(a), {...successfulCheck(a), conclusion: 'failure'}],
   ]) assert.equal(baselinePassed(checks, a), false);
+
+  const owner = {id:1,type:'User'};
+  const repo = {full_name:repository,owner};
+  const run = (id, type, conclusion = 'success') => ({
+    id,path:'.github/workflows/tests.yml',event:'workflow_dispatch',head_sha:a,
+    head_branch:'verify-main-'+type+'-test',repository:repo,head_repository:repo,
+    created_at:new Date(id * 1000).toISOString(),status:'completed',conclusion,run_attempt:1
+  });
+  const normal = run(1,'full'), recovery = run(2,'recovery');
+  let runs = [normal,recovery];
+  const reader = new SplitGitHub('',null,{get:async route=>{
+    if(route.includes('/runs?'))return {data:{total_count:runs.length,workflow_runs:runs}};
+    if(route==='')return {data:repo};
+    assert.match(route,/\/approvals$/);
+    return {data:[{state:'approved',user:owner,environments:[{name:'mediascope-local-evidence'}]}]};
+  }});
+  const readReceipt = reader.receipt.bind(reader);
+  reader.receipt = async (origin, requirements) => {
+    if(origin.conclusion!=='success'||origin.status!=='completed')return readReceipt(origin,requirements);
+    return {
+      proof:{schema:2,kind:'split-acceptance',scope:'full',sha:a,
+        github:{repository,runId:String(origin.id),runAttempt:'1',ref:'refs/tags/'+origin.head_branch}},
+      jobs:[{name:'Review MediaScope local evidence',head_sha:a,run_id:origin.id,run_attempt:1,status:'completed',conclusion:'success'}]
+    };
+  };
+  const failedRecovery = run(3,'recovery','failure');
+  runs = [normal,recovery,failedRecovery];
+  assert.equal((await reader.previousAcceptance(a)).origin.id,normal.id);
+  await reader.verifyAnchor({scope:'selected',anchor:a});
+  await assert.rejects(reader.previousAcceptance(a,{recovery:true}), /missing a completed passing result/);
+
+  const failedNormal = run(4,'full','failure');
+  runs = [normal,recovery,failedNormal];
+  assert.equal((await reader.previousAcceptance(a,{recovery:true})).origin.id,recovery.id);
+  await assert.rejects(reader.previousAcceptance(a), /missing a completed passing result/);
+  await assert.rejects(reader.verifyAnchor({scope:'selected',anchor:a}), /missing a completed passing result/);
+
+  runs = [recovery];
+  await assert.rejects(reader.verifyAnchor({scope:'selected',anchor:a}), /Required GitHub execution has not been recorded/);
+
+  const f = fixture(t);
+  const base = f.commit({'runtime-lock.json':'{}\n'});
+  const docSha = f.commit({'README.md':'# Recover this revision\n'});
+  const planRecovery = {before:f.base,after:docSha,base};
+  const recovered = splitPlan(f.repo,{sha:docSha,base,forceFull:true,recovery:planRecovery});
+  assert.equal(recovered.scope,'full');
+  assert.equal(recovered.release,false);
+  assert.deepEqual(recovered.stages,['gpu','native','package','online']);
+  assert.notEqual(recovered.hash,splitPlan(f.repo,{sha:docSha,base,forceFull:true,recovery:{...planRecovery,before:a}}).hash);
+  assert.throws(() => splitPlan(f.repo,{sha:docSha,base,forceFull:true,anchor:base,recovery:planRecovery}), /authorized baseline/);
+  assert.throws(() => splitPlan(f.repo,{sha:docSha,base,recovery:planRecovery}), /full non-release acceptance/);
 });
 
 const temporaryRoot = workPath('ci-scope');

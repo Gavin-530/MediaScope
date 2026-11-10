@@ -1,5 +1,4 @@
 import {execFileSync, spawn} from 'node:child_process';
-import {createPrivateKey, createPublicKey, sign, verify} from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
@@ -183,18 +182,10 @@ export function verifyCaseSummary(summary,ids,{runtime=false}={}) {
   if(runtime&&(!Array.isArray(summary.tools)||!summary.tools.some(x=>x.name==='node')||summary.tools.some(x=>!isDigest(x.sha256))))throw Error('Missing runtime fingerprints');
 }
 
-export function makeSignature(payload,privatePem) {
-  const key=createPrivateKey(privatePem);
-  if(key.asymmetricKeyType!=='ed25519')throw Error('Expected an Ed25519 private key');
-  const bytes=Buffer.from(JSON.stringify(payload));
-  return bytes.toString('base64url')+'.'+sign(null,bytes,key).toString('base64url');
-}
-
-export function verifyLocalReceipt(token,publicPem,plan,identity) {
-  if(typeof token!=='string'||token.length>20000||!/^[-_a-zA-Z0-9]+\.[-_a-zA-Z0-9]+$/.test(token))throw Error('Missing or invalid signed local receipt');
-  const [value,signature]=token.split('.').map(x=>Buffer.from(x,'base64url'));
-  const key=createPublicKey(publicPem);
-  if(key.asymmetricKeyType!=='ed25519'||!verify(null,value,key,signature))throw Error('Local receipt signature verification failed');
+export function verifyLocalReceipt(token,plan,identity) {
+  if(typeof token!=='string'||token.length>20000||!/^[-_a-zA-Z0-9]+$/.test(token))throw Error('Missing or invalid local receipt');
+  const value=Buffer.from(token,'base64url');
+  if(value.toString('base64url')!==token)throw Error('Noncanonical local receipt');
   const result=JSON.parse(value);
   if(result.schema!==1||result.side!=='local'||result.repository!==repository||result.sha!==plan.sha||
       result.plan!==plan.hash||!same(result.identity,identity)||
