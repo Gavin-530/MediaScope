@@ -138,7 +138,22 @@ test('[repeat-analysis] original PTS, offset and VFR holds agree with separate F
   const intervalCounts=new Map();for(let i=1;i<official.frames.length;i++){const d=String(BigInt(official.frames[i].pts)-BigInt(official.frames[i-1].pts));intervalCounts.set(d,(intervalCounts.get(d)??0)+1);}
   assert.deepEqual(r.timeline.intervals,[...intervalCounts].sort((a,b)=>Number(a[0])-Number(b[0])).map(([ticks,count])=>({ticks,count})));
   assert.ok(r.timeline.longestIntervals.length>0);assert.equal(r.timeline.longestIntervals[0].frame,2);assert.equal(r.timeline.longestIntervals[1].frame,5);
-  await writeFile(path.join(dir,'timestamps.json'),JSON.stringify({outcome:'passed',official,result:r,commands:ctx.commands}));
+
+  // Two distinct source timestamps within one nominal output frame period.
+  const closePts=path.join(dir,'close-pts.mkv');
+  await run(FF,['-v','error','-y','-f','rawvideo','-pixel_format',c.format,'-video_size',`${c.width}x${c.height}`,'-framerate','25','-i',path.join(dir,'vfr.raw'),
+    '-vf',"settb=1/1000,setpts='200+if(between(N,3,4),120+N-3,40*N)'",'-fps_mode','passthrough','-enc_time_base','filter','-c:v','ffv1',closePts],ctx);
+  const closeStream=(await probe(closePts,ctx)).raw.streams[0];
+  const close=await analyzeRepeats(closePts,closeStream,ctx,{freeze:true});
+  assert.equal(close.timeBase,'1/1000');
+  assert.deepEqual(close.frames.map(f=>f.pts),['200','240','280','320','321','400','440','480']);
+  assert.deepEqual(close.frames.map(f=>f.sha256),c.frames.map(digest));
+  assert.equal(close.timeline.status,'complete');
+  assert.equal(close.freeze.status,'complete',close.freeze.reason);
+  const hashes=c.frames.slice(3,5).map(digest);
+  const preview=await repeatPreview({file:closePts,signature:close.source.signature,stream:closeStream.index,frame:4,hashes},ctx);
+  assert.deepEqual(preview.images.map(i=>i.sha256),hashes);
+  await writeFile(path.join(dir,'timestamps.json'),JSON.stringify({outcome:'passed',official,result:r,closePts:close,commands:ctx.commands}));
 });
 
 test('[repeat-analysis] integer rational grid, missing PTS, one frame and open boundaries have explicit meanings',()=>{

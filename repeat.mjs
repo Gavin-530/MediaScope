@@ -95,7 +95,8 @@ async function fingerprints(file,stream,format,frames,ctx) {
   const args=['-hide_banner','-nostdin','-v','error','-xerror','-copyts','-noautorotate','-noauto_conversion_filters','-reinit_filter','0',
     '-threads:v',String(decodeThreadCount(ctx.decodeThreads)),'-i',file,'-filter_complex',`[0:${stream.index}]split=2[h][r]`,
     '-map','[h]','-an','-sn','-c:v','rawvideo','-threads:v','1','-pix_fmt','+'+format.pixelFormat,'-fps_mode','passthrough','-f','framehash','-hash','sha256','pipe:1',
-    '-map','[r]','-an','-sn','-c:v','rawvideo','-threads:v','1','-pix_fmt','+'+format.pixelFormat,'-fps_mode','passthrough','-f','rawvideo','pipe:3'];
+    // The default 1/fps encoder time base can round distinct VFR timestamps to the same DTS.
+    '-map','[r]','-an','-sn','-c:v','rawvideo','-threads:v','1','-pix_fmt','+'+format.pixelFormat,'-fps_mode','passthrough','-enc_time_base','filter','-f','rawvideo','pipe:3'];
   const command={exe:FF,args,cwd:ctx.cwd??process.cwd()},started=performance.now();ctx.commands?.push(command);
   let count=0,rawCount=0,offset=0,current=createHash('sha256'),timeBase=null,dimensions=false,algorithm=false;
   const waiting=new Map(),comparison=new NativeSampleComparison(format);
@@ -156,7 +157,7 @@ async function frozen(file,stream,frames,timeline,ctx) {
   try {
     await run(FF,['-hide_banner','-nostdin','-v','error','-xerror','-copyts','-noautorotate','-noauto_conversion_filters','-reinit_filter','0',
       '-threads:v',String(decodeThreadCount(ctx.decodeThreads)),'-i',file,'-map',`0:${stream.index}`,'-an','-sn',
-      '-vf','freezedetect=noise=0.001:duration=2,metadata=mode=print:file=-','-fps_mode','passthrough','-f','null','-'],ctx,line=>{
+      '-vf','freezedetect=noise=0.001:duration=2,metadata=mode=print:file=-','-fps_mode','passthrough','-enc_time_base','filter','-f','null','-'],ctx,line=>{
       const header=/^frame:(\d+)\s+pts:(-?\d+)\s+pts_time:/.exec(line);
       if(header){frame=Number(header[1]);filterPts=header[2];return;}
       const m=/^lavfi\.freezedetect\.freeze_(start|duration|end)=(.+)$/.exec(line);
@@ -229,7 +230,7 @@ export async function repeatPreview(input,ctx={}) {
   if(!format||format.bytes>MAX_REPEAT_FRAME_BYTES||format.bytes*6>freemem()/2)throw Error('原帧复核格式或内存预算不足');
   const start=Math.max(0,input.frame-1),count=input.hashes.length;
   const raw=await bufferedProcess(['-hide_banner','-nostdin','-v','error','-xerror','-noautorotate','-noauto_conversion_filters','-reinit_filter','0','-i',file,
-    '-map',`0:${stream.index}`,'-vf',`select=between(n\\,${start}\\,${input.frame})`,'-frames:v',String(count),'-an','-sn','-c:v','rawvideo','-threads:v','1','-pix_fmt','+'+stream.pix_fmt,'-fps_mode','passthrough','-f','rawvideo','pipe:1'],null,ctx,format.bytes*count);
+    '-map',`0:${stream.index}`,'-vf',`select=between(n\\,${start}\\,${input.frame})`,'-frames:v',String(count),'-an','-sn','-c:v','rawvideo','-threads:v','1','-pix_fmt','+'+stream.pix_fmt,'-fps_mode','passthrough','-enc_time_base','filter','-f','rawvideo','pipe:1'],null,ctx,format.bytes*count);
   if(raw.length!==format.bytes*count)throw Error('原帧复核未取得完整帧');
   const images=[];
   for(let i=0;i<count;i++) {

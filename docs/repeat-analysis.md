@@ -36,7 +36,7 @@ rawvideo编码器产生无行对齐填充的紧凑帧。允许的整数布局由
 
 ## 原始时间证据
 
-分别保存FFprobe逐帧pts、best_effort_timestamp、整数duration及原time_base。本文的“原始PTS”指FFprobe报告的源帧pts，包含工具的解复用/解码解释，不声称直接解析了容器裸字节。framehash输出的时间基、PTS和duration另存，它们可能由编码/复用过程生成，不能冒充源帧PTS。源帧PTS缺失仍可比较有序样本，时间结论则部分或不可用，程序不回退DTS、不用平均fps补造。
+分别保存FFprobe逐帧pts、best_effort_timestamp、整数duration及原time_base。本文的“原始PTS”指FFprobe报告的源帧pts，包含工具的解复用/解码解释，不声称直接解析了容器裸字节。原生字节、原帧预览和持续静止检测的内部输出沿用滤镜时间基，避免不同的源时间戳在较粗的输出刻度上合并。framehash输出的时间基、PTS和duration另存，它们可能由编码/复用过程生成，不能冒充源帧PTS。源帧PTS缺失仍可比较有序样本，时间结论则部分或不可用，程序不回退DTS、不用平均fps补造。
 
 帧间隔在整数tick域统计。候选帧率仅取有效的轨道r_frame_rate/avg_frame_rate，不根据画面重复数量寻找一个想要的帧率。对原PTS完整、严格递增且时间基小于候选帧周期的数据，核对每帧`abs((pts_i−pts_0)*time_base−i/f) <= time_base`，采用BigInt有理数比较。一个源刻度覆盖两次独立量化相减的误差。报告称“与候选网格相容”，不认证CFR采集；29.97fps的33/34ms量化交替不直接判为VFR。
 
