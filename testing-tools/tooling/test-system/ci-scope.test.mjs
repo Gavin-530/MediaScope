@@ -11,6 +11,7 @@ import {assessScope, baselinePassed, checkDocuments, comparisonBase, documentati
 import {SplitGitHub} from '../../../scripts/split-test-github.mjs';
 import {splitPlan} from '../../../scripts/split-test-plan.mjs';
 import {repository} from '../../../scripts/split-test-receipts.mjs';
+import {selectCases} from '../../helpers/case-catalog.mjs';
 
 const a = 'a'.repeat(40), b = 'b'.repeat(40), c = 'c'.repeat(40);
 const successfulCheck = sha => ({name: 'Windows full regression', head_sha: sha,
@@ -185,6 +186,33 @@ test('verification tags can validate documentation before main accepts the same 
   const result = await assessScope({...f.options(sha), event: pushEvent('0'.repeat(40), sha, 'refs/tags/verify-main-docs')});
   assert.equal(result.scope, 'docs-only');
   assert.equal(result.base, f.base);
+});
+
+test('split planning covers reviewed module integrations and escalates validation entrypoint changes', t => {
+  const f = fixture(t);
+  const base = f.commit({
+    'runtime-lock.json': '{}\n',
+    'public/bitrate-model.js': '// baseline\n',
+    'public/repeat-view.js': '// baseline\n',
+    'scripts/split-tests.mjs': '// baseline\n',
+  });
+  const plan = (sha, options = {}) => splitPlan(f.repo, {sha, base, anchor: base, ...options});
+  for (const [file, modules] of [['public/bitrate-model.js', ['bitrate']], ['public/repeat-view.js', ['repeat', 'ui']]]) {
+    f.git('checkout', '--detach', base);
+    const sha = f.commit({[file]: '// changed\n'});
+    const selected = plan(sha);
+    assert.equal(selected.scope, 'selected');
+    const expected = new Set([...selectCases({modules}).caseIds, ...selected.commits]);
+    assert.deepEqual([...selected.local, ...selected.cloud, ...selected.commits].sort(), [...expected].sort());
+    assert.equal(plan(sha, {anchor: undefined}).scope, 'full');
+    assert.equal(plan(sha, {forceFull: true}).scope, 'full');
+    const mixed = f.commit({'engine.mjs': '// changed shared code\n'});
+    assert.equal(plan(mixed, {base: sha}).scope, 'full');
+    assert.equal(plan(mixed, {anchor: sha}).scope, 'full');
+  }
+  f.git('checkout', '--detach', base);
+  const sha = f.commit({'scripts/split-tests.mjs': '// changed gate\n'});
+  assert.deepEqual(plan(sha).stages, ['gpu', 'native', 'package', 'online']);
 });
 
 test('missing/failed baseline checks, API failures, missing objects and inconsistent checkout default to full', async t => {

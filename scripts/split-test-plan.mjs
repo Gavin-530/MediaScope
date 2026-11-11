@@ -12,7 +12,17 @@ const cloudFiles = new Set([
   'testing-tools/modules/reports/portable-repeat.test.mjs',
   ...['ci-scope', 'github-archive', 'product-contract'].map(name => tooling + name + '.test.mjs'),
 ]);
-const bitrateFile = 'public/bitrate-model.js';
+// Each entry is reviewed for the module and its registered integration coverage.
+const selectedFiles = new Set([
+  'public/bitrate-model.js',
+  'public/repeat-view.js',
+]);
+const validationEntrypoints = new Set([
+  '.gitattributes',
+  'scripts/check-commits.mjs',
+  'scripts/ci-scope.mjs',
+  'scripts/split-tests.mjs',
+]);
 const shaPattern = /^(?!0{40}$)[0-9a-f]{40}$/;
 const rawChange = /^:(\d{6}) (\d{6}) [0-9a-f]{40} [0-9a-f]{40} ([ADMT])$/;
 export const digest = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -45,7 +55,7 @@ function localStages(files, release) {
       stages.add('package');
       stages.add('online');
     }
-    const shared = /^(runtime-lock\.json$|package(?:-lock)?\.json$|\.github\/workflows\/(?:tests|commit-messages)\.yml$|testing-tools\/(helpers\/|product\.json$|modules\/catalog\.json$)|scripts\/(?:split-test|test|record-test|check-environment|deployment|verify-release|verify-test-evidence)[.-])/.test(file);
+    const shared = validationEntrypoints.has(file) || /^(runtime-lock\.json$|package(?:-lock)?\.json$|\.github\/workflows\/(?:tests|commit-messages)\.yml$|testing-tools\/(helpers\/|product\.json$|modules\/catalog\.json$)|scripts\/(?:split-test|test|record-test|check-environment|deployment|verify-release|verify-test-evidence)[.-])/.test(file);
     const known = source || /^(docs\/|\.github\/|\.gitattributes$|\.gitignore$|AGENTS\.md$|README\.md$|licenses\/|testing-tools\/|scripts\/|evidence-archive\/tools\/)/.test(file);
     if (shared || !known) for (const id of ['gpu', 'native', 'package', 'online']) stages.add(id);
   }
@@ -65,9 +75,11 @@ export function splitPlan(repo, {sha, base, anchor, release = false, forceFull =
   const docsOnly = canNarrow && considered.every(c=>c.regularEdit && c.file.endsWith('.md')) &&
     git(repo,'check-attr','--source='+sha,'-z','mediascope-validation','--',...paths)===
       paths.map(file=>file+'\0mediascope-validation\0docs\0').join('');
-  // Only the reviewed bitrate module can narrow, and only from an explicit full baseline.
-  const bounded = canNarrow && considered.every(change => change.regularEdit && change.file === bitrateFile);
-  const selection = docsOnly ? {cases:[],caseIds:[]} : selectCases(bounded ? {modules:['bitrate']} : {});
+  const selectedSource = canNarrow && paths.length === 1 && selectedFiles.has(paths[0]) &&
+    considered.every(change => change.regularEdit)
+    ? productContract.sources.find(source => source.file === paths[0]) : undefined;
+  const modules = selectedSource?.modules ?? [];
+  const selection = docsOnly ? {cases:[],caseIds:[]} : selectCases({modules});
   const cloud = [], local = [];
   for (const c of selection.cases) {
     if (c.file === commitFile) continue;
@@ -81,7 +93,7 @@ export function splitPlan(repo, {sha, base, anchor, release = false, forceFull =
   const stages = docsOnly ? [] : localStages(diff, release || Boolean(recovery));
   const stageCases = Object.fromEntries(stages.filter(id => ['gpu','native'].includes(id))
     .map(id => [id, selectCases({suite:id}).caseIds.sort()]));
-  const plan = {schema:1, sha, base, anchor:anchor || null, scope:docsOnly ? 'docs-only' : bounded ? 'selected' : 'full', release, forceFull,
+  const plan = {schema:1, sha, base, anchor:anchor || null, scope:docsOnly ? 'docs-only' : modules.length ? 'selected' : 'full', release, forceFull,
     files:diff.map(c => c.file), local:local.sort(), cloud:cloud.sort(), commits:commitCases(), stages, stageCases,
     runtimeLock:digest(fs.readFileSync(path.join(repo,'runtime-lock.json')))};
   if (recovery) plan.recovery = recovery;

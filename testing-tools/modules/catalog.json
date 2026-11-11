@@ -6260,6 +6260,18 @@
       ]
     },
     {
+      "id": "test-system.split-plan.scope-and-stages",
+      "module": "test-system",
+      "name": "split planning covers reviewed module integrations and escalates validation entrypoint changes",
+      "file": "testing-tools/tooling/test-system/ci-scope.test.mjs",
+      "scope": "general",
+      "inputs": [],
+      "requiresMedia": false,
+      "covers": [
+        "test-system"
+      ]
+    },
+    {
       "id": "test-system.tool.971ab4c9bc0e",
       "module": "test-system",
       "name": "missing/failed baseline checks, API failures, missing objects and inconsistent checkout default to full",

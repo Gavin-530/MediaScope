@@ -416,7 +416,7 @@ full（默认通用阶段）/core/browser/gpu/native是执行阶段过滤；--mo
 | [testing-tools/repeat-resource.mjs](<../testing-tools/repeat-resource.mjs>) | 测试基础设施 | 历史调用兼容入口，委托统一扩展调度，不是另一套正式测试 |
 | [testing-tools/tooling/test-system/archive-layout.test.mjs](<../testing-tools/tooling/test-system/archive-layout.test.mjs>) | 工具自证 / test-system | 测试工具自身的4个明确用例；具体行为、阶段及输入见下表，运行必须保留独立断言回执。 |
 | [testing-tools/tooling/test-system/check-commits.test.mjs](<../testing-tools/tooling/test-system/check-commits.test.mjs>) | 工具自证 / test-system | 测试工具自身的12个明确用例；具体行为、阶段及输入见下表，运行必须保留独立断言回执。 |
-| [testing-tools/tooling/test-system/ci-scope.test.mjs](<../testing-tools/tooling/test-system/ci-scope.test.mjs>) | 工具自证 / test-system | 测试工具自身的14个明确用例；具体行为、阶段及输入见下表，运行必须保留独立断言回执。 |
+| [testing-tools/tooling/test-system/ci-scope.test.mjs](<../testing-tools/tooling/test-system/ci-scope.test.mjs>) | 工具自证 / test-system | 测试工具自身的15个明确用例；具体行为、阶段及输入见下表，运行必须保留独立断言回执。 |
 | [testing-tools/tooling/test-system/evidence.test.mjs](<../testing-tools/tooling/test-system/evidence.test.mjs>) | 工具自证 / test-system | 测试工具自身的5个明确用例；具体行为、阶段及输入见下表，运行必须保留独立断言回执。 |
 | [testing-tools/tooling/test-system/fixtures.test.mjs](<../testing-tools/tooling/test-system/fixtures.test.mjs>) | 工具自证 / test-system | 测试工具自身的4个明确用例；具体行为、阶段及输入见下表，运行必须保留独立断言回执。 |
 | [testing-tools/tooling/test-system/github-archive.test.mjs](<../testing-tools/tooling/test-system/github-archive.test.mjs>) | 工具自证 / test-system | 测试工具自身的48个明确用例；具体行为、阶段及输入见下表，运行必须保留独立断言回执。 |
@@ -848,6 +848,7 @@ inputs是允许读取的固定输入；[]表示由源码中明确控制数据或
 | test-system.tool.5e90cac3ffa3 / general | [testing-tools/tooling/test-system/ci-scope.test.mjs](<../testing-tools/tooling/test-system/ci-scope.test.mjs>) | mixed changes and new documents require full regression without consulting baseline checks | test-system / test-system | 源码控制数据 / 按需真实生成 |
 | test-system.tool.d9ed535db49e / general | [testing-tools/tooling/test-system/ci-scope.test.mjs](<../testing-tools/tooling/test-system/ci-scope.test.mjs>) | branch comparison includes earlier code changes even when the latest push only changes docs | test-system / test-system | 源码控制数据 / 按需真实生成 |
 | test-system.tool.c743b55a2a41 / general | [testing-tools/tooling/test-system/ci-scope.test.mjs](<../testing-tools/tooling/test-system/ci-scope.test.mjs>) | verification tags can validate documentation before main accepts the same SHA | test-system / test-system | 源码控制数据 / 按需真实生成 |
+| test-system.split-plan.scope-and-stages / general | [testing-tools/tooling/test-system/ci-scope.test.mjs](<../testing-tools/tooling/test-system/ci-scope.test.mjs>) | split planning covers reviewed module integrations and escalates validation entrypoint changes | test-system / test-system | 源码控制数据 / 按需真实生成 |
 | test-system.tool.971ab4c9bc0e / general | [testing-tools/tooling/test-system/ci-scope.test.mjs](<../testing-tools/tooling/test-system/ci-scope.test.mjs>) | missing/failed baseline checks, API failures, missing objects and inconsistent checkout default to full | test-system / test-system | 源码控制数据 / 按需真实生成 |
 | test-system.tool.d0df5766c581 / general | [testing-tools/tooling/test-system/ci-scope.test.mjs](<../testing-tools/tooling/test-system/ci-scope.test.mjs>) | PR and merge queue classify the tested result; missing PR head ancestry is rejected | test-system / test-system | 源码控制数据 / 按需真实生成 |
 | test-system.tool.d6e62b441b9b / general | [testing-tools/tooling/test-system/ci-scope.test.mjs](<../testing-tools/tooling/test-system/ci-scope.test.mjs>) | broken local links, whitespace errors, malformed UTF-8 and unclosed examples fail lightweight checks | test-system / test-system | 源码控制数据 / 按需真实生成 |
@@ -998,7 +999,7 @@ inputs是允许读取的固定输入；[]表示由源码中明确控制数据或
 
 分工用于 `verify-main-*` 标签预检、对同一标签手动核验及其后的 `main` push。`verify-main-pilot-*` 标签可在主线切换前独立试跑，其余分工事件在仓库变量 `MEDIASCOPE_SPLIT_ENABLED=true` 后启用。需要本地证据的候选使用 GitHub 环境 `mediascope-local-evidence`，由仓库所有者审批。分工验收核对该次运行的原生审批记录。普通 PR、合并队列及其他分支仍提供原全量回归；切换后的 `main` 直推采用独立必需检查 `MediaScope split acceptance`，旧结果不能满足该检查。若需要由 PR 或合并队列交付，先保留原门禁，直到该路径有等价验收。
 
-可选仓库变量 `MEDIASCOPE_SPLIT_BASELINE` 只登记已有合格完整分工验收的确切祖先 SHA。留空时分工按完整范围执行。登记后，只有相对实际基线及登记基线均满足准入的已登记文档或 `public/bitrate-model.js` 单文件修改可缩小范围。Actions 核验该基线的完整验收回执；回执缺失、过期或只有部分验收时轻量档失败，可用完整标签重跑。码率档覆盖整个登记的码率模块及关联集成用例。
+可选仓库变量 `MEDIASCOPE_SPLIT_BASELINE` 只登记已有合格完整分工验收的确切祖先 SHA。留空时分工按完整范围执行。登记后，已登记的纯说明文档可以走轻量检查。功能选测只接受 `public/bitrate-model.js` 或 `public/repeat-view.js` 的单文件常规修改，并要求相对实际基线和登记基线的完整差异都符合该条件。选测覆盖产品契约登记的模块及其关联集成用例。重复帧视图覆盖重复帧和界面两个模块。Actions 核验该基线的完整验收回执；回执缺失、过期或只有部分验收时轻量档失败，可用完整标签重跑。
 
 1. 冻结候选提交，核对最新 `origin/main`。在干净检出执行 `npm run test:split -- plan --base <main-SHA>` 预览。云端若登记了全量基线，本地使用同一 `MEDIASCOPE_SPLIT_BASELINE` 或 `--anchor <SHA>`。完整预检标签用 `verify-main-full-*`，本地传 `--full`。发布标签预检用 `verify-main-release-*`，本地传 `--release` 和 `--archive <ZIP>`。
 2. 使用获授权的预检标签启动 Actions，同时本地执行 `npm run test:split -- local --base <main-SHA>`，按计划提供 `--archive <ZIP>`。本地入口核对源码、用例、实际结果及封存记录。保留本地记录和回执供审批人复核。云端预检独立完成并保留证据。文档轻量档由云端检查，本地审阅文义和链接。
@@ -1006,6 +1007,14 @@ inputs是允许读取的固定输入；[]表示由源码中明确控制数据或
 4. 手动验收通过后，将同一 SHA 推送到新的 `verify-main-accepted-*` 标签。该次 `push` 的 `MediaScope split acceptance` 复核已有验收，提供服务器认可的必需检查。GitHub 不用手动事件的成功结果满足此门禁。两项必需检查都通过后，重新确认 `origin/main` 与验收基线一致，再普通快进更新 `main`。放行标签和主线复用同一 SHA 的回执。失败或被拒绝的原记录独立保留。
 
 发布继续要求完整范围、真实 GPU、原生交互、同一 ZIP 的离线与真实首次联网部署。分工发布复核入口为 `npm run test:split -- release --archive <ZIP>`，读取对应 GitHub 验收和原生审批记录，并复核实际 ZIP。单侧范围记录仍标为部分测试，验收范围在分工回执中记录。
+
+### 临时测试标签的清理
+
+预检和放行标签只用于将候选提交交给 GitHub Actions。测试按候选 SHA 和比较基线选测，无需创建分支或调整软件版本。先固定候选和两侧计划，再推送预检标签并同时启动本地分工。重试复用仍合格的原执行证据。
+
+- 正常交付时，等同 SHA 的主线必需检查结束并确认通过，再清理该次预检和放行标签。放弃的候选等相关运行及审批结束后清理。若还要用该候选完成后续验收，等验收结束。
+- 清理前按标签名称与对象 SHA 核对本地和远端身份，按提交 SHA、运行和尝试编号归档并验证必要的云端产物、审批记录与本地证据。候选源码若只有临时标签可达，先保存并实测可恢复的源码副本。证据或恢复核查未完成的条目仍待清理。
+- 逐个清理已核对的 `verify-main-*`，并重新查询 GitHub 与本地标签确认结果。清理中断时从未完成的标签继续核查。发布标签 `v<版本>` 与各自已发布版本一一对应。
 
 部署前从 `runtime-lock.json` 指定的来源准备 `.build/downloads/node.zip` 和 `.build/downloads/ffmpeg.zip`。本地入口在开始长回归前核对这两个离线传输夹具的 SHA-256。联网阶段仍使用真实锁定下载。
 
