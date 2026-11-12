@@ -37,10 +37,12 @@ export function documentationOnlyAttempt(run,data,jobs,artifacts,attempt){
   });
 }
 export function splitAttempt(run,data,jobs,artifacts,attempt,reviewerId,reviews){
-  if(run.path!=='.github/workflows/tests.yml'||data.status!=='completed'||data.conclusion!=='success')return null;
+  const reviewWorkflow=run.path==='.github/workflows/candidate-evidence-review.yml';
+  if((run.path!=='.github/workflows/tests.yml'&&!reviewWorkflow)||data.status!=='completed'||data.conclusion!=='success')return null;
   const records=artifacts.filter(entry=>entry.artifact.name==='mediascope-ci-scope-'+run.id+'-'+attempt&&entry.content?.state==='available');
   const r=records.length===1?records[0].scopeReport:null;
   if(![1,2].includes(r?.schema)||r.sha!==run.head_sha||r.github?.repository!==TARGET.repository||r.github.runId!==String(run.id)||r.github.runAttempt!==String(attempt)||typeof r.github.ref!=='string'||!['full','selected','docs-only'].includes(r.scope)||!/^[a-f0-9]{64}$/.test(r.plan))return null;
+  if(reviewWorkflow&&(r.schema!==2||r.kind!=='split-acceptance'||r.scope==='docs-only'||run.event!=='workflow_dispatch'))return null;
   const primary=productJobs(jobs);
   const passed=name=>primary.length===1&&primary[0].name===name&&primary[0].conclusion==='success';
   if(r.kind==='split-cloud'&&r.schema===1&&run.event==='push'&&r.github.ref.startsWith('refs/tags/verify-main-')&&passed('MediaScope cloud preflight')){
@@ -61,7 +63,7 @@ export function splitAttempt(run,data,jobs,artifacts,attempt,reviewerId,reviews)
   if(r.schema===2&&acceptance&&attempt===1){
     if(r.scope==='docs-only'&&passed('Prepare MediaScope acceptance'))return 'Documentation-only split acceptance archived';
     const successful=new Set(jobs.filter(job=>job.status==='completed'&&job.conclusion==='success').map(job=>job.name));
-    if(r.scope!=='docs-only'&&jobs.length===2&&successful.has('Prepare MediaScope acceptance')&&successful.has(localReviewJob)&&
+    if(r.scope!=='docs-only'&&jobs.length===2&&successful.has(reviewWorkflow?'Prepare MediaScope candidate evidence':'Prepare MediaScope acceptance')&&successful.has(localReviewJob)&&
        Number.isSafeInteger(reviewerId)&&Array.isArray(reviews)&&reviews.filter(entry=>entry.state==='approved'&&entry.user?.id===reviewerId&&
          entry.environments?.some(env=>env.name==='mediascope-local-evidence')).length===1){
       return 'Split acceptance receipt and native approval archived';
@@ -208,7 +210,7 @@ export async function sync(project,root,{budgetMs,maxBytes,reader=new GitHubRead
           }
           metadata.artifacts.push(entry);
         }
-        if(run.path==='.github/workflows/tests.yml'&&!expected.length){
+        if(['.github/workflows/tests.yml','.github/workflows/candidate-evidence-review.yml'].includes(run.path)&&!expected.length){
           if(run.event==='workflow_dispatch'&&attempt===1&&jobs.some(job=>job.name===localReviewJob&&job.conclusion==='success')){
             try{metadata.approvals=stable((await reader.get('actions/runs/'+run.id+'/approvals')).data)}catch(e){gap('actions',run.id+'/approvals',e)}
           }

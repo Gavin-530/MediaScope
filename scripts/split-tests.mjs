@@ -131,6 +131,9 @@ async function ci(){
     }else if(eventName==='workflow_dispatch'){
       if(github.runAttempt!=='1'||tag.startsWith('verify-main-accepted-'))throw Error('Dispatch a fresh acceptance on the preflight tag');
       const token=process.env.MEDIASCOPE_SPLIT_RECEIPT?.trim()||null;
+      const mode=process.env.MEDIASCOPE_ACCEPTANCE_MODE;
+      if((mode==='docs'&&plan.scope!=='docs-only')||(mode==='review'&&plan.scope==='docs-only')||
+         (mode&&mode!=='docs'&&mode!=='review'))throw Error('Candidate scope does not match the acceptance workflow');
       report={...await api.prepareAcceptance({plan,identity,tag,token}),github};
     }else throw Error('Unsupported split workflow event');
   }

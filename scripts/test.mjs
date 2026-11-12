@@ -24,6 +24,9 @@ if(args[0]==='--complete'){
   const {runExtension}=await import('../testing-tools/extensions/index.mjs');await runExtension(args.slice(1));
 }else{
 let suite='full',ref,affected,requireClean=false,release=false,maxLogMiB=16,warnTotalMiB=1024,list=false,dryRun=false,jobs=1;const modules=[],caseIds=[],requirements=[];
+const maintenanceFlag=args.indexOf('--include-archive-maintenance');
+const includeArchiveMaintenance=maintenanceFlag>=0;
+if(includeArchiveMaintenance)args.splice(maintenanceFlag,1);
 if(args[0]==='--case-file'){
   args.shift();
   const file=path.resolve(project,args.shift()??'');
@@ -35,7 +38,6 @@ if(args[0]==='--case-file'){
 }
 while(args.length){const a=args.shift();if(a==='--suite')suite=args.shift();else if(a==='--module'||a==='--case'||a==='--requirement'){const value=args.shift();if(!value||value.startsWith('--'))throw Error('Missing selection value');(a==='--module'?modules:a==='--requirement'?requirements:caseIds).push(...value.split(','))}else if(a==='--affected'){affected=args.shift();if(!affected||affected.startsWith('-'))throw Error('Missing valid --affected reference')}else if(a==='--jobs')jobs=Number(args.shift());else if(a==='--list')list=true;else if(a==='--dry-run')dryRun=true;else if(a==='--source-ref'){ref=args.shift();if(!ref)throw Error('Missing source ref')}else if(a==='--require-clean')requireClean=true;else if(a==='--release'){release=true;requireClean=true}else if(a==='--max-log-mib')maxLogMiB=Number(args.shift());else if(a==='--warn-total-mib')warnTotalMiB=Number(args.shift());else throw Error('Unknown test argument: '+a)}
 if(!['full','core','browser','gpu','native'].includes(suite))throw Error('Suite must be full, core, browser, gpu or native');
-if(!list&&!dryRun)execFileSync(process.execPath,[path.join(project,'scripts','local-notes.mjs'),'check'],{cwd:project,stdio:'inherit',windowsHide:true});
 const contractSummary=await validateProduct(caseCatalog);
 if(!Number.isSafeInteger(jobs)||jobs<1||jobs>8)throw Error('--jobs must be an integer from 1 to 8');
 if(affected){
@@ -46,7 +48,7 @@ if(affected){
  if(!modules.length){console.log(JSON.stringify({scope:'no-formal-software-change',changed,extensionsIncluded:false}));process.exit(0)}
 }
 if(requirements.length){const allowed=requirementCases(requirements);if(caseIds.length){for(const id of caseIds)if(!allowed.includes(id))throw Error('Case is outside the selected behavior requirements: '+id);}else caseIds.push(...allowed);}
-const selection=selectCases({suite,modules,cases:caseIds});selection.requirements=[...new Set(requirements)];
+const selection=selectCases({suite,modules,cases:caseIds,includeArchiveMaintenance});selection.requirements=[...new Set(requirements)];
 if(release&&(suite!=='full'||ref||selection.selective))throw Error('--release requires the complete formal suite against the clean current checkout');
 if(list||dryRun){console.log(JSON.stringify({scope:'formal',suite,modules:caseCatalog.modules,selection,extensionsIncluded:false,softwareContract:contractSummary,softwareComplete:false},null,2));process.exit(0)}
 if(!Number.isSafeInteger(maxLogMiB)||maxLogMiB<1||maxLogMiB>256||!Number.isSafeInteger(warnTotalMiB)||warnTotalMiB<1)throw Error('Invalid evidence size limit');
@@ -55,7 +57,6 @@ let id=now().replace(/[-:]/g,'')+'-'+randomUUID().slice(0,4);
 let work=path.join(project,'.build','test-runs',id),source=path.join(work,'s'),evidence=path.join(work,'evidence');
 const sha=b=>createHash('sha256').update(b).digest('hex');
 await checkToolSources(path.join(project,'testing-tools'));
-// Local notes were checked before product validation or allocating any evidence.
 const git=(...a)=>execFileSync('git',['-C',project,...a],{encoding:'utf8',windowsHide:true}).trim();
 const psFile=path.join(project,'scripts','test-storage.ps1');
 const psArgs=(action,...extra)=>['-NoProfile','-ExecutionPolicy','Bypass','-File',psFile,'-Action',action,...extra];

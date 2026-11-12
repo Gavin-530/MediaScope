@@ -7,11 +7,6 @@ on:
   pull_request:
   merge_group:
   workflow_dispatch:
-    inputs:
-      local_receipt:
-        description: Local test receipt for the verification tag
-        type: string
-        required: false
 
 permissions:
   contents: read
@@ -35,8 +30,6 @@ jobs:
           || 'Windows full regression' }}
     runs-on: windows-2022
     timeout-minutes: 90
-    outputs:
-      review_required: ${{ steps.split.outputs.review_required }}
     defaults:
       run:
         shell: powershell
@@ -58,7 +51,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           MEDIASCOPE_SPLIT_BASELINE: ${{ vars.MEDIASCOPE_SPLIT_BASELINE }}
           MEDIASCOPE_MAIN_RECOVERY: ${{ vars.MEDIASCOPE_MAIN_RECOVERY }}
-          MEDIASCOPE_SPLIT_RECEIPT: ${{ inputs.local_receipt }}
+          MEDIASCOPE_ACCEPTANCE_MODE: docs
         run: node scripts/split-tests.mjs ci
       - name: Retain cloud partition evidence
         if: steps.split.outcome == 'success' && steps.split.outputs.cloud_record != ''
@@ -117,15 +110,3 @@ jobs:
           retention-days: 90
           if-no-files-found: error
           overwrite: false
-
-  review-local:
-    name: Review MediaScope local evidence
-    needs: full-regression
-    if: github.event_name == 'workflow_dispatch' && needs.full-regression.outputs.review_required == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions: {}
-    environment: mediascope-local-evidence
-    steps:
-      - name: Record completion of the protected review job
-        run: echo 'Check the native review history before reusing this acceptance.'

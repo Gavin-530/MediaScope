@@ -49,7 +49,7 @@ export async function runComplete(args){
  try{
   for(const stage of productContract.requiredStages.filter(s=>s.suite)){
    console.log('Formal stage: '+stage.id);
-   const args=[path.join(project,'scripts/test.mjs'),'--suite',stage.suite];
+   const args=[path.join(project,'scripts/test.mjs'),'--suite',stage.suite,'--include-archive-maintenance'];
    if(stage.id==='general')args.push('--jobs',String(jobs));
    if(requireClean)args.push(stage.id==='general'?'--release':'--require-clean');
    const start=performance.now(),result=await run(process.execPath,args,stage.id);
@@ -57,7 +57,7 @@ export async function runComplete(args){
    const receipt=JSON.parse(marker.slice(15)),record=path.resolve(receipt.directory),archiveRoot=path.join(project,'evidence-archive','records');if(path.dirname(record)!==archiveRoot)throw Error('Stage receipt outside records');
    const bytes=await fs.readFile(path.join(record,'manifest.json'));if(sha(bytes)!==receipt.manifestSha256)throw Error('Changed stage receipt');
    const manifest=JSON.parse(bytes),coverage=await read(path.join(record,'case-coverage.json')),assertions=await read(path.join(record,'assertions.json'));
-   const expected=selectCases({suite:stage.suite}).caseIds;
+   const expected=selectCases({suite:stage.suite,includeArchiveMaintenance:true}).caseIds;
    if(manifest.software?.sha256!==source.sha256||manifest.testSystem?.sha256!==harness||manifest.contract?.sha256!==contract||manifest.source.kind!=='working-tree'||manifest.selection.extensionsIncluded!==false||coverage.cases.length!==expected.length||expected.some(id=>coverage.cases.filter(c=>c.id===id).length!==1||assertions.cases.filter(c=>c.id===id).length!==1))throw Error('Stage evidence identity is incomplete or mismatched: '+stage.id);
    report.stages.push({id:stage.id,status:manifest.outcome,exitCode:result.code,checks:manifest.testSummary.tests,failed:manifest.testSummary.failed,skipped:manifest.testSummary.skipped,todo:manifest.testSummary.todo,cancelled:manifest.testSummary.cancelled,source:source.sha256,harness,contract,receipt:path.relative(project,record).replaceAll('\\','/'),receiptSha256:sha(bytes),seconds:(performance.now()-start)/1000});
    await stable();await save();if(result.code!==0||!coverage.accepted||expected.some(id=>assertions.cases.find(c=>c.id===id)?.assertions<1))throw Error(stage.id+' failed: see '+record);

@@ -614,7 +614,7 @@ inputs是允许读取的固定输入；[]表示由源码中明确控制数据或
 | test-system.rejects-junctions-inside-notes-and-at-the-notes-root-without-follo.beda72d9 / general | [testing-tools/tooling/test-system/local-notes.test.mjs](<../testing-tools/tooling/test-system/local-notes.test.mjs>) | rejects junctions inside notes and at the notes root without following them | test-system / test-system | 源码控制数据 / 按需真实生成 |
 | test-system.inventory-is-read-only-scoped-and-refuses-traversal.2686b3aa / general | [testing-tools/tooling/test-system/local-notes.test.mjs](<../testing-tools/tooling/test-system/local-notes.test.mjs>) | inventory is read-only, scoped and refuses traversal | test-system / test-system | 源码控制数据 / 按需真实生成 |
 | test-system.the-actual-cli-exits-nonzero-for-unregistered-material.a4f1629f / general | [testing-tools/tooling/test-system/local-notes.test.mjs](<../testing-tools/tooling/test-system/local-notes.test.mjs>) | the actual CLI exits nonzero for unregistered material | test-system / test-system | 源码控制数据 / 按需真实生成 |
-| test-system.the-real-test-runner-rejects-unregistered-notes-before-allocating.5a0b80e9 / general | [testing-tools/tooling/test-system/local-notes.test.mjs](<../testing-tools/tooling/test-system/local-notes.test.mjs>) | the real test runner rejects unregistered notes before allocating evidence | test-system / test-system | 源码控制数据 / 按需真实生成 |
+| test-system.the-real-test-runner-rejects-unregistered-notes-before-allocating.5a0b80e9 / general | [testing-tools/tooling/test-system/local-notes.test.mjs](<../testing-tools/tooling/test-system/local-notes.test.mjs>) | the product runner does not require the local notes checker | test-system / test-system | 源码控制数据 / 按需真实生成 |
 | test-system.local-data-verify-stops-on-invalid-notes-before-touching-evidence.10284494 / general | [testing-tools/tooling/test-system/local-notes.test.mjs](<../testing-tools/tooling/test-system/local-notes.test.mjs>) | local-data Verify stops on invalid notes before touching evidence | test-system / test-system | 源码控制数据 / 按需真实生成 |
 | trials.native-trial-preserves-420-422-444-and-8-10-12-bit-without-an-ffv1.68ca1f94 / general | [testing-tools/modules/trials/native-trial.test.mjs](<../testing-tools/modules/trials/native-trial.test.mjs>) | native trial preserves 420/422/444 and 8/10/12-bit without an FFV1 reference cache | trials / trials | 源码控制数据 / 按需真实生成 |
 | trials.4k-422-10-bit-native-h-265-trial-evaluates-crf-18-23-and-28-with-t.87626cfd / general | [testing-tools/modules/trials/native-trial.test.mjs](<../testing-tools/modules/trials/native-trial.test.mjs>) | 4K 422 10-bit native H.265 trial evaluates CRF 18, 23 and 28 with the official 4K model | trials / trials | 源码控制数据 / 按需真实生成 |
@@ -995,6 +995,8 @@ inputs是允许读取的固定输入；[]表示由源码中明确控制数据或
 
 ## 本地与 Actions 分工验收
 
+本机资料维护和候选验收独立执行。任务结束仍用 `npm run notes:check` 核对真实本机资料，按需用 `npm run github:verify` 核对本机平台档案。产品测试不依赖这些真实资料的状态，仍拒绝将受保护资料纳入 Git。修改归档维护工具或其用例时，在本机执行 `node testing-tools/tooling/test-system/tools/archive-maintenance.mjs`，它只使用测试夹具，结果留在 `.build/`。目录中标记为 `archiveMaintenance` 的用例不计入普通产品回归或 Actions 验收；显式 `test:all` 仍执行它们。候选证据校验、读取器和解包等共享能力继续纳入原有验收范围。
+
 分工入口采用同一候选 SHA 和同一比较基线。本地固定 2 路运行产品计算及依赖真实媒体的流程。Windows Actions 固定 1 路运行获审的非计算用例。`Commit messages` 独立运行自己的提交检查器自测。三组稳定 ID 不重叠，合计覆盖本次应跑范围。其他尚未审查的用例归本地。涉及桌面、安装、启动或卸载时追加原生交互及两轮部署。涉及 GPU 的改动追加真实硬件验证。测试门禁本身变更时执行全部阶段。部署阶段使用同一确切 ZIP。
 
 分工用于 `verify-main-*` 标签预检、对同一标签手动核验及其后的 `main` push。`verify-main-pilot-*` 标签可在主线切换前独立试跑，其余分工事件在仓库变量 `MEDIASCOPE_SPLIT_ENABLED=true` 后启用。需要本地证据的候选使用 GitHub 环境 `mediascope-local-evidence`，由仓库所有者审批。分工验收核对该次运行的原生审批记录。普通 PR、合并队列及其他分支仍提供原全量回归；切换后的 `main` 直推采用独立必需检查 `MediaScope split acceptance`，旧结果不能满足该检查。若需要由 PR 或合并队列交付，先保留原门禁，直到该路径有等价验收。
@@ -1003,8 +1005,10 @@ inputs是允许读取的固定输入；[]表示由源码中明确控制数据或
 
 1. 冻结候选提交，核对最新 `origin/main`。在干净检出执行 `npm run test:split -- plan --base <main-SHA>` 预览。云端若登记了全量基线，本地使用同一 `MEDIASCOPE_SPLIT_BASELINE` 或 `--anchor <SHA>`。完整预检标签用 `verify-main-full-*`，本地传 `--full`。发布标签预检用 `verify-main-release-*`，本地传 `--release` 和 `--archive <ZIP>`。
 2. 使用获授权的预检标签启动 Actions，同时本地执行 `npm run test:split -- local --base <main-SHA>`，按计划提供 `--archive <ZIP>`。本地入口核对源码、用例、实际结果及封存记录。保留本地记录和回执供审批人复核。云端预检独立完成并保留证据。文档轻量档由云端检查，本地审阅文义和链接。
-3. 两侧结束后对同一标签手动运行 `MediaScope tests`，提交 `local-receipt.txt` 中的一行回执作为 `local_receipt`。准备作业核验候选、范围、云端通过状态和产物摘要。仓库所有者在 GitHub 的 Review deployments 中核对同一候选、回执摘要及本地封存记录后批准。文档轻量档留空并自动验收。缺项、失败、旧 SHA、错范围或缺少所需审批均阻止放行。需要重试时重新手动发起验收，以获得新的审批记录。
+3. 两侧结束后，对需要本地证据的同一标签手动运行 `MediaScope candidate evidence review`，提交 `local-receipt.txt` 中的一行回执作为 `local_receipt`。准备作业核验候选、范围、云端通过状态和产物摘要。仓库所有者在 GitHub 的 Review deployments 中核对同一候选、回执摘要及本地封存记录后批准。文档轻量档对同一标签手动运行 `MediaScope tests`，不创建审批作业。缺项、失败、旧 SHA、错范围或缺少所需审批均阻止放行。需要重试时重新手动发起验收，以获得新的审批记录。
 4. 手动验收通过后，将同一 SHA 推送到新的 `verify-main-accepted-*` 标签。该次 `push` 的 `MediaScope split acceptance` 复核已有验收，提供服务器认可的必需检查。GitHub 不用手动事件的成功结果满足此门禁。两项必需检查都通过后，重新确认 `origin/main` 与验收基线一致，再普通快进更新 `main`。放行标签和主线复用同一 SHA 的回执。失败或被拒绝的原记录独立保留。
+
+切换审批工作流时，先用原有门禁交付新增工作流文件，保留原审批入口。待新工作流已在默认分支登记，再验收并交付切换候选；手动触发的工作流必须先存在于默认分支。切换后分别用普通候选和文档轻量候选验证 GitHub 提交页的所有适用检查均为成功。历史工作流记录继续按原身份查阅。
 
 发布继续要求完整范围、真实 GPU、原生交互、同一 ZIP 的离线与真实首次联网部署。分工发布复核入口为 `npm run test:split -- release --archive <ZIP>`，读取对应 GitHub 验收和原生审批记录，并复核实际 ZIP。单侧范围记录仍标为部分测试，验收范围在分工回执中记录。
 

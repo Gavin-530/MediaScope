@@ -87,6 +87,7 @@ test('baseline requires completed successful checks from the expected SHA and Gi
     assert.match(route,/\/approvals$/);
     return {data:[{state:'approved',user:owner,environments:[{name:'mediascope-local-evidence'}]}]};
   }});
+  reader.hasReviewWorkflow = () => false;
   const readReceipt = reader.receipt.bind(reader);
   reader.receipt = async (origin, requirements) => {
     if(origin.conclusion!=='success'||origin.status!=='completed')return readReceipt(origin,requirements);
@@ -110,6 +111,10 @@ test('baseline requires completed successful checks from the expected SHA and Gi
 
   runs = [recovery];
   await assert.rejects(reader.verifyAnchor({scope:'selected',anchor:a}), /Required GitHub execution has not been recorded/);
+  reader.hasReviewWorkflow = () => true;
+  const newerReview = {...failedNormal,path:'.github/workflows/candidate-evidence-review.yml'};
+  runs = [normal,recovery,newerReview];
+  await assert.rejects(reader.previousAcceptance(a), /missing a completed passing result/);
 
   const f = fixture(t);
   const base = f.commit({'runtime-lock.json':'{}\n'});

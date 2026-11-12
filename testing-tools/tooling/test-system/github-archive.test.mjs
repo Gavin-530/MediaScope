@@ -348,6 +348,9 @@ test('documentation absence uses structured scope identity instead of display st
   assert.equal(splitAttempt(dispatch,data,jobs,[acceptance],1,7,[]),null);
   assert.equal(splitAttempt(dispatch,data,jobs,[acceptance],1,8,approvals),null);
   assert.ok(splitAttempt(dispatch,data,jobs,[acceptance],1,7,approvals));
+  const dedicated={...dispatch,path:'.github/workflows/candidate-evidence-review.yml'};
+  assert.equal(splitAttempt(dedicated,data,jobs,[acceptance],1,7,approvals),null);
+  assert.ok(splitAttempt(dedicated,data,[{...preparation,name:'Prepare MediaScope candidate evidence'},jobs[1]],[acceptance],1,7,approvals));
 });
 
 test('documentation scope artifacts retain exact rerun attempts without fabricating product records or missing-evidence gaps',async t=>{

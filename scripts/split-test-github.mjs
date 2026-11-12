@@ -6,6 +6,7 @@ import {digest} from './split-test-plan.mjs';
 import {read, repository, verifyCaseSummary, verifyLocalReceipt} from './split-test-receipts.mjs';
 
 const workflow = '.github/workflows/tests.yml';
+const reviewWorkflow = '.github/workflows/candidate-evidence-review.yml';
 const commitWorkflow = '.github/workflows/commit-messages.yml';
 const preparationJob = 'Prepare MediaScope acceptance';
 const reviewJob = 'Review MediaScope local evidence';
@@ -82,14 +83,14 @@ export class SplitGitHub {
     this.api=api;
   }
 
-  async latest({file,event,sha,ref,matchesRef = () => true}) {
+  async latest({file,event,sha,ref,matchesRef = () => true,optional = false}) {
     const name=file.slice(file.lastIndexOf('/')+1);
     const {data}=await this.api.get('actions/workflows/'+name+'/runs?head_sha='+sha+'&event='+event+'&per_page=100');
     if(!Array.isArray(data.workflow_runs)||data.total_count!==data.workflow_runs.length)throw Error('Incomplete GitHub run list');
     const rows=data.workflow_runs.filter(run=>trustedRun(run,{file,event,sha,ref})&&matchesRef(run.head_branch))
       .sort((a,b)=>Date.parse(b.created_at)-Date.parse(a.created_at)||b.id-a.id);
-    if(!rows.length)throw Error('Required GitHub execution has not been recorded: '+name);
-    return rows[0];
+    if(!rows.length&&!optional)throw Error('Required GitHub execution has not been recorded: '+name);
+    return rows[0]??null;
   }
 
   async receipt(run,{file,event,sha,ref,job,artifact,entry='ci-scope.json'}) {
@@ -119,16 +120,26 @@ export class SplitGitHub {
     return {proof:await read(path.join(extracted,entry)),artifactSha256:artifactRow.digest.slice(7),runId:run.id,attempt:run.run_attempt,jobs:data.jobs};
   }
 
+  hasReviewWorkflow(sha) {
+    return execFileSync('git',['ls-tree','--name-only',sha,'--',reviewWorkflow],
+      {cwd:this.repo,encoding:'utf8',windowsHide:true}).trim()===reviewWorkflow;
+  }
+
   async previousAcceptance(sha, {recovery = false} = {}) {
-    const origin=await this.latest({file:workflow,event:'workflow_dispatch',sha,
-      matchesRef:tag=>isAcceptanceTag(tag)&&isRecoveryPreflightTag(tag)===recovery});
+    const args={event:'workflow_dispatch',sha,optional:true,
+      matchesRef:tag=>isAcceptanceTag(tag)&&isRecoveryPreflightTag(tag)===recovery};
+    const workflows=this.hasReviewWorkflow(sha)?[workflow,reviewWorkflow]:[workflow];
+    const runs=(await Promise.all(workflows.map(file=>this.latest({...args,file})))).filter(Boolean);
+    const origin=runs.sort((a,b)=>Date.parse(b.created_at)-Date.parse(a.created_at)||b.id-a.id)[0];
+    if(!origin)throw Error('Required GitHub execution has not been recorded: candidate acceptance');
     // Approval history is per run, so only fresh dispatches can provide acceptance.
     if(origin.run_attempt!==1)throw Error('Acceptance requires a fresh verification-tag dispatch');
-    const row=await this.receipt(origin,{file:workflow,event:'workflow_dispatch',sha,ref:origin.head_branch,
-      job:preparationJob,artifact:'mediascope-ci-scope'});
+    const row=await this.receipt(origin,{file:origin.path,event:'workflow_dispatch',sha,ref:origin.head_branch,
+      job:origin.path===reviewWorkflow?'Prepare MediaScope candidate evidence':preparationJob,artifact:'mediascope-ci-scope'});
     if(row.proof.schema!==2||row.proof.kind!=='split-acceptance'||row.proof.sha!==sha||
        row.proof.github?.repository!==repository||row.proof.github.runId!==String(origin.id)||
        row.proof.github.runAttempt!==String(origin.run_attempt)||row.proof.github.ref!=='refs/tags/'+origin.head_branch)throw Error('Prior acceptance artifact identity mismatch');
+    if(origin.path===reviewWorkflow&&row.proof.scope==='docs-only')throw Error('Documentation acceptance must not use the review workflow');
     let approval=null;
     if(row.proof.scope!=='docs-only'){
       passingJob(row.jobs,reviewJob,origin,sha);

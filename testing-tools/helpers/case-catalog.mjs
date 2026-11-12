@@ -19,6 +19,7 @@ export function validateCatalog(catalog){
     if(!c.file.startsWith('testing-tools/'+owner+'/'))throw Error('Misowned formal case: '+c.id);
     const workspace=createHash('sha256').update(c.file).digest('hex').slice(0,8);if(workspaces.has(workspace)&&workspaces.get(workspace)!==c.file)throw Error('Test workspace identity collision');workspaces.set(workspace,c.file);
     if(!Array.isArray(c.inputs))throw Error('Missing allowed input declarations: '+c.id);
+    if(c.archiveMaintenance!==undefined&&(c.archiveMaintenance!==true||c.module!=='test-system'||c.scope!=='general'||c.requiresMedia!==false||c.requiresBrowser===true||c.covers?.some(m=>m!=='test-system')))throw Error('Invalid archive maintenance case: '+c.id);
     for(const key of ['requiresMedia','requiresBrowser'])if(c[key]!==undefined&&typeof c[key]!=='boolean')throw Error('Invalid test prerequisite: '+key+' / '+c.id);
     for(const artifact of c.artifacts??[])new RegExp(artifact);
   }
@@ -35,13 +36,13 @@ for(const c of caseCatalog.cases)for(const input of c.inputs)if(!locked.files.so
 for(const input of roles.files)for(const attachment of input.attachments??[])if(!locked.files.some(f=>f.path===attachment)||attachment===input.path)throw Error('Invalid input attachment: '+attachment);
 export const inputAttachments=name=>roles.files.find(f=>f.path===name)?.attachments??[];
 
-export function selectCases({suite='full',modules=[],cases=[]}={},catalog=caseCatalog){
+export function selectCases({suite='full',modules=[],cases=[],includeArchiveMaintenance=false}={},catalog=caseCatalog){
   validateCatalog(catalog);
   if(!['full','core','browser','gpu','native'].includes(suite))throw Error('Unknown suite: '+suite);
   for(const module of modules)if(!catalog.modules.some(m=>m.id===module))throw Error('Unknown module: '+module);
   for(const id of cases)if(!catalog.cases.some(c=>c.id===id))throw Error('Unknown case ID: '+id);
   const eligible=catalog.cases.filter(c=>['gpu','native','browser'].includes(suite)?c.scope===suite:['general',...(suite==='full'?['browser']:[])].includes(c.scope));
-  const selected=eligible.filter(c=>(!modules.length||modules.some(m=>(c.covers??[c.module]).includes(m)))&&(!cases.length||cases.includes(c.id)));
+  const selected=eligible.filter(c=>(!c.archiveMaintenance||includeArchiveMaintenance||cases.includes(c.id))&&(!modules.length||modules.some(m=>(c.covers??[c.module]).includes(m)))&&(!cases.length||cases.includes(c.id)));
   if(!selected.length)throw Error('No formal cases match this selection');
   for(const id of cases)if(!selected.some(c=>c.id===id))throw Error('Case is outside the selected suite/module: '+id);
   return {suite,selective:!!(modules.length||cases.length),modules:[...new Set(selected.map(c=>c.module))],caseIds:selected.map(c=>c.id),files:[...new Set(selected.map(c=>c.file))].sort(),cases:selected,excluded:catalog.cases.length-selected.length};

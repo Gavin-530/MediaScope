@@ -262,16 +262,18 @@ test('the actual CLI exits nonzero for unregistered material', async t => {
   assert.match(result.stderr, /Unregistered file/);
 });
 
-test('the real test runner rejects unregistered notes before allocating evidence', async t => {
+test('the product runner does not require the local notes checker', async t => {
   const f = await fixture(t);
   await f.write('unreviewed.txt', 'unreviewed');
   await fs.mkdir(path.join(f.project, 'scripts'));
   await fs.mkdir(path.join(f.project, 'testing-tools/helpers'), {recursive: true});
-  for (const name of ['test.mjs', 'local-notes.mjs', 'test-evidence.mjs']) await fs.copyFile(new URL(`../../../scripts/${name}`, import.meta.url), path.join(f.project, 'scripts', name));
+  for (const name of ['test.mjs', 'test-evidence.mjs']) await fs.copyFile(new URL(`../../../scripts/${name}`, import.meta.url), path.join(f.project, 'scripts', name));
   await fs.cp(new URL('../../',import.meta.url),path.join(f.project,'testing-tools'),{recursive:true});
+  // Omit the notes CLI: the product runner must reach product validation without it.
   const output = spawnSync(process.execPath, [path.join(f.project, 'scripts/test.mjs'), '--suite', 'core'], {encoding: 'utf8', windowsHide: true, timeout: 10000});
   assert.notEqual(output.status, 0);
-  assert.match(output.stdout + output.stderr, /Unregistered file: unreviewed.txt/);
+  assert.match(output.stdout + output.stderr, /at async validateProduct/);
+  assert.doesNotMatch(output.stdout + output.stderr, /local-notes\.mjs|Unregistered file/);
   await assert.rejects(fs.stat(path.join(f.project, 'evidence-archive')), {code: 'ENOENT'});
 });
 
