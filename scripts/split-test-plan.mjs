@@ -22,6 +22,7 @@ const validationEntrypoints = new Set([
   'scripts/check-commits.mjs',
   'scripts/ci-scope.mjs',
   'scripts/split-tests.mjs',
+  '.github/workflows/candidate-evidence-review.yml',
 ]);
 const shaPattern = /^(?!0{40}$)[0-9a-f]{40}$/;
 const rawChange = /^:(\d{6}) (\d{6}) [0-9a-f]{40} [0-9a-f]{40} ([ADMT])$/;
