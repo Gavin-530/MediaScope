@@ -8,6 +8,7 @@ import path from 'node:path';
 import {releaseReadiness,regressionAssessment,sourceTestReadiness} from '../../helpers/test-results.mjs';
 import {selectCases,moduleResults} from '../../helpers/case-catalog.mjs';
 import {requireFeature,supportedThemeModes} from '../../helpers/feature-policy.mjs';
+import {compactResults} from '../../../scripts/test-evidence.mjs';
 
 // Evidence protocol inputs only; these do not stand in for product/media results.
 const files=['testing-tools/modules/example/core.test.mjs','testing-tools/modules/example/browser.test.mjs'];
@@ -24,6 +25,13 @@ test('[test-system] release checks reject skips, TODOs, cancellation and an empt
   assert.equal(releaseReadiness({tests:2,passed:2},features).ready,true);
   for(const field of ['failed','skipped','cancelled','todo'])assert.equal(releaseReadiness({tests:2,passed:1,[field]:1},features).ready,false);
   assert.equal(releaseReadiness({tests:1,passed:1},[]).ready,false);
+  const counts={tests:1,passed:0,failed:0,cancelled:1,skipped:0,todo:0};
+  for(const failureType of ['testTimeoutFailure','cancelledByParent']){
+    const item={name:'protocol',file:files[0],event:'test:fail',details:{error:{failureType}}};
+    assert.equal(compactResults(counts,[item]).cases[0].status,'cancelled');
+    assert.equal(regressionAssessment(counts,features).accepted,false);
+  }
+  assert.equal(compactResults({...counts,failed:1,cancelled:0},[{name:'protocol',file:files[0],event:'test:fail',details:{error:{failureType:'testCodeFailure'}}}]).cases[0].status,'failed');
 });
 test('[test-system] failure and skip statuses survive feature aggregation',()=>{
   assert.equal(fixtureFeatures([],'browser')[0].checks[0].status,'missing-or-duplicate');

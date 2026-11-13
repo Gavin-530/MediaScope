@@ -57,5 +57,5 @@ export async function saveMeasurements(generated,evidence,{failed=false,required
 }
 
 export function compactResults(counts,cases) {
-  return {counts,cases:cases.map((item,index)=>({id:item.caseId??index+1,name:item.name,file:item.file,status:item.skip?'skipped':item.todo?'todo':item.event==='test:pass'?'passed':/cancelled/.test(item.details?.error?.failureType||'')?'cancelled':'failed',durationMs:item.details?.duration_ms,skipReason:item.skip||undefined,todoReason:item.todo||undefined,error:item.details?.error,classification:item.classification}))};
+  return {counts,cases:cases.map((item,index)=>({id:item.caseId??index+1,name:item.name,file:item.file,status:item.skip?'skipped':item.todo?'todo':item.event==='test:pass'?'passed':/cancelled|testTimeoutFailure/.test(item.details?.error?.failureType||'')?'cancelled':'failed',durationMs:item.details?.duration_ms,skipReason:item.skip||undefined,todoReason:item.todo||undefined,error:item.details?.error,classification:item.classification}))};
 }
