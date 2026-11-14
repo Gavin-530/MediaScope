@@ -160,7 +160,7 @@ export async function complexity(file,stream,ctx={},frames=null){
       ...(execution.configuration.input.deinterlace?['已选择 BWDIF 每帧输出一帧；按输出逐行画面计算，并核验帧数和时间戳。']:[]),
       analysisNotes.siti[4]
     ]};
-  }catch(e){if(ctx.signal?.aborted)throw e;return {available:false,reason:e.message,...(e.sitiPhase?{errorPhase:e.sitiPhase}:{}),...(e.sitiAttempts?{attempts:e.sitiAttempts}:{})}}
+  }catch(e){if(ctx.signal?.aborted)throw e;return {available:false,reason:e.message,...(e.sitiPhase?{errorPhase:e.sitiPhase}:{}),...(e.sitiCode?{errorCode:e.sitiCode}:{}),...(e.sitiAttempts?{attempts:e.sitiAttempts}:{})}}
 }
 
 export function trialOptions(input){

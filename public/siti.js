@@ -3,6 +3,7 @@ import {MAX_ANALYSIS_FRAMES,validateSitiDimensions} from './analysis-limits.js';
 // VQEG mathematical functions are ported under MIT; see licenses/VQEG-siti-tools.txt.
 export const SITI_STANDARD_PROFILE='P910-2023-PQ-v1';
 export const SITI_COMPAT_PROFILE='VQEG-siti-tools-0.6.0-PQ-v1';
+const SITI_CLIPPED_PROFILE='MediaScope-nominal-range-clipped-PQ-v1';
 // Historical profiles identify saved values only; new calculations use version 8.
 export const SITI_PROFILE='VQEG-siti-c537e337-PQ';
 export const SITI_HLG_PROFILE='P910-HLG-BT2100-2-PQ-v1';
@@ -31,7 +32,8 @@ function sitiDisplay(input){return input.domain==='pq'?null:input.domain==='hlg'
 
 export function validateSitiSettings(settings,{historical=false}={}){
   if(settings===undefined)return;
-  if(!settings||typeof settings!=='object'||Array.isArray(settings)||Object.keys(settings).some(k=>!['range','transfer','interlaced','matrix','hlg'].includes(k)))throw Error('SI/TI 参数无效；旧版自定义计算口径已停用，请重新选择输入设置');
+  if(!settings||typeof settings!=='object'||Array.isArray(settings)||Object.keys(settings).some(k=>!['range','transfer','interlaced','matrix','hlg','rangeTreatment'].includes(k)))throw Error('SI/TI 参数无效；旧版自定义计算口径已停用，请重新选择输入设置');
+  if(settings.rangeTreatment!==undefined&&settings.rangeTreatment!=='clip-nominal')throw Error('SI/TI 范围外处理方式无效');
   if(![undefined,'auto','tv','pc'].includes(settings.range)||![undefined,'auto','sdr','srgb','pq','hlg'].includes(settings.transfer)||![undefined,'reject','bwdif'].includes(settings.interlaced)||![undefined,'auto',...Object.keys(SITI_MATRICES)].includes(settings.matrix))throw Error('SI/TI 范围、传递函数、矩阵或隔行处理无效');
   const h=settings.hlg;
   if(h!==undefined&&(!h||typeof h!=='object'||Array.isArray(h)||Object.keys(h).some(k=>!['whiteCdM2','blackCdM2'].includes(k))||!Number.isFinite(h.whiteCdM2)||h.whiteCdM2<=0||h.whiteCdM2>10000||!Number.isFinite(h.blackCdM2)||h.blackCdM2<0||h.blackCdM2>=h.whiteCdM2||![undefined,'auto','hlg'].includes(settings.transfer)))throw Error('SI/TI HLG 显示峰值或黑位无效');
@@ -53,11 +55,13 @@ export function sitiInput(stream,settings,options){
   if(!['tv','pc'].includes(range)||!domain)throw Error('SI/TI 需要明确的亮度范围和传递函数；请核实文件声明或确认输入设置');
   if(format.family==='rgb'&&!matrix)throw Error('SI/TI RGB 需要一致且受支持的亮度矩阵；请核实文件声明或确认矩阵');
   if(!['progressive','unknown',undefined].includes(stream.field_order)&&!deinterlace)throw Error('SI/TI 隔行输入需要明确选择去隔行处理');
+  if(settings?.rangeTreatment==='clip-nominal'&&(range!=='tv'||format.family!=='luma'||![8,10,12].includes(format.depth)||!['sdr','srgb'].includes(domain)||!['progressive','unknown',undefined].includes(stream.field_order)||deinterlace))throw Error('SI/TI 标称范围裁剪仅支持逐行有限范围 8/10/12-bit SDR 亮度输入');
   return {format,depth:format.depth,range,domain,matrix,deinterlace,hlg:domain==='hlg'?hlgDisplay(settings?.hlg??{whiteCdM2:1000,blackCdM2:.01}):null,settings:settings?structuredClone(settings):null,
     source:{pixelFormat:stream.pix_fmt,range:stream.color_range??null,transfer:stream.color_transfer??null,fieldOrder:stream.field_order??null,matrix:stream.color_space??null,primaries:stream.color_primaries??null}};
 }
 export function sitiConfiguration(input){
-  return {configurationVersion:8,profile:SITI_COMPAT_PROFILE,standard:'ITU-T P.910 (10/2023)',reference:{...SITI_REFERENCE,version:'0.6.0'},referenceAgreement:'Fixed siti-tools 0.6.0 normalization, display/PQ, Sobel/TI and 255 scale; adapters recorded separately',input:structuredClone(input),inputDomain:input.domain,inputBitDepth:input.depth,inputRange:input.range,domain:'PQ',display:sitiDisplay(input),outputMultiplier:255,firstTi:null,preprocessing:input.deinterlace?'bwdif=mode=send_frame:parity=auto:deint=interlaced':'native decoded samples',lumaDerivation:input.matrix?{...input.matrix,coefficients:[...SITI_MATRICES[input.matrix.name]]}:null,inputAdapter:{layout:input.format.layout,extendedBitDepth:![8,10,12].includes(input.depth),rgbLuma:!!input.matrix}};
+  const clipped=input.settings?.rangeTreatment==='clip-nominal';
+  return {configurationVersion:clipped?9:8,profile:clipped?SITI_CLIPPED_PROFILE:SITI_COMPAT_PROFILE,standard:clipped?'MediaScope clipped-input extension to ITU-T P.910 (10/2023) SI/TI':'ITU-T P.910 (10/2023)',reference:{...SITI_REFERENCE,version:'0.6.0'},referenceAgreement:clipped?'MediaScope nominal-range clipping before the fixed siti-tools 0.6.0 display/PQ and SI/TI calculations; clipped input is an extension':'Fixed siti-tools 0.6.0 normalization, display/PQ, Sobel/TI and 255 scale; adapters recorded separately',input:structuredClone(input),inputDomain:input.domain,inputBitDepth:input.depth,inputRange:input.range,domain:'PQ',display:sitiDisplay(input),outputMultiplier:255,firstTi:null,preprocessing:input.deinterlace?'bwdif=mode=send_frame:parity=auto:deint=interlaced':'native decoded samples',...(clipped?{rangeTreatment:'clip-nominal',nominalRange:{min:16*2**(input.depth-8),max:235*2**(input.depth-8)}}:{}),lumaDerivation:input.matrix?{...input.matrix,coefficients:[...SITI_MATRICES[input.matrix.name]]}:null,inputAdapter:{layout:input.format.layout,extendedBitDepth:![8,10,12].includes(input.depth),rgbLuma:!!input.matrix}};
 }
 function version7Configuration(input){
   return {configurationVersion:7,profile:SITI_STANDARD_PROFILE,standard:'ITU-T P.910 (10/2023)',reference:SITI_REFERENCE,referenceAgreement:'VQEG Sobel/TI kernels; independently specified display models and input-bit-depth output',interpretations:{...SITI_INTERPRETATIONS},input:structuredClone(input),inputDomain:input.domain,inputBitDepth:input.depth,inputRange:input.range,domain:'PQ',
@@ -68,12 +72,12 @@ function version7Configuration(input){
 export function validateSitiConfiguration(execution,stream){
   const c=execution?.configuration;
   // Historical reports retain their original values and method, without running old algorithms.
-  if(![SITI_PROFILE,SITI_HLG_PROFILE,SITI_STANDARD_PROFILE,SITI_COMPAT_PROFILE].some(p=>execution?.method===p||c?.profile===p)&&![5,6,7,8].includes(c?.configurationVersion))return;
-  if(![5,6,7,8].includes(c?.configurationVersion))throw Error('SI/TI 计算配置版本无效');
+  if(![SITI_PROFILE,SITI_HLG_PROFILE,SITI_STANDARD_PROFILE,SITI_COMPAT_PROFILE,SITI_CLIPPED_PROFILE].some(p=>execution?.method===p||c?.profile===p)&&![5,6,7,8,9].includes(c?.configurationVersion))return;
+  if(![5,6,7,8,9].includes(c?.configurationVersion))throw Error('SI/TI 计算配置版本无效');
   const input=sitiInput(stream,c?.input?.settings??undefined,{historical:true});
-  if(c.configurationVersion!==8&&input.hlg)input.hlg=version7Hlg(input.hlg);
+  if(c.configurationVersion<8&&input.hlg)input.hlg=version7Hlg(input.hlg);
   if(c.configurationVersion===7&&input.hlg?.beta>=1)throw Error('SI/TI HLG 黑位抬升超出历史模型有效范围');
-  const expected=c.configurationVersion===8?sitiConfiguration(input):version7Configuration(input);
+  const expected=c.configurationVersion>=8?sitiConfiguration(input):version7Configuration(input);
   if([5,6].includes(c?.configurationVersion)){
     if(c.configurationVersion===6&&expected.inputDomain!=='hlg')throw Error('SI/TI 历史计算配置版本无效');
     expected.configurationVersion=c.configurationVersion;expected.profile=c.configurationVersion===6?SITI_HLG_PROFILE:SITI_PROFILE;
@@ -107,6 +111,7 @@ export function sitiPreprocessedValue(v,input){
 }
 export function createSitiLut(input){
   const max=2**input.depth-1,factor=2**(input.depth-8),lo=input.range==='tv'?16*factor:0,hi=input.range==='tv'?235*factor:max;
+  if(input.settings?.rangeTreatment==='clip-nominal')return Float64Array.from({length:max+1},(_,code)=>sitiPreprocessedValue((Math.min(hi,Math.max(lo,code))-lo)/(hi-lo),input));
   return Float64Array.from({length:max+1},(_,code)=>code<lo||code>hi?NaN:sitiPreprocessedValue((code-lo)/(hi-lo),input));
 }
 // Sample offsets are shared by the CPU reader and GPU request; no colour conversion or quantization.
@@ -136,7 +141,7 @@ export function createSitiReader(input,w,h){
         if(r<lo||r>hi||g<lo||g>hi||b<lo||b>hi)throw Error('SI/TI RGB 分量超出声明范围；不裁剪或改判范围');
         const v=weights[0]*(r-lo)/(hi-lo)+weights[1]*(g-lo)/(hi-lo)+weights[2]*(b-lo)/(hi-lo);
         value=sitiPreprocessedValue(Math.min(1,Math.max(0,v)),input); // Convex weights: endpoint floating-point roundoff only.
-      }else{const code=component(i);value=table[code];if(!Number.isFinite(value))throw Error(`SI/TI 亮度码值 ${code} 超出声明范围；不裁剪或改判范围`)}
+      }else{const code=component(i);value=table[code];if(!Number.isFinite(value)){const failure=Error(`SI/TI 亮度码值 ${code} 超出声明范围；不裁剪或改判范围`);failure.sitiCode='luma-outside-nominal';throw failure}}
       if(!Number.isFinite(value))throw Error('SI/TI 预处理结果无效');out[i]=value;
     }
   }};

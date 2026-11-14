@@ -185,7 +185,7 @@ __kernel void finish_stat(__global const float *partial,int groups,int count,__g
         Mem(conversion,0,raw);Mem(conversion,1,curr);Mem(conversion,2,hlg?hlgParameters:lut);Mem(conversion,3,invalid);Int(conversion,4,n);Int(conversion,5,sampleBytes);Int(conversion,6,shift);Int(conversion,7,little);Int(conversion,8,testAlpha==-2?alpha:testAlpha);Int(conversion,9,(1<<depth)-1);Int(conversion,10,layout);Int(conversion,11,stride);Int(conversion,12,layout==2&&stride==0?2*n:red);Int(conversion,13,green);Int(conversion,14,layout==2&&stride==0?n:blue);Launch(conversion,n);
         Mem(metrics,0,curr);Mem(metrics,1,prev);Mem(metrics,2,values);Int(metrics,3,w);Int(metrics,4,h);Int(metrics,5,first?1:0);Launch(metrics,n);
         Statistics(0,(w-2)*(h-2),0);if(!first)Statistics(n,n,1);Read(stats,result,16);Read(invalid,invalidFlag,4);
-        if(invalidFlag[0]!=0)throw new InputException((invalidFlag[0]&2)!=0?"SI/TI 半透明输入缺少参考合成流程":(invalidFlag[0]&4)!=0?"SI/TI 填充位非零或样本超出位深":layout==2?"SI/TI RGB 分量超出声明范围；不裁剪或改判范围":"SI/TI 亮度样本超出声明范围；不裁剪或改判范围");
+        if(invalidFlag[0]!=0)throw new InputException((invalidFlag[0]&2)!=0?"SI/TI 半透明输入缺少参考合成流程":(invalidFlag[0]&4)!=0?"SI/TI 填充位非零或样本超出位深":layout==2?"SI/TI RGB 分量超出声明范围；不裁剪或改判范围":"SI/TI 亮度样本超出声明范围；不裁剪或改判范围",invalidFlag[0]==1&&layout!=2?"luma-outside-nominal":null);
         IntPtr swap=prev;prev=curr;curr=swap;return new[]{result[2]*(255*metricScale),first?0:result[3]*(255*metricScale)};
     }
     static double Std(double[] a){double sum=0,c=0;foreach(double v in a){double y=v-c,t=sum+y;c=(t-sum)-y;sum=t;}double mean=sum/a.Length;sum=0;c=0;foreach(double v in a){double d=v-mean,y=d*d-c,t=sum+y;c=(t-sum)-y;sum=t;}return Math.Sqrt(sum/a.Length);}
@@ -231,7 +231,7 @@ __kernel void finish_stat(__global const float *partial,int groups,int count,__g
         if(program!=IntPtr.Zero)clReleaseProgram(program);if(queue!=IntPtr.Zero)clReleaseCommandQueue(queue);if(context!=IntPtr.Zero)clReleaseContext(context);
         raw=curr=prev=values=partial=stats=invalid=lut=hlgParameters=convert=convertHlg=metrics=reduce=finish=program=queue=context=IntPtr.Zero;
     }
-    sealed class InputException:Exception{public InputException(string message):base(message){}}
+    sealed class InputException:Exception{public readonly string Code;public InputException(string message,string code=null):base(message){Code=code;}}
     static bool ReadFrame(Stream input,byte[] data){int offset=0;while(offset<data.Length){int read=input.Read(data,offset,data.Length-offset);if(read==0){if(offset!=0)throw new InputException("Truncated P.910 raw input");return false;}offset+=read;}return true;}
     static string Escape(string s){return s.Replace("\\","\\\\").Replace("\"","\\\"").Replace("\r"," ").Replace("\n"," ");}
     int ReadCode(byte[] data,int i){int word=sampleBytes==1?data[i]:little==1?data[2*i]|data[2*i+1]<<8:data[2*i+1]|data[2*i]<<8;return word>>shift;}
@@ -261,7 +261,7 @@ __kernel void finish_stat(__global const float *partial,int groups,int count,__g
                         Console.WriteLine("{\"id\":"+id+",\"frame\":"+frame+",\"si\":"+value[0].ToString("R")+",\"ti\":"+(first?"null":value[1].ToString("R"))+"}");
                     }
                     Console.WriteLine("{\"id\":"+id+",\"event\":\"done\",\"frames\":"+count+",\"gpuUploadComputeReadSeconds\":"+processing.ToString("R")+",\"inputWaitSeconds\":"+reading.ToString("R")+"}");
-                }catch(Exception e){Console.WriteLine("{\"id\":"+id+",\"event\":\"error\",\"phase\":\""+(e is InputException?"input":"gpu")+"\",\"message\":\""+Escape(e.Message)+"\"}");return 1;}
+                }catch(Exception e){var failure=e as InputException;Console.WriteLine("{\"id\":"+id+",\"event\":\"error\",\"phase\":\""+(failure!=null?"input":"gpu")+"\",\"message\":\""+Escape(e.Message)+"\""+(failure!=null&&failure.Code!=null?",\"code\":\""+failure.Code+"\"":"")+"}");return 1;}
             }return 0;
         }
     }
