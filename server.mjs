@@ -9,7 +9,7 @@ import { FF,FP,run,probe,video,scan,summarize,compare,normalizeMediaPath,decodeT
 import {allPackets,structure,traceStructure,mapStructure,metadataSummary,complexity,trial,trialOptions} from './analysis.mjs';
 import {sitiGpuCapability,closeSitiGpu} from './siti.mjs';
 import {analyzeRepeats,repeatPreview} from './repeat.mjs';
-import {validateSitiSceneStarts,validateSitiSettings} from './public/siti.js';
+import {sitiInput,validateSitiSceneStarts,validateSitiSettings} from './public/siti.js';
 import {makePortable,maxPortableBytes,utcNow} from './public/portable.js';
 import {byteLimit} from './public/units.js';
 import {analysisNotes} from './public/analysis-notes.js';
@@ -337,8 +337,19 @@ const server=http.createServer(async(req,res)=>{
         const original=jobs.get(retry[1]);
         if(!original){send(res,404,{error:'任务不存在'});return}
         if(original.removed||!['done','error'].includes(original.status)){send(res,409,{error:'只能重新排队已完成或失败的任务'});return}
-        const input=inputs.get(original.id);
-        if(!input){send(res,409,{error:'原任务参数已丢失'});return}
+        const source=inputs.get(original.id);
+        if(!source){send(res,409,{error:'原任务参数已丢失'});return}
+        const choice=await body(req);
+        let input=source;
+        if(choice.clippedSiti===true){
+          if(original.status!=='done'||source.type!=='analyze'||original.result?.content?.errorCode!=='luma-outside-nominal'||source.sitiSettings?.rangeTreatment){send(res,409,{error:'原任务不符合 SI/TI 标称范围裁剪重算条件'});return}
+          const stream=original.result.raw?.streams?.find(item=>item.index===original.result.stream);
+          if(!stream){send(res,409,{error:'原任务视频轨道不可用'});return}
+          const settings={...source.sitiSettings,rangeTreatment:'clip-nominal'};
+          sitiInput(stream,settings);
+          input=validatePlanInput({...portableInput(source),stream:stream.index,frameAnalysis:false,bitrate:false,complexity:true,repeatAnalysis:false,freezeDetection:false,sitiSettings:settings});
+          queueRunning=true;
+        }
         const job=createJob(input);pump();send(res,202,{id:job.id});return;
       }
       const match=url.pathname.match(/^\/api\/jobs\/([a-f0-9-]+)(\/report)?$/);

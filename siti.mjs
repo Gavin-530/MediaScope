@@ -70,7 +70,7 @@ class GpuSession{
       }
       const request=this.current;
       if(!request||p.id!==request.id)throw error('GPU 会话请求序号不一致','gpu');
-      if(p.event==='error')throw error(p.message,p.phase==='input'?'input':'gpu');
+      if(p.event==='error'){const failure=error(p.message,p.phase==='input'?'input':'gpu');if(p.code==='luma-outside-nominal')failure.sitiCode=p.code;throw failure;}
       if(p.event==='probe'){validGpuInfo(p);request.complete=true;request.done.resolve(p);}
       else if(p.event==='configured'){validGpuInfo(p);request.onInfo?.(p);}
       else if(p.event==='done'){request.complete=true;request.done.resolve(p);}
@@ -136,7 +136,7 @@ export function sitiGpuRequest(input,w,h,count,sceneStarts=[0]){
   const f=input.format,l=sitiFrameLayout(input,w,h),rgb=f.family==='rgb',table=rgb?sitiGpuParameters(input,w,h):createSitiLut(input);
   // PQ luma is affine in the exact integer code. Move its positive scale past
   // Sobel/std and TI/std so FP32 never rounds the normalized sample first.
-  // Keep invalid entries invalid; this does not permit clipping or rescaling input.
+  // PQ input retains invalid entries; nominal clipping applies only to SDR input.
   let metricScale=1;
   if(!rgb&&input.domain==='pq'){
     const lo=input.range==='tv'?16*2**(input.depth-8):0,hi=input.range==='tv'?235*2**(input.depth-8):2**input.depth-1;
@@ -147,7 +147,7 @@ export function sitiGpuRequest(input,w,h,count,sceneStarts=[0]){
 }
 
 function processFailure(stderr,fallbackPhase){
-  for(const line of stderr.trim().split('\n').reverse())try{const p=JSON.parse(line);if(p.sitiPhase&&p.message)return error(p.message,p.sitiPhase);}catch{}
+  for(const line of stderr.trim().split('\n').reverse())try{const p=JSON.parse(line);if(p.sitiPhase&&p.message){const failure=error(p.message,p.sitiPhase);if(p.sitiCode==='luma-outside-nominal')failure.sitiCode=p.sitiCode;return failure;}}catch{}
   return error(stderr||'SI/TI 子进程异常退出',fallbackPhase);
 }
 async function measureRun(file,stream,input,ctx,frames,{gpu=false,workers=1,attempt}={}){
@@ -292,5 +292,5 @@ if(process.argv[2]==='--worker'&&process.argv[1]===workerFile){
       }
     }
     if(offset)throw error('SI/TI 原始分量帧被截断','input');if(!blocked)validateSitiSceneStarts(sceneStarts,frame);
-  }catch(e){process.stderr.write(JSON.stringify({sitiPhase:e.sitiPhase??'input',message:e.message})+'\n');process.exitCode=1;}
+  }catch(e){process.stderr.write(JSON.stringify({sitiPhase:e.sitiPhase??'input',message:e.message,...(e.sitiCode?{sitiCode:e.sitiCode}:{})})+'\n');process.exitCode=1;}
 }

@@ -1132,7 +1132,7 @@ function render(r, activate = true, owner = null) {
           : "媒体分析报告";
     if (r.type === "compare") renderComparison(r);
     else if (r.type === "trial") renderTrial(r);
-    else renderMedia(r);
+    else renderMedia(r,owner);
     makeSectionsCollapsible($("#details"), r.type === "analyze" ? {
       frames: r.analysisTargets?.frames !== false,
       bitrate: r.analysisTargets?.bitrate !== false,
@@ -1149,7 +1149,7 @@ function render(r, activate = true, owner = null) {
     busy(!!current || importing);
   }
 }
-function renderMedia(r) {
+function renderMedia(r,owner) {
   const notes = analysisNoticeGroups(r);
   const frameEnabled = r.analysisTargets?.frames !== false,
     bitrateEnabled = r.analysisTargets?.bitrate !== false;
@@ -1212,7 +1212,7 @@ function renderMedia(r) {
         "SI/TI 内容复杂度",
         (sceneNotes.length?'<p class="hint" id="siti-scene-note">场景边界未确认，TI 可能含剪辑点影响。</p>':'') +
           notices(notes.sitiWarnings.filter(text=>text!==unconfirmedSceneNote)) + notices([e?.gpuFallbackReason ? `GPU 已回退 CPU：${e.gpuFallbackReason}` : null,e?.fallbackReason ? `执行方式已回退：${e.fallbackReason}` : null].filter(Boolean)) +
-          (e?.configuration?`<p class="hint">计算口径：${e.configuration.configurationVersion===8?`siti-tools 0.6.0 · PQ 域 · 固定尺度 ${esc(e.configuration.outputMultiplier)}`:`历史计算口径，保留原值（版本 ${esc(e.configuration.configurationVersion)}）`}。</p>`:'') +
+          (e?.configuration?`<p class="hint">计算口径：${e.configuration.configurationVersion===9?'按有限范围标称黑白端点裁剪后计算 SI/TI · MediaScope 扩展':e.configuration.configurationVersion===8?`siti-tools 0.6.0 · PQ 域 · 固定尺度 ${esc(e.configuration.outputMultiplier)}`:`历史计算口径，保留原值（版本 ${esc(e.configuration.configurationVersion)}）`}。</p>`:'') +
           (r.content.scenes?.length>1?table(
             ["场景", "显示帧（从 1 计）", "SI 均值", "SI P95", "SI 最大值", "TI 均值", "TI P95", "TI 最大值"],
             r.content.scenes.map(s=>[s.index+1,`${s.startFrame+1}–${s.endFrame+1}`,fmt(s.si.mean),fmt(s.si.p95),fmt(s.si.max),fmt(s.ti?.mean),fmt(s.ti?.p95),fmt(s.ti?.max)]),
@@ -1223,7 +1223,7 @@ function renderMedia(r) {
             (e?.configuration?.display?`<p class="hint">参考显示模型：峰值 ${fmt(e.configuration.display.whiteCdM2)}、黑位 ${fmt(e.configuration.display.blackCdM2,4)} cd/m²；gamma ${fmt(e.configuration.display.gamma,6)}。</p>`:'') + hintNotes([...sceneNotes,...notes.siti])),
         "complexity",
       );
-    } else if (r.content) html += section("SI/TI 内容复杂度", notices([r.content.reason])+sitiAttemptsHTML(r.content.attempts), "complexity");
+    } else if (r.content) html += section("SI/TI 内容复杂度", notices([r.content.reason])+sitiAttemptsHTML(r.content.attempts)+(r.content.errorCode==='luma-outside-nominal'&&owner&&!owner.startsWith('imported-')?'<button id="retry-clipped-siti" class="secondary">按标称黑白裁剪后重算 SI/TI</button>':''), "complexity");
     if (r.coding?.codec === "av1")
       html += section(
         "AV1 编码帧 / 显示事件",
@@ -1267,6 +1267,8 @@ function renderMedia(r) {
     html += notices(notes.warnings);
   }
   $("#details").innerHTML = html;
+  const clippedRetry=$("#retry-clipped-siti");
+  if(clippedRetry)clippedRetry.onclick=async()=>{clippedRetry.disabled=true;try{await api("jobs/"+owner+"/retry",{method:"POST",body:JSON.stringify({clippedSiti:true})});await poll();message('SI/TI 裁剪重算已排队');}catch(e){message(e.message,true);clippedRetry.disabled=false;}};
   initBasicInfo($("#details"), r);
   if(r.repeatAnalysis&&!r.repeatAnalysis.fingerprint)initRepeat($("#details"),r,{api,download,draw});
   if (r.type === "analyze" || r.frames) {
