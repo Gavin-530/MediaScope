@@ -1066,7 +1066,7 @@ scenario('[analysis-notes] measured methods collapse by module while current sce
   }
   for(const text of groups.sitiWarnings.filter(text=>text!==unconfirmedSceneNote))assert.equal(await page.locator('#inspect-details .notice').filter({hasText:text}).isVisible(),true);
   const siti=page.locator('#inspect-details > .section').filter({has:page.locator('h3',{hasText:'SI/TI 内容复杂度'})});
-  assert.equal(await siti.locator('#siti-scene-note').innerText(),'场景边界未确认，TI 可能含剪辑点影响。');
+  assert.equal(await siti.locator('#siti-scene-note').innerText(),'场景边界未确认，剪辑点可能影响 TI。');
   assert.equal(await siti.locator('p').filter({hasText:unconfirmedSceneNote}).isVisible(),false,'the complete scene explanation starts in method details');
   await siti.locator('.analysis-explanation > summary').click();
   assert.equal(await siti.locator('p').filter({hasText:analysisNotes.siti[0]}).isVisible(),true);

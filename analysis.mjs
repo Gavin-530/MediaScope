@@ -154,8 +154,10 @@ export async function complexity(file,stream,ctx={},frames=null){
   if(!['cpu','gpu',undefined].includes(ctx.sitiDevice))throw Error('SI/TI 计算设备无效');
   try{
     const {points,execution}=await measureSiti(file,stream,ctx,frames);
+    const clipped=execution.configuration.rangeTreatment==='clip-nominal';
     return {available:true,points,execution,...sitiSceneSummary(points,ctx.sitiSceneStarts),notes:[
       ...analysisNotes.siti.slice(0,4),
+      ...(clipped?[analysisNotes.sitiClip]:[]),
       ctx.sitiSceneStarts?'按用户确认的场景分别统计，不计算跨场景 TI。':'场景边界未确认，全片结果可能含剪辑点 TI；分场景比较须确认边界。',
       ...(execution.configuration.input.deinterlace?['已选择 BWDIF 每帧输出一帧；按输出逐行画面计算，并核验帧数和时间戳。']:[]),
       analysisNotes.siti[4]

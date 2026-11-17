@@ -1208,17 +1208,20 @@ function renderMedia(r,owner) {
         execution = e
           ? `<p class="hint">SI/TI 计算设备：${e.device === "gpu" ? `GPU · ${esc(e.gpuName)} · ${esc(e.backend)}；软件解码${e.preprocessingDevice==='gpu'?'；GPU 前处理与指标':''}；数值自检通过` : `CPU · ${e.mode === "frame-parallel" ? `${e.workers} 路帧级并行` : "串行"}；设置 ${e.setting === "auto" ? `自动（请求上限 ${e.requestedWorkers} 路）` : `上限 ${e.requestedWorkers} 路`}`}${e.gpuFallbackReason ? `；GPU 已回退 CPU：${esc(e.gpuFallbackReason)}` : ""}${e.fallbackReason ? `；已回退：${esc(e.fallbackReason)}` : ""}。</p>${sitiAttemptsHTML(e.attempts)}`
           : "";
+      const clipped=e?.configuration?.rangeTreatment==='clip-nominal';
       html += section(
         "SI/TI 内容复杂度",
-        (sceneNotes.length?'<p class="hint" id="siti-scene-note">场景边界未确认，TI 可能含剪辑点影响。</p>':'') +
+        (clipped?`<p class="notice">SI/TI 已将亮度码值裁剪至标称范围（${e.configuration.nominalRange.min}–${e.configuration.nominalRange.max}）后计算。</p>`:'') +
+          (sceneNotes.length?'<p class="hint" id="siti-scene-note">场景边界未确认，剪辑点可能影响 TI。</p>':'') +
           notices(notes.sitiWarnings.filter(text=>text!==unconfirmedSceneNote)) + notices([e?.gpuFallbackReason ? `GPU 已回退 CPU：${e.gpuFallbackReason}` : null,e?.fallbackReason ? `执行方式已回退：${e.fallbackReason}` : null].filter(Boolean)) +
-          (e?.configuration?`<p class="hint">计算口径：${e.configuration.configurationVersion===9?'按有限范围标称黑白端点裁剪后计算 SI/TI · MediaScope 扩展':e.configuration.configurationVersion===8?`siti-tools 0.6.0 · PQ 域 · 固定尺度 ${esc(e.configuration.outputMultiplier)}`:`历史计算口径，保留原值（版本 ${esc(e.configuration.configurationVersion)}）`}。</p>`:'') +
+          (e?.configuration&&!clipped?`<p class="hint">计算口径：${e.configuration.configurationVersion===8?`siti-tools 0.6.0 · PQ 域 · 固定尺度 ${esc(e.configuration.outputMultiplier)}`:`历史计算口径，保留原值（版本 ${esc(e.configuration.configurationVersion)}）`}。</p>`:'') +
           (r.content.scenes?.length>1?table(
             ["场景", "显示帧（从 1 计）", "SI 均值", "SI P95", "SI 最大值", "TI 均值", "TI P95", "TI 最大值"],
             r.content.scenes.map(s=>[s.index+1,`${s.startFrame+1}–${s.endFrame+1}`,fmt(s.si.mean),fmt(s.si.p95),fmt(s.si.max),fmt(s.ti?.mean),fmt(s.ti?.p95),fmt(s.ti?.max)]),
           ):"") +
           [["SI", r.content.si], ["TI", r.content.ti]].map(([metric, stats]) => `<div class="siti-chart-heading"><h4>${metric}</h4>${r.content.scenes?.length > 1 ? "" : `<dl>${[["均值", stats?.mean], ["P95", stats?.p95], ["最大值", stats?.max]].map(([name, value]) => `<div><dt>${name}</dt><dd>${fmt(value)}</dd></div>`).join("")}</dl>`}</div><div id="${metric.toLowerCase()}"></div>`).join("") +
           explanation('计算方法与限制', execution +
+            (clipped?'<p class="hint">计算口径：MediaScope 有限范围裁剪扩展。</p>':'') +
             (e?.configuration?`<p class="hint">计算流程：${esc(e.configuration.profile)}。输入 ${esc(e.configuration.input?.source?.pixelFormat??'')} · ${esc(e.configuration.inputDomain??'SDR')} · ${e.configuration.inputBitDepth}-bit · ${e.configuration.inputRange==='tv'?'有限范围':'全范围'}。</p>`:'') +
             (e?.configuration?.display?`<p class="hint">参考显示模型：峰值 ${fmt(e.configuration.display.whiteCdM2)}、黑位 ${fmt(e.configuration.display.blackCdM2,4)} cd/m²；gamma ${fmt(e.configuration.display.gamma,6)}。</p>`:'') + hintNotes([...sceneNotes,...notes.siti])),
         "complexity",
