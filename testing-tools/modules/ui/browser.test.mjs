@@ -1003,6 +1003,7 @@ scenario('[section-folding] all result panels fold natively and preserve charts,
 });
 
 scenario('[report-layout] current report remains identifiable across views, imports, removal and native basic-info folding',async({page,app,dir})=>{
+  await page.locator('#complexity').uncheck();
   const first=await analyze(page,app),button=id=>page.locator(`[data-result-open="${id}"]`);
   assert.equal(await button(first.job.id).getAttribute('aria-current'),'true');
   assert.equal(await button(first.job.id).textContent(),'正在查看');
@@ -1188,6 +1189,7 @@ scenario('[analysis-targets] switching files cancels a pending preview without r
 });
 
 scenario('[bitrate-window] [units] calculation selection and display aggregation survive report import',async({page,app,dir})=>{
+  await page.locator('#complexity').uncheck();
   await preview(page);
   await page.locator('#bitrate-enabled').check();
   await page.locator('#bitrate-window').selectOption('100');

@@ -64,7 +64,7 @@ export async function runComplete(args){
   }
   console.log('Formal stage: building exact-source package');
   const build=path.join(directory,'build');await fs.mkdir(build,{recursive:true});
-  for(const name of ['analysis.mjs','repeat.mjs','repeat-samples.mjs','bd-measure.mjs','siti.mjs','gpu','engine.mjs','server.mjs','package.json','README.md','start.cmd','Uninstall.cmd','runtime-lock.json','public','licenses','scripts'])await fs.cp(path.join(project,name),path.join(build,name),{recursive:true});
+  for(const name of ['analysis.mjs','repeat.mjs','repeat-samples.mjs','bd-measure.mjs','siti.mjs','siti-preflight.mjs','gpu','engine.mjs','server.mjs','package.json','README.md','start.cmd','Uninstall.cmd','runtime-lock.json','public','licenses','scripts'])await fs.cp(path.join(project,name),path.join(build,name),{recursive:true});
   const version=(await read(path.join(project,'package.json'))).version;
   const built=await run('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',path.join(build,'scripts/package.ps1'),'-Version',version],'build');if(built.code)throw Error('Package construction failed: '+built.log);
   const archive=path.join(build,'releases',`MediaScope-${version}-win-x64.zip`),archiveBytes=await fs.readFile(archive),packageSha256=sha(archiveBytes),prefix=`MediaScope-${version}-win-x64/`,members=new Map();

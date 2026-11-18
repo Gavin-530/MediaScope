@@ -147,6 +147,17 @@
           >
         </div>
         <p id="siti-device-status" class="hint" role="status" aria-live="polite">优先使用 GPU；运行前自检，不可用或设备执行失败时回退 CPU。</p>
+        <div id="siti-preflight" class="siti-options">
+          <p id="siti-preflight-status" class="hint" role="status" aria-live="polite">选择文件并勾选 SI/TI 后，将自动检查所选视频轨道的亮度码值范围。</p>
+          <div id="siti-preflight-choice" class="row hidden">
+            <label for="siti-range-treatment">范围外亮度处理<select id="siti-range-treatment">
+              <option value="">请选择处理方式</option>
+              <option value="strict">严格按声明计算（遇到越界停止 SI/TI）</option>
+              <option value="clip">按标称黑白端点裁剪后计算</option>
+            </select></label>
+          </div>
+          <button id="siti-preflight-action" type="button" class="secondary hidden">取消亮度检查</button>
+        </div>
         <details id="siti-input-settings" class="siti-options">
           <summary>场景范围与 SI/TI 输入设置</summary>
         <div id="siti-scene-settings" class="row siti-options">

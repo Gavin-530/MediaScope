@@ -44,6 +44,15 @@ export function sitiRgbMatrix(stream,choice){
   if(stream.color_space&&!['gbr','unknown','unspecified','bt709','bt470bg','smpte170m','bt2020nc'].includes(stream.color_space)||stream.color_primaries&&!['unknown','unspecified','bt709','bt470bg','smpte170m','bt2020'].includes(stream.color_primaries)||a&&b&&a!==b)return null;
   return a?{name:a,source:'stream-matrix'}:b?{name:b,source:'stream-primaries'}:null;
 }
+// A clip may only be offered for input whose luma interpretation is already fixed.
+export function sitiClipEligible(input){
+  return input?.range==='tv'&&input.format?.family==='luma'&&[8,10,12].includes(input.depth)&&['sdr','srgb'].includes(input.domain)&&!input.deinterlace;
+}
+// Binds a preflight conclusion to the settings that determine input interpretation.
+export function sitiPreflightSettingsKey(settings){
+  const value=settings??{};
+  return JSON.stringify([value.range??'auto',value.transfer??'auto',value.interlaced??'reject',value.matrix??'auto',value.hlg?.whiteCdM2??null,value.hlg?.blackCdM2??null]);
+}
 export function sitiInput(stream,settings,options){
   validateSitiSettings(settings,options);
   const format=sitiFormat(stream.pix_fmt);
@@ -55,7 +64,7 @@ export function sitiInput(stream,settings,options){
   if(!['tv','pc'].includes(range)||!domain)throw Error('SI/TI 需要明确的亮度范围和传递函数；请核实文件声明或确认输入设置');
   if(format.family==='rgb'&&!matrix)throw Error('SI/TI RGB 需要一致且受支持的亮度矩阵；请核实文件声明或确认矩阵');
   if(!['progressive','unknown',undefined].includes(stream.field_order)&&!deinterlace)throw Error('SI/TI 隔行输入需要明确选择去隔行处理');
-  if(settings?.rangeTreatment==='clip-nominal'&&(range!=='tv'||format.family!=='luma'||![8,10,12].includes(format.depth)||!['sdr','srgb'].includes(domain)||!['progressive','unknown',undefined].includes(stream.field_order)||deinterlace))throw Error('SI/TI 标称范围裁剪仅支持逐行有限范围 8/10/12-bit SDR 亮度输入');
+  if(settings?.rangeTreatment==='clip-nominal'&&!sitiClipEligible({range,format,depth:format.depth,domain,deinterlace}))throw Error('SI/TI 标称范围裁剪仅支持逐行有限范围 8/10/12-bit SDR 亮度输入');
   return {format,depth:format.depth,range,domain,matrix,deinterlace,hlg:domain==='hlg'?hlgDisplay(settings?.hlg??{whiteCdM2:1000,blackCdM2:.01}):null,settings:settings?structuredClone(settings):null,
     source:{pixelFormat:stream.pix_fmt,range:stream.color_range??null,transfer:stream.color_transfer??null,fieldOrder:stream.field_order??null,matrix:stream.color_space??null,primaries:stream.color_primaries??null}};
 }
@@ -144,6 +153,26 @@ export function createSitiReader(input,w,h){
       }else{const code=component(i);value=table[code];if(!Number.isFinite(value)){const failure=Error(`SI/TI 亮度码值 ${code} 超出声明范围；不裁剪或改判范围`);failure.sitiCode='luma-outside-nominal';throw failure}}
       if(!Number.isFinite(value))throw Error('SI/TI 预处理结果无效');out[i]=value;
     }
+  }};
+}
+// Range preflight reads only the luma plane, but retains the same layout,
+// byte order, effective bits, padding and opaque-alpha rules as the reader.
+export function createSitiRangeReader(input,w,h){
+  const f=input.format,n=w*h,{bytes,max,lo,hi,alpha}=sitiFrameLayout(input,w,h);
+  if(f.family!=='luma')throw Error('SI/TI 亮度范围预检仅支持原生亮度布局');
+  const shift=f.shift,padding=2**shift-1,little=f.endian==='le';
+  return {bytes,lo,hi,max,scan(raw){
+    if(raw.length!==bytes)throw Error('SI/TI 预检原始帧尺寸不一致');
+    const view=new DataView(raw.buffer,raw.byteOffset,raw.byteLength);
+    const component=f.storage===8?i=>raw[i]:i=>{const word=view.getUint16(i*2,little),code=word>>>shift;if(word&padding||code>max)throw Error('SI/TI 预检填充位非零或样本超出位深');return code};
+    let first=null,lowest=max,highest=0;
+    for(let i=0;i<n;i++){
+      if(f.alpha&&component(alpha+i)!==max)throw Error('SI/TI 预检半透明输入缺少参考合成流程；仅支持完全不透明的 Alpha');
+      const code=component(i);
+      if(code<lowest)lowest=code;if(code>highest)highest=code;
+      if(first===null&&(code<lo||code>hi))first={sample:i,code};
+    }
+    return {outside:first!==null,firstOutOfRange:first,min:lowest,max:highest};
   }};
 }
 function populationStd(values){

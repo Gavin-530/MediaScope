@@ -6394,6 +6394,60 @@
       "covers": [
         "test-system"
       ]
+    },
+    {
+      "id": "siti.preflight.native-scan",
+      "module": "siti",
+      "scope": "general",
+      "file": "testing-tools/modules/siti/preflight.test.mjs",
+      "name": "SI/TI luma range preflight decodes full tracks, stops at a valid hit, and rejects ineligible input",
+      "inputs": [],
+      "requiresMedia": true,
+      "covers": [
+        "siti"
+      ],
+      "inputMode": "generated-real-media"
+    },
+    {
+      "id": "siti.preflight.api-clip",
+      "module": "siti",
+      "scope": "general",
+      "file": "testing-tools/modules/siti/preflight.test.mjs",
+      "name": "SI/TI range preflight API streams progress and a signed clip conclusion into one report",
+      "inputs": [],
+      "requiresMedia": true,
+      "covers": [
+        "siti"
+      ],
+      "inputMode": "generated-real-media"
+    },
+    {
+      "id": "siti.preflight.stale-plan",
+      "module": "siti",
+      "scope": "general",
+      "file": "testing-tools/modules/siti/preflight.test.mjs",
+      "name": "SI/TI range preflight evidence rejects stale files and plans retain the explicit clipping setting",
+      "inputs": [],
+      "requiresMedia": true,
+      "covers": [
+        "siti"
+      ],
+      "inputMode": "generated-real-media"
+    },
+    {
+      "id": "ui.si-ti-range-preflight-offers-clipping-only-after-a-real-hit-and-clears-stale",
+      "module": "ui",
+      "covers": [
+        "ui",
+        "jobs",
+        "siti"
+      ],
+      "scope": "browser",
+      "file": "testing-tools/modules/ui/workflow.test.mjs",
+      "name": "SI/TI range preflight offers clipping only after a real hit and clears stale conclusions",
+      "inputs": [],
+      "requiresMedia": true,
+      "inputMode": "generated-real-media-and-explicit-interface-state"
     }
   ]
 }

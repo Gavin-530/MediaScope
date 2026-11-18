@@ -5,11 +5,12 @@ import { readFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { FF,FP,run,probe,video,scan,summarize,compare,normalizeMediaPath,decodeThreadCount } from './engine.mjs';
+import { FF,FP,run,probe,video,scan,summarize,compare,normalizeMediaPath,decodeThreadCount,mediaSignature } from './engine.mjs';
 import {allPackets,structure,traceStructure,mapStructure,metadataSummary,complexity,trial,trialOptions} from './analysis.mjs';
 import {sitiGpuCapability,closeSitiGpu} from './siti.mjs';
+import {sitiPreflightEligibility,preflightSitiLuma,validateSitiPreflightEvidence} from './siti-preflight.mjs';
 import {analyzeRepeats,repeatPreview} from './repeat.mjs';
-import {sitiInput,validateSitiSceneStarts,validateSitiSettings} from './public/siti.js';
+import {sitiInput,validateSitiSceneStarts,validateSitiSettings,sitiPreflightSettingsKey} from './public/siti.js';
 import {makePortable,maxPortableBytes,utcNow} from './public/portable.js';
 import {byteLimit} from './public/units.js';
 import {analysisNotes} from './public/analysis-notes.js';
@@ -83,6 +84,12 @@ function normalizeInputPaths(input){
     analysisTargets(input);
     validateSitiSceneStarts(input.sitiSceneStarts);
     validateSitiSettings(input.sitiSettings);
+    if(input.sitiPreflight!==undefined){
+      validateSitiPreflightEvidence(input.sitiPreflight);
+      if(input.sitiSettings?.rangeTreatment!=='clip-nominal')throw Error('SI/TI 亮度预检证据只能随标称范围裁剪提交');
+      if(input.stream!=null&&input.sitiPreflight.track!==input.stream)throw Error('SI/TI 亮度预检证据与所选视频轨道不一致');
+      if(sitiPreflightSettingsKey(input.sitiSettings)!==input.sitiPreflight.settingsKey)throw Error('SI/TI 亮度预检证据与当前输入设置不一致');
+    }
     input.sitiDevice??='cpu';
     if(!['cpu','gpu'].includes(input.sitiDevice))throw Error('SI/TI 计算设备无效');
     if(input.sitiWorkers==null||input.sitiWorkers==='auto')input.sitiWorkers='auto';
@@ -94,7 +101,7 @@ function normalizeInputPaths(input){
 function portableInput(input){const copy=structuredClone(input);delete copy.enqueue;return copy}
 function validatePlanInput(value){
  if(!value||typeof value!=='object'||Array.isArray(value)||!['inspect','analyze','compare','trial'].includes(value.type))throw Error('计划任务类型无效');
- const keys={inspect:['type','file'],analyze:['type','file','stream','frameAnalysis','bitrate','complexity','repeatAnalysis','freezeDetection','sitiWorkers','sitiDevice','sitiSceneStarts','sitiSettings','bitrateWindowMs'],compare:['type','reference','candidate','refStream','candidateStream','comparisonMode','timingMode','metrics','vmafModel','confirm','timingConfirmed','playbackConfirmed','chromaConfirmed','chromaAssumptions'],trial:['type','file','stream','start','duration','encoder','depthMode','presets','cpuUsed','crfs','metrics','vmafModel','keepFiles','exportDirectory']}[value.type];
+ const keys={inspect:['type','file'],analyze:['type','file','stream','frameAnalysis','bitrate','complexity','repeatAnalysis','freezeDetection','sitiWorkers','sitiDevice','sitiSceneStarts','sitiSettings','sitiPreflight','bitrateWindowMs'],compare:['type','reference','candidate','refStream','candidateStream','comparisonMode','timingMode','metrics','vmafModel','confirm','timingConfirmed','playbackConfirmed','chromaConfirmed','chromaAssumptions'],trial:['type','file','stream','start','duration','encoder','depthMode','presets','cpuUsed','crfs','metrics','vmafModel','keepFiles','exportDirectory']}[value.type];
  if(Object.keys(value).some(key=>!keys.includes(key)))throw Error('计划任务包含未知参数');
  const input=structuredClone(value);normalizeInputPaths(input);
  const index=v=>Number.isSafeInteger(v)&&v>=0;
@@ -138,7 +145,7 @@ function createJob(input){
   if(closing||dataCleaning)throw Error('软件正在退出或清理本地数据，无法提交新任务');
   const queuedAt=new Date().toISOString();
   const targets=input.type==='analyze'?analysisTargets(input):null;
-  const description=input.type==='analyze'?`视频轨道 ${input.stream==null?'自动':`#${input.stream}`} · ${[targets.frames?'逐帧 / GOP':null,targets.bitrate?'区间码率':null,targets.complexity?'SI/TI':null,targets.repeat?'重复帧 / 时间诊断':null].filter(Boolean).join(' · ')}`
+  const description=input.type==='analyze'?`视频轨道 ${input.stream==null?'自动':`#${input.stream}`} · ${[targets.frames?'逐帧 / GOP':null,targets.bitrate?'区间码率':null,targets.complexity?'SI/TI':null,targets.repeat?'重复帧 / 时间诊断':null].filter(Boolean).join(' · ')}${input.sitiSettings?.rangeTreatment==='clip-nominal'?' · SI/TI 标称范围裁剪':''}`
     :input.type==='compare'?`轨道 #${input.refStream} → #${input.candidateStream} · ${(input.metrics||[]).join(' / ').toUpperCase()}`
     :input.type==='trial'?`${input.start??0}–${Number(input.start??0)+Number(input.duration??0)} 秒 · ${input.encoder} · CRF ${(input.crfs||[]).join(', ')}`
     :'容器与轨道信息';
@@ -168,6 +175,19 @@ async function execute(job,input){
       job.progress.subtasks={...previous,[next.subtask.id]:{...(previous[next.subtask.id]||{}),...item}};
     }
   };
+  let preflightWarning=null;
+  if(job.type==='analyze'&&input.sitiSettings?.rangeTreatment==='clip-nominal'&&input.sitiPreflight){
+    // The user chose clipping from a specific preflight conclusion. If the
+    // source changed before the job actually starts, do not apply that stale
+    // conclusion; run strict SI/TI and keep the other targets intact.
+    try{
+      const current=await mediaSignature(input.file);
+      if(current!==input.sitiPreflight.signature||(input.stream!=null&&input.stream!==input.sitiPreflight.track)){
+        input.sitiSettings={...input.sitiSettings};delete input.sitiSettings.rangeTreatment;
+        preflightWarning='SI/TI 亮度预检结论因源文件或轨道在入队后发生变化而失效；本次按严格模式计算 SI/TI，其他目标不受影响。';
+      }
+    }catch(e){throw Error('无法核对源文件状态，任务未开始：'+e.message)}
+  }
   const ctx={cwd,signal:job.controller.signal,commands:[],separateMetrics:process.env.MEDIASCOPE_SEPARATE_METRICS==='1',decodeThreads:decodeThreadCount(Number(process.env.MEDIASCOPE_DECODE_THREADS)),sitiWorkers:input.type==='analyze'&&input.sitiWorkers!=='auto'?input.sitiWorkers:undefined,sitiDevice:input.sitiDevice??'cpu',sitiSceneStarts:input.sitiSceneStarts,sitiSettings:input.sitiSettings,update:publish};
   const stage=async(name,work,{phaseIndex,phaseCount,concurrentGroup=null,subtask=null}={})=>{
     const base={stage:concurrentGroup||name,phaseIndex,phaseCount};
@@ -215,6 +235,7 @@ async function execute(job,input){
         ...(frames?{summary:summarize(frames),frames}:{}),
         ...(tracks?{packets:tracks.find(t=>t.index===stream.index),tracks,overheadBytes:info.size-tracks.reduce((s,t)=>s+t.bytes,0)}:{}),
         ...(coding?{coding}:{}),content,warnings:[
+          ...(preflightWarning?[preflightWarning]:[]),
           ...(targets.bitrate?[analysisNotes.bitrate]:[]),
           ...(targets.frames?[analysisNotes.gop,analysisNotes.frameSize,coding.status==='resource-limited'?'详细码流头解析达到独立资源上限，未完成全流头解析；显示帧、码率及 SI/TI 按各自状态解释。':analysisNotes.metadata,...coding.warnings]:[])
         ]};
@@ -276,7 +297,7 @@ const server=http.createServer(async(req,res)=>{
       if(req.method==='POST'&&url.pathname==='/api/desktop/shutdown'){
         send(res,200,{ok:true});void shutdown();return;
       }
-      if(req.method==='POST'&&startup.state!=='ready'&&['/api/jobs','/api/probe','/api/queue','/api/plans/import','/api/repeat/preview'].includes(url.pathname)){
+      if(req.method==='POST'&&startup.state!=='ready'&&['/api/jobs','/api/probe','/api/queue','/api/plans/import','/api/repeat/preview','/api/siti-preflight'].includes(url.pathname)){
         send(res,503,{error:startup.message});return;
       }
       if(req.method==='GET'&&url.pathname==='/api/plans'){
@@ -310,6 +331,39 @@ const server=http.createServer(async(req,res)=>{
       }
       if(req.method==='POST'&&url.pathname==='/api/select-file'){send(res,200,{file:await selectMediaFile()});return}
       if(req.method==='POST'&&url.pathname==='/api/select-directory'){send(res,200,{directory:await selectMediaFile(true)});return}
+      if(req.method==='POST'&&url.pathname==='/api/siti-preflight'){
+        const input=await body(req),file=normalizeMediaPath(input.file);
+        if(!Number.isSafeInteger(input.stream)||input.stream<0)throw Error('视频轨道索引无效');
+        validateSitiSettings(input.sitiSettings);
+        if(closing){send(res,503,{error:'软件正在退出'});return}
+        const controller=new AbortController();probes.add(controller);
+        let info;
+        try{info=await probe(file,{signal:controller.signal,commands:[]})}catch(e){probes.delete(controller);throw e}
+        const stream=info.raw.streams.find(s=>s.index===input.stream&&s.codec_type==='video');
+        if(!stream){probes.delete(controller);throw Error('请选择有效的视频轨道')}
+        if(res.destroyed){probes.delete(controller);return}
+        res.writeHead(200,{'Content-Type':'application/x-ndjson; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});
+        let closed=false;
+        const write=value=>{if(!closed&&!res.destroyed)res.write(JSON.stringify(value)+'\n')};
+        const disconnect=()=>{if(!closed)controller.abort()};
+        res.once('close',disconnect);
+        try{
+          const plan=sitiPreflightEligibility(stream,input.sitiSettings);
+          if(!plan.applicable){write({event:'result',status:'not-applicable',reason:plan.reason,file,stream:stream.index});return}
+          const depth=plan.input.depth;
+          write({event:'start',file,stream:stream.index,pixelFormat:stream.pix_fmt,bitDepth:depth,nominalRange:{min:16*2**(depth-8),max:235*2**(depth-8)}});
+          let last=0;
+          const result=await preflightSitiLuma(file,stream,{signal:controller.signal,sitiSettings:input.sitiSettings,commands:[],update:({framesScanned})=>{
+            const now=Date.now();if(framesScanned===1||now-last>=200){last=now;write({event:'progress',framesScanned})}
+          }});
+          write({event:'result',...result,file,stream:stream.index});
+        }catch(e){
+          write(controller.signal.aborted?{event:'cancelled',message:'亮度范围预检已取消'}:{event:'error',message:e.message,code:e.code??null});
+        }finally{
+          closed=true;res.off('close',disconnect);probes.delete(controller);if(!res.writableEnded)res.end();
+        }
+        return;
+      }
       if(req.method==='POST'&&url.pathname==='/api/probe'){
         const input=await body(req),file=normalizeMediaPath(input.file);
         if(closing){send(res,503,{error:'软件正在退出'});return}
@@ -365,7 +419,11 @@ const server=http.createServer(async(req,res)=>{
         }else{const {controller,result,...meta}=j;send(res,200,meta)}return}
       }
       if(req.method==='POST'&&url.pathname==='/api/jobs'){
-        const input=await body(req,65536);if(!['inspect','analyze','compare','trial'].includes(input.type))throw Error('无效任务类型');normalizeInputPaths(input);
+        const raw=await body(req,65536);if(!['inspect','analyze','compare','trial'].includes(raw.type))throw Error('无效任务类型');
+        delete raw.startQueue; // Discard the old UI flag before storing the task.
+        normalizeInputPaths(raw);
+        if(raw.type==='analyze'&&raw.sitiSettings?.rangeTreatment==='clip-nominal'&&raw.sitiPreflight&&await mediaSignature(raw.file)!==raw.sitiPreflight.signature)throw Error('源文件在预检后已变化，请重新检查 SI/TI 亮度范围');
+        const input=raw;
         if(input.enqueue!==true)queueRunning=true;
         const job=createJob(input);send(res,202,{id:job.id});return;
       }

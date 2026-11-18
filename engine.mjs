@@ -102,7 +102,7 @@ export function segmentInput(file,segment){
   return ['-noautorotate','-ss',String(segment.start),'-accurate_seek','-t',String(segment.duration),'-i',file];
 }
 export const segmentFilter=segment=>`trim=start=0:end=${segment.duration},setpts=PTS-STARTPTS,`;
-async function mediaSignature(file){
+export async function mediaSignature(file){
   const s=await stat(file,{bigint:true});return [s.dev,s.ino,s.size,s.mtimeNs,s.ctimeNs].join(':');
 }
 export async function assertSegmentUnchanged(segment){

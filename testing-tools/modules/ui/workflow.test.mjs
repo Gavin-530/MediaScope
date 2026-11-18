@@ -94,3 +94,90 @@ scenario('desktop queued work triggers a real unload confirmation and dismissing
 scenario('startup transport failures remain visible and real polling restores readiness',async({page,app})=>{
  let failed=false;await page.route('**/api/status',async route=>{if(!failed){failed=true;await route.abort('failed');}else await route.continue();});await page.reload();await page.waitForFunction(()=>document.querySelector('#task-message').textContent.includes('fetch'));assert.equal(failed,true);await page.waitForFunction(()=>document.querySelector('#environment').textContent.includes('ffmpeg version'));assert.equal((await app.request('status')).startup.state,'ready');
 });
+scenario('SI/TI range preflight offers clipping only after a real hit and clears stale conclusions',async({page,app,dir})=>{
+ const make=name=>path.join(dir,name+'.mkv'),clean=make('preflight-clean'),hit=make('preflight-hit'),late=make('preflight-late');
+ const media=(name,expression)=>run(FF,['-v','error','-f','lavfi','-i',`nullsrc=s=64x64:r=8,format=gray,geq=lum='${expression}',setparams=range=limited:color_primaries=bt709:color_trc=bt709:colorspace=bt709,setfield=prog`,'-frames:v','6','-c:v','ffv1','-level','3','-pix_fmt','gray','-color_range','tv','-colorspace','bt709','-color_primaries','bt709','-color_trc','bt709',name]);
+ // Known codes: endpoints are valid, one file exceeds them early and one only on its last frame.
+ await media(clean,'if(eq(N,0),16,235)');await media(hit,'if(gte(N,2),240,16)');await media(late,'if(eq(N,5),15,16)');
+ const observed=[];page.on('response',response=>{if(!response.url().startsWith(app.base+'/api/siti-preflight'))return;let input;try{input=response.request().postDataJSON()}catch{}const entry={status:response.status(),input,text:null,waiters:[]};observed.push(entry);response.text().catch(()=>'').then(text=>{entry.text=text;entry.waiters.forEach(resolve=>resolve())})});
+ function settled(){return new Promise(resolve=>{const pending=observed.filter(entry=>entry.text===null).flatMap(entry=>entry.waiters);pending.push(resolve);setTimeout(resolve,15000)})}
+ const status=page.locator('#siti-preflight-status'),choice=page.locator('#siti-preflight-choice'),action=page.locator('#siti-preflight-action');
+ const ready=()=>page.waitForFunction(()=>{const text=document.querySelector('#siti-preflight-status').textContent;return /全片亮度码值|发现范围外亮度|未运行|未完成/.test(text)&&!text.includes('正在检查')&&!document.querySelector('#siti-preflight-action').textContent.includes('取消亮度检查')});
+ const select=async name=>{const field=page.locator('#file');await field.fill(name);await field.press('Enter')};
+ const openInputSettings=()=>page.evaluate(()=>{document.querySelector('#siti-input-settings').open=true});
+
+ await page.locator('#complexity').uncheck();await select(clean);await page.waitForFunction(()=>document.querySelector('#stream').value!=='');
+ await page.waitForTimeout(900);assert.equal(observed.length,0,'no preflight runs while SI/TI is deselected');
+ await page.locator('#complexity').check();await ready();
+ assert.match(await status.textContent(),/全片亮度码值均位于标称黑白端点内（已扫描 6 帧）/);assert.equal(await choice.isVisible(),false);
+ assert.equal(observed.length,1);assert.equal(observed[0].status,200);assert.equal(observed[0].input.stream,0);assert.deepEqual(observed[0].input.sitiSettings,{},'default input options are submitted as an empty object');
+ await settled();const conclusion=JSON.parse(observed[0].text.trim().split('\n').at(-1));
+ assert.equal(conclusion.status,'in-range');assert.deepEqual(conclusion.nominalRange,{min:16,max:235});assert.equal(conclusion.input.range,'tv');
+
+ await select(hit);await ready();
+ assert.equal(await choice.isVisible(),true);assert.match(await status.textContent(),/第 3 帧码值 240/);assert.match(await status.textContent(),/16–235/);assert.equal(await action.isVisible(),false);
+ const blocked=page.waitForFunction(()=>/处理方式/.test(document.querySelector('#task-message').textContent));
+ await page.locator('#enqueue-analyze').click();await blocked;assert.match(await page.locator('#task-message').textContent(),/处理方式/);
+ assert.equal((await app.request('status')).jobs.length,0,'an unresolved choice must not enqueue a task');
+ await page.locator('#siti-range-treatment').selectOption('clip');
+ const queued=page.waitForResponse(r=>r.url()===app.base+'/api/jobs'&&r.request().method()==='POST');
+ await page.locator('#enqueue-analyze').click();const submitted=(await queued).request().postDataJSON();
+ assert.equal(submitted.sitiSettings.rangeTreatment,'clip-nominal');
+ assert.equal(submitted.sitiPreflight.status,'out-of-range');assert.equal(submitted.sitiPreflight.track,0);assert.ok(submitted.sitiPreflight.framesScanned>=3);assert.ok(submitted.sitiPreflight.signature);assert.ok(submitted.sitiPreflight.settingsKey);
+ const queuedStatus=await app.request('status');
+ assert.equal(queuedStatus.queueRunning,false,'enqueuing a clipped task preserves the stopped queue');
+ assert.equal(queuedStatus.jobs.length,1);
+ assert.equal(queuedStatus.jobs[0].status,'queued');
+ const firstId=queuedStatus.jobs[0].id;
+ await page.locator('#queue-start').click();
+ const done=await waitForJob(app.request,firstId);assert.equal(done.status,'done',done.message);
+ await page.waitForFunction(id=>document.querySelector(`[data-job="${id}"][data-action="report"]`),firstId);
+ // The completed report is auto-opened; force the real inspect view so its content can be read.
+ await page.evaluate(()=>{const host=document.querySelector('#inspect-details');host.classList.remove('hidden');host.style.opacity='1'});
+ const clipNotice='SI/TI 已将亮度码值裁剪至标称范围（16–235）后计算。';
+ await page.getByText(clipNotice,{exact:true}).waitFor({state:'visible'});
+ const methods=page.locator('#inspect-details .analysis-explanation').filter({hasText:'计算方法与限制'});
+ const clipDetails=methods.getByText(/每个亮度码值先限制到该位深端点/);
+ assert.equal(await page.getByText(/每个亮度码值先限制到该位深端点/).count(),1);
+ assert.equal(await clipDetails.isVisible(),false);
+ assert.equal(await methods.getByText(/MediaScope 有限范围裁剪扩展/).isVisible(),false);
+ await methods.locator(':scope > summary').click();
+ assert.equal(await clipDetails.isVisible(),true);
+ assert.equal(await methods.getByText(/MediaScope 有限范围裁剪扩展/).isVisible(),true);
+ assert.equal((await app.request('status')).jobs.length,1,'clipping is one task, not a retry task');
+
+ await select(late);await ready();assert.match(await status.textContent(),/第 6 帧码值 15/);assert.equal(await choice.isVisible(),true);
+ await page.locator('#siti-range-treatment').selectOption('clip');
+ await openInputSettings();
+ await page.waitForTimeout(200);
+ const before=observed.length;
+ await page.locator('#siti-range').selectOption('tv');await page.waitForTimeout(800);
+ assert.equal(await page.locator('#siti-range-treatment').inputValue(),'clip','editing open input settings leaves the current conclusion untouched');
+ await page.evaluate(()=>{document.querySelector('#siti-input-settings').open=false});
+ for(let i=0;i<100&&observed.length<=before;i++)await page.waitForTimeout(100);
+ await page.waitForFunction(()=>document.querySelector('#siti-preflight-status').textContent.includes('发现范围外亮度')&&document.querySelector('#siti-preflight-choice').offsetParent!==null);
+ assert.equal(await page.locator('#siti-range-treatment').inputValue(),'','a new conclusion requires a new explicit choice');
+ assert.equal(observed.length,4,'closing changed settings runs one new preflight');
+ await openInputSettings();
+ await page.locator('#siti-range').selectOption('auto');
+ await page.evaluate(()=>{document.querySelector('#siti-input-settings').open=false});
+ await page.waitForFunction(()=>document.querySelector('#siti-preflight-status').textContent.includes('发现范围外亮度'));
+ assert.equal(await choice.isVisible(),true);
+ assert.equal(observed.length,4,'input settings and the file start one preflight each');
+
+ await page.waitForFunction(()=>document.querySelector('#siti-preflight-status').textContent.includes('发现范围外亮度')&&document.querySelector('#siti-preflight-choice').offsetParent!==null);
+ await page.waitForTimeout(300);
+ await page.locator('#siti-range-treatment').selectOption('clip');
+ await page.locator('#siti-device').selectOption('cpu');
+ await page.waitForFunction(()=>document.querySelector('#siti-device').value==='cpu');
+ await page.waitForFunction(()=>document.querySelector('#siti-preflight-status').textContent.includes('发现范围外亮度')&&!/正在检查/.test(document.querySelector('#siti-preflight-status').textContent));
+ await page.waitForTimeout(300);
+ assert.match(await status.textContent(),/发现范围外亮度/);
+ assert.equal(await page.locator('#siti-range-treatment').inputValue(),'clip','execution device keeps the current choice');
+ assert.equal(observed.length,4,'the execution device does not re-run the preflight');
+
+ await page.locator('#complexity').uncheck();
+ await page.waitForFunction(()=>/选择文件并勾选 SI\/TI/.test(document.querySelector('#siti-preflight-status').textContent));
+ assert.match(await status.textContent(),/选择文件并勾选 SI\/TI/);assert.equal(await choice.isVisible(),false);
+ assert.equal(observed.length,4,'deselecting SI/TI neither runs nor keeps a choice');
+});

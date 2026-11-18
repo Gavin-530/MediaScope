@@ -7,7 +7,7 @@ import {parsePortable,makePortable,maxPortableBytes,portableFilename,reportFromP
 import { plot, gopOverview } from "./charts.js";
 import { basicInfoHTML, initBasicInfo } from "./basic-info.js";
 import {vmafModels} from "./vmaf.js";
-import {validateSitiSceneStarts,validateSitiSettings} from "./siti.js";
+import {validateSitiSceneStarts,validateSitiSettings,sitiPreflightSettingsKey} from "./siti.js";
 import {repeatHTML,initRepeat} from './repeat-view.js';
 import {
   parseCrfs,
@@ -40,6 +40,7 @@ let current = null,
   desktopSession = false,
   report = null,
   infoPath = null,
+  infoMeta = null,
   hasVideo = false,
   charts = [],
   importing = false;
@@ -596,7 +597,9 @@ $("#file").oninput = () => {
   fileInfoController?.abort();
   fileInfoLoading = false;
   infoPath = null;
+  infoMeta = null;
   hasVideo = false;
+  resetSitiPreflight();
   $("#stream").disabled = true;
   $("#stream").innerHTML = '<option value="">选择文件后自动读取</option>';
   $("#file-status").textContent = clean($("#file").value) ? "等待读取文件信息…" : "尚未选择文件。";
@@ -627,8 +630,10 @@ const syncSitiWorkers = () => {
   const hlg=$('#siti-transfer').value==='hlg';$('#siti-hlg-model').classList.toggle('hidden',!hlg);
   for(const id of ['siti-hlg-white','siti-hlg-black'])$('#'+id).disabled=!$('#complexity').checked||!hlg;
   updateAnalysisSubmission();
+  scheduleSitiPreflight();
 };
-$('#complexity').onchange=syncSitiWorkers;
+// Deselecting SI/TI is not a wait for preflight work.
+$('#complexity').onchange=()=>{syncSitiWorkers();if(!$('#complexity').checked)resetSitiPreflight()};
 $('#frame-analysis').onchange=syncSitiWorkers;
 $('#bitrate-enabled').onchange=syncSitiWorkers;
 $('#repeat-enabled').onchange=syncSitiWorkers;
@@ -652,6 +657,137 @@ function sitiSceneInput(){
   const starts=$("#siti-scenes").value==='single'?[0]:text.split(/[,，\s]+/).map(x=>Number(x)-1);
   validateSitiSceneStarts(starts);return {sitiSceneStarts:starts};
 }
+// Independent, cancellable luma range preflight. The conclusion is bound to the
+// file state, track, and input interpretation settings; late responses are dropped.
+let sitiPreflightTimer;
+const sitiPreflight={key:null,controller:null,revision:0,status:'idle',frames:0,result:null,reason:null};
+function currentSitiSettings(){return sitiSettingsInput().sitiSettings??{}}
+// While the input editor is open its intermediate values are not final interpretations.
+function sitiInputSettingsOpen(){return !!$("#siti-input-settings").open}
+function sitiPreflightKey(){
+  const file=clean($("#file").value),stream=$("#stream").value;
+  if(!environmentReady||!$("#complexity").checked||!infoPath||infoPath!==file||!infoMeta||!hasVideo||stream===''||fileInfoLoading||sitiInputSettingsOpen())return null;
+  let settings;try{settings=currentSitiSettings();}catch{return null}
+  return JSON.stringify([infoPath,infoMeta,stream,settings]);
+}
+function setSitiPreflightStatus(status,{reason=null}={}){
+  const statusEl=$("#siti-preflight-status"),choice=$("#siti-preflight-choice"),action=$("#siti-preflight-action");
+  const frames=sitiPreflight.frames.toLocaleString("zh-CN");
+  const result=sitiPreflight.result;
+  choice.classList.toggle("hidden",status!=="out-of-range");
+  action.classList.toggle("hidden",!["checking","cancelled","incomplete"].includes(status));
+  action.textContent=status==="checking"?"取消亮度检查":"重新检查";
+  statusEl.classList.toggle("error",["cancelled","incomplete"].includes(status));
+  statusEl.textContent=
+    status==="checking"?`正在检查所选轨道的亮度码值范围…已扫描 ${frames} 帧（总数未知，不显示百分比）。`
+    : status==="in-range"?`全片亮度码值均位于标称黑白端点内（已扫描 ${frames} 帧）；提交时按严格模式计算。`
+    : status==="out-of-range"?`发现范围外亮度：第 ${result.firstOutOfRange.frame+1} 帧码值 ${result.firstOutOfRange.code}（该位深标称 ${result.nominalRange.min}–${result.nominalRange.max}）。严格模式遇到越界会停止 SI/TI；选择裁剪后指标反映裁剪后的画面。`
+    : status==="not-applicable"?`未运行亮度范围预检：${sitiPreflight.reason??reason??"当前输入不适用"}。`
+    : status==="cancelled"?"已取消亮度范围检查；未完成检查，不代表全片合规。"
+    : status==="incomplete"?`亮度范围检查未完成：${sitiPreflight.reason??reason??"未知原因"}。未完成检查不代表全片合规。`
+    : "选择文件并勾选 SI/TI 后，将自动检查所选视频轨道的亮度码值范围。";
+}
+function resetSitiPreflight(){
+  clearTimeout(sitiPreflightTimer);
+  sitiPreflight.controller?.abort();
+  Object.assign(sitiPreflight,{key:null,controller:null,revision:sitiPreflight.revision+1,status:'idle',frames:0,result:null,reason:null});
+  $("#siti-range-treatment").value="";
+  setSitiPreflightStatus("idle");
+}
+async function streamApi(url,data,{signal,onEvent}={}){
+  const response=await fetch("/api/"+url,{method:"POST",headers:{"Content-Type":"application/json","X-MediaScope-Token":token},body:JSON.stringify(data),signal});
+  if(!response.ok){
+    let message="请求失败";
+    try{message=(await response.json()).error||message}catch{}
+    throw Error(message);
+  }
+  const reader=response.body.getReader(),decoder=new TextDecoder();
+  let buffer="",result=null,error=null;
+  const consume=line=>{
+    if(!line.trim())return;
+    const value=JSON.parse(line);
+    if(value.event==="progress")return onEvent?.(value);
+    if(value.event==="result"){result=value;return}
+    if(value.event==="error"){error=Error(value.message||"亮度范围预检失败");error.code=value.code;return}
+    if(value.event==="cancelled"){error=Error(value.message||"亮度范围预检已取消");error.cancelled=true;return}
+    onEvent?.(value);
+  };
+  for(;;){
+    const {value,done}=await reader.read();
+    if(done)break;
+    buffer+=decoder.decode(value,{stream:true});
+    for(let index;(index=buffer.indexOf("\n"))>=0;){consume(buffer.slice(0,index));buffer=buffer.slice(index+1)}
+  }
+  buffer+=decoder.decode();
+  if(buffer.trim())consume(buffer);
+  if(error)throw error;
+  if(!result)throw Error("亮度范围预检结束但没有结论");
+  return result;
+}
+async function startSitiPreflight(force=false){
+  const key=sitiPreflightKey();
+  if(!key){if(sitiPreflight.status!=="idle"||sitiPreflight.key)resetSitiPreflight();return}  if(!force&&sitiPreflight.key===key&&["checking","in-range","out-of-range","not-applicable"].includes(sitiPreflight.status)){
+    if(["in-range","out-of-range","not-applicable"].includes(sitiPreflight.status))setSitiPreflightStatus(sitiPreflight.status);
+    return;
+  }
+  sitiPreflight.controller?.abort();
+  const controller=new AbortController(),revision=sitiPreflight.revision+1;
+  Object.assign(sitiPreflight,{key,controller,revision,status:"checking",frames:0,result:null,reason:null});
+  $("#siti-range-treatment").value="";
+  setSitiPreflightStatus("checking");
+  try{
+    const result=await streamApi("siti-preflight",{file:clean($("#file").value),stream:Number($("#stream").value),sitiSettings:currentSitiSettings()},{signal:controller.signal,onEvent:event=>{
+      if(revision!==sitiPreflight.revision||event.event!=="progress")return;
+      sitiPreflight.frames=event.framesScanned;setSitiPreflightStatus("checking");
+    }});
+    if(revision!==sitiPreflight.revision)return;
+    sitiPreflight.result=result;sitiPreflight.frames=result.framesScanned??0;
+    if(result.status==="in-range"){sitiPreflight.status="in-range";setSitiPreflightStatus("in-range")}
+    else if(result.status==="out-of-range"){sitiPreflight.status="out-of-range";setSitiPreflightStatus("out-of-range")}
+    else{sitiPreflight.status="not-applicable";sitiPreflight.reason=result.reason??null;setSitiPreflightStatus("not-applicable")}
+  }catch(error){
+    if(revision!==sitiPreflight.revision)return;
+    sitiPreflight.result=null;
+    if(controller.signal.aborted||error.name==="AbortError"){sitiPreflight.status="cancelled";setSitiPreflightStatus("cancelled")}
+    else{sitiPreflight.status="incomplete";sitiPreflight.reason=error.message;setSitiPreflightStatus("incomplete")}
+  }finally{if(revision===sitiPreflight.revision)sitiPreflight.controller=null}
+}
+function scheduleSitiPreflight(){
+  clearTimeout(sitiPreflightTimer);
+  const key=sitiPreflightKey();
+  if(!key){
+    // Editing input options only matters once the user closes the editor; the
+    // editor re-applies its defaults whenever it opens.
+    if(environmentReady&&$("#complexity").checked&&infoPath&&sitiPreflight.status!=="idle"&&!sitiInputSettingsOpen())resetSitiPreflight();
+    return;
+  }
+  if(sitiPreflight.key===key&&["checking","in-range","out-of-range","not-applicable"].includes(sitiPreflight.status))return;
+  sitiPreflightTimer=setTimeout(()=>void startSitiPreflight(),350);
+}
+function settleSitiPreflight(status,reason=null){
+  sitiPreflight.result=null;sitiPreflight.reason=reason;sitiPreflight.status=status;setSitiPreflightStatus(status,{reason});
+}
+function sitiPreflightSubmission(){
+  if(!$("#complexity").checked||sitiPreflight.status!=="out-of-range")return {};
+  if(sitiPreflight.key!==sitiPreflightKey()){resetSitiPreflight();throw Error("SI/TI 亮度预检结论已失效，请等待重新检查");}
+  const choice=$("#siti-range-treatment").value;
+  if(!choice)throw Error("请先选择 SI/TI 范围外亮度的处理方式");
+  if(choice==="strict")return {};
+  const result=sitiPreflight.result;
+  return {rangeTreatment:"clip-nominal",evidence:{status:"out-of-range",signature:result.signature,framesScanned:result.framesScanned,checkedAt:new Date().toISOString(),track:Number($("#stream").value),settingsKey:sitiPreflightSettingsKey(currentSitiSettings())}};
+}
+$("#siti-preflight-action").onclick=()=>{
+  if(sitiPreflight.status==="checking")sitiPreflight.controller?.abort();
+  else void startSitiPreflight(true);
+};
+$("#siti-range-treatment").onchange=()=>{if(sitiPreflight.status==="out-of-range"&&sitiPreflight.key===sitiPreflightKey())setSitiPreflightStatus("out-of-range")};
+$("#siti-settings").addEventListener("input",scheduleSitiPreflight);
+$("#siti-settings").addEventListener("change",scheduleSitiPreflight);
+$("#stream").onchange=scheduleSitiPreflight;
+// Input options only change meaning when explicitly re-opened by the user; the
+// editor re-applies its defaults on opening, which must not clear a conclusion.
+// Closing the editor applies its current values; opening it is not an interpretation.
+$("#siti-input-settings").addEventListener("toggle",()=>{if(!$("#siti-input-settings").open)scheduleSitiPreflight()});
 let sitiGpuCheck,sitiGpuRevision=0;
 async function checkSitiGpu(force=false){
   syncSitiWorkers();const revision=++sitiGpuRevision,requested=$("#siti-device").value;
@@ -709,7 +845,9 @@ async function readFileInfo(force = false) {
   } catch (e) {
     if (revision !== fileInfoRevision) return;
     infoPath = null;
+    infoMeta = null;
     hasVideo = false;
+    resetSitiPreflight();
     $("#stream").disabled = true;
     $("#file-status").textContent = e.message;
     $("#file-status").classList.add("error");
@@ -718,6 +856,7 @@ async function readFileInfo(force = false) {
     if (revision === fileInfoRevision) {
       fileInfoLoading = false;
       updateAnalysisSubmission();
+      scheduleSitiPreflight();
     }
   }
 }
@@ -774,7 +913,11 @@ $("#compare").onclick = (event) => {
 };
 $("#enqueue-compare").onclick = $("#compare").onclick;
 $("#enqueue-analyze").onclick = () => {
-  try{launch({
+  try{
+    const siti=sitiSettingsInput(),pre=sitiPreflightSubmission();
+    if(sitiPreflight.status==="checking"){sitiPreflight.controller?.abort();settleSitiPreflight("cancelled")}
+    if(pre.rangeTreatment==="clip-nominal"&&pre.evidence)siti.sitiSettings={...siti.sitiSettings,rangeTreatment:"clip-nominal"};
+    launch({
     type: "analyze",
     enqueue: true,
     file: clean($("#file").value),
@@ -787,7 +930,8 @@ $("#enqueue-analyze").onclick = () => {
     ...($("#bitrate-enabled").checked ? {bitrateWindowMs: Number($("#bitrate-window").value)} : {}),
     sitiWorkers: $("#siti-workers").value,
     sitiDevice: $("#siti-device").value,
-    ...sitiSceneInput(),...sitiSettingsInput(),
+    ...sitiSceneInput(),...siti,
+    ...(pre.evidence?{sitiPreflight:pre.evidence}:{}),
   })}catch(e){message(e.message,true)}
 };
 $("#enqueue-trial").onclick = () => {
@@ -1159,6 +1303,7 @@ function renderMedia(r,owner) {
   if (!clean($("#file").value) || clean($("#file").value) === r.file) {
     const selectedStream = infoPath === r.file ? $("#stream").value : null;
     infoPath = r.file;
+    infoMeta = r.mtime && Number.isFinite(r.size) ? `${r.mtime}|${r.size}` : null;
     hasVideo = !!videos.length;
     $("#file").value = r.file;
     $("#stream").innerHTML = videos
@@ -1173,6 +1318,7 @@ function renderMedia(r,owner) {
     $("#stream").disabled = !hasVideo;
     $("#file-status").textContent = hasVideo ? "已读取基本信息，可选择视频轨道与分析目标。" : "该文件没有可分析的视频轨道。";
     $("#file-status").classList.remove("error");
+    scheduleSitiPreflight();
   }
   if (!$("#trial-file").value) {
     $("#trial-file").value = r.file;
