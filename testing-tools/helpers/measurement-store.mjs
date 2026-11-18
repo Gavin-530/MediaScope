@@ -1,7 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
-import {gunzipSync,gzipSync} from 'node:zlib';
+import {gunzipSync} from 'node:zlib';
+import {encodeMeasurements} from './measurement-codec.mjs';
 import {caseCatalog} from './case-catalog.mjs';
 
 const fileKey=file=>createHash('sha256').update(file).digest('hex').slice(0,8);
@@ -45,7 +46,7 @@ export async function saveObservedMeasurements(generated,evidence,{observationRo
   for(const r of requiredMeasurements)if(!entries.some(e=>e.caseIds?.includes(r.caseId)&&r.pathPattern.test(e.path)&&e.data?.outcome==='passed'))throw Error('TEST_INFRA: missing declared measurement: '+r.caseId);
  }
  entries.sort((a,b)=>a.path.localeCompare(b.path));
- if(entries.length)await fs.writeFile(path.join(evidence,'measurements.json.gz'),gzipSync(Buffer.from(JSON.stringify({schema:2,entries})+'\n')));
+ if(entries.length)await fs.writeFile(path.join(evidence,'measurements.json.gz'),encodeMeasurements({schema:2,entries}));
  await fs.writeFile(path.join(evidence,'assertions.json'),JSON.stringify({schema:1,cases:selected.map(c=>({id:c.id,assertions:checks.get(c.id)?.assertions??0,productionObservations:checks.get(c.id)?.productionObservations??0}))},null,2)+'\n');
- return {measurements:entries.length,diagnostics:0,caseReceipts:checks.size,collection:'declared outputs and real production observations; no arbitrary fixture sweep'};
+ return {measurements:entries.length,diagnostics:0,caseReceipts:checks.size,measurementCodec:entries.length?'gzip-json':undefined,collection:'declared outputs and real production observations; no arbitrary fixture sweep'};
 }

@@ -101,6 +101,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/local-data.ps1 -Acti
 | `origin.json` | 云端导入的 CI 步骤状态、原清单及传输摘要 |
 | `SHA256SUMS.txt` | 本份内容的一层校验清单，不认证作者或来源 |
 
+App 测量附件继续使用 `measurements.json.gz`。内容去重有收益时使用测量 schema 3，在同一附件内保存 `sharedValues` 和字段引用；每条观测的上下文与测量原值可完整还原。外层记录协议保持原版本。使用 `node scripts/read-measurements.mjs <measurements.json.gz>` 按需展开，`--check` 只检查格式。旧测量 schema 1/2 继续可读。历史评估可用 `node scripts/preview-measurement-compaction.mjs <记录目录>` 试算附件节省量；它只接受北京时间 2026 年 11 月的 App 记录，不就地更新归档。用 `powershell -NoProfile -File scripts/stage-measurement-compaction.ps1 -Record <记录目录> -Stage` 可在 `.build/` 生成经过独立核验的副本和摘要回执。Actions 外层封存与传输原件另由平台归档协议校验。
+
 新记录不另套 `record.json/README/original`，不保存整份源码、项目文档、模拟档案/回执或可重建媒体与运行环境。Git SHA、未提交状态和内容摘要识别测试输入；未保存的未提交源码不保证精确重现。若确需保留特殊输入，应放在该份目录并说明用途。证据体积不是通过条件，不为精简而丢测量或隐藏失败。
 
 以上新记录内容规范同时适用于本地和 Actions。正常完成的运行由云端导出器复制本次独立记录，不更改产品清单、测试结果或附件；初始化失败或强制中断则生成明确 blocked 的诊断记录，仅保留当时可取得的资料，不声明完整测量。传输用清单和 ZIP 属于上传封装。新版导入验证后只增加 `origin.json` 并重新生成校验清单，长期保留一份产品证据，不重复保存 `artifact.zip` 和 `bundle.zip`。平台档案的外层清单、任务日志和历史快照是仓库历史资料，不计作额外产品测试。旧版云端原件可能同时含两层 ZIP、解包内容及源码副本；其历史冗余不属于新记录规范，普通同步不自动精简原件。

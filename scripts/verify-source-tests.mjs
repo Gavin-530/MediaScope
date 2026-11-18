@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {execFileSync} from 'node:child_process';
-import {gunzipSync} from 'node:zlib';
+import {decodeMeasurements} from '../testing-tools/helpers/measurement-codec.mjs';
 import {sourceTestReadiness} from '../testing-tools/helpers/test-results.mjs';
 
 const project=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
@@ -15,7 +15,7 @@ for(const directory of [generalPath,gpuPath]){
   execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',path.join(project,'scripts/verify-test-evidence.ps1'),'-Record',root],{windowsHide:true,stdio:'pipe'});
   records.push(JSON.parse(await fs.readFile(path.join(root,'manifest.json'),'utf8')));
 }
-const measurements=JSON.parse(gunzipSync(await fs.readFile(path.join(path.resolve(gpuPath),'measurements.json.gz'))));
+const measurements=decodeMeasurements(await fs.readFile(path.join(path.resolve(gpuPath),'measurements.json.gz')));
 const hardware=measurements.entries.filter(e=>/^siti-gpu-[A-Za-z0-9]{6}\/hardware-equivalence\.json$/.test(e.path));
 if(hardware.length!==1)throw Error('Exactly one real GPU equivalence measurement is required');
 const version=JSON.parse(await fs.readFile(path.join(project,'package.json'),'utf8')).version;

@@ -6,6 +6,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {gunzipSync,gzipSync} from 'node:zlib';
+import {decodeMeasurements,encodeMeasurements} from '../../helpers/measurement-codec.mjs';
 import {saveMeasurements,compactResults,criticalMeasurements} from '../../../scripts/test-evidence.mjs';
 
 test('[test-system] archive contains measurements but excludes source, profiles and simulated archives',async()=>{
@@ -35,6 +36,22 @@ test('[test-system] archive contains measurements but excludes source, profiles 
   assert.equal(saved.entries.find(x=>x.path.startsWith('metrics-equivalence-')).data.combined,1.25);
   assert.equal(saved.entries.find(x=>x.path.startsWith('bitrate-equivalence-')).data.tracks[0].exactEqual,true);
   assert.deepEqual(await fs.readdir(evidence),['measurements.json.gz']);
+  const pixel_formats=Array.from({length:320},(_,i)=>({name:'fixture-'+i,width:i,description:'opaque-format-'+i*i}));
+  const result={pixelFormats:{raw:{pixel_formats}}};
+  const measured={schema:2,entries:Array.from({length:26},(_,i)=>({
+    kind:i%2?'browser.api':'api.response',caseId:'protocol-'+i,data:{url:'/jobs/fixture/report',result}
+  }))};
+  const compressed=encodeMeasurements(measured);
+  const wire=JSON.parse(gunzipSync(compressed));
+  assert.equal(wire.schema,3);
+  assert.equal(Object.keys(wire.sharedValues).length,2);
+  assert.ok(compressed.length<gzipSync(JSON.stringify(measured)).length);
+  assert.deepEqual(decodeMeasurements(compressed),measured);
+  assert.deepEqual(decodeMeasurements(gzipSync(JSON.stringify(measured))),measured);
+  const broken=structuredClone(wire);
+  broken.references[0].value='missing';
+  assert.throws(()=>decodeMeasurements(gzipSync(JSON.stringify(broken))),/reference/);
+
   assert.deepEqual(await saveMeasurements(generated,evidence,{failed:true}),{measurements:4,diagnostics:2});
   assert.ok((await fs.stat(path.join(evidence,'diagnostics/browser/01/browser-errors.json.gz'))).size>0);
   assert.equal(JSON.parse(gunzipSync(await fs.readFile(path.join(evidence,'diagnostics/startup-desktop/owned-case/job/failure.json.gz'))).toString()).message,'real task failure diagnostic');

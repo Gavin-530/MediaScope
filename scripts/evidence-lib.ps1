@@ -174,6 +174,11 @@ function Test-EvidenceRecord($Root,$Relative) {
   $outcomes=if($manifest.schema -eq 3){@('passed','failed','blocked')}else{@('passed','failed')}
   if($manifest.outcome -notin $outcomes -or ($manifest.outcome -eq 'passed') -ne ($manifest.exitCode -eq 0)){throw "Run outcome mismatch: $Relative"}
   if($manifest.schema -eq 3){
+    if($manifest.kind -eq 'App' -and $manifest.data.measurementCodec -eq 'gzip-json'){
+      $measurementFile=Join-Path $Root 'measurements.json.gz'
+      & node (Join-Path $PSScriptRoot 'read-measurements.mjs') $measurementFile --check
+      if($LASTEXITCODE -ne 0){throw "Invalid measurement attachment: $Relative"}
+    }
     if($manifest.scope -notin @('full','core','browser','gpu','native','selected')){throw "Invalid test scope: $Relative"}
     if($manifest.outcome -eq 'blocked' -and $manifest.exitCode -ne 2){throw "Invalid blocked outcome: $Relative"}
     if($manifest.outcome -ne 'blocked' -and (!$manifest.testSummary -or $manifest.testSummary.tests -le 0)){throw "Missing structured test results: $Relative"}

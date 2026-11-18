@@ -59,6 +59,27 @@ Write-Output 'PASS: actual collaborator import accepts one independent folder wi
 
 $cloudProject=Join-Path $project 'cloud';$previousProject=$project;$project=$cloudProject
 $app=Publish (New-Run '20261002T010203Z-ab05' 'App')
+$attachment=Join-Path $app 'measurements.json.gz'
+$fixture=@'
+import {writeFileSync} from 'node:fs';
+import {gunzipSync} from 'node:zlib';
+import {encodeMeasurements} from './testing-tools/helpers/measurement-codec.mjs';
+const pixel_formats=Array.from({length:320},(_,i)=>({name:'protocol-format-'+i,width:i}));
+const entries=Array.from({length:40},(_,i)=>({kind:'engine.probe',caseId:'fixture-'+i,data:{result:{pixel_formats}}}));
+const bytes=encodeMeasurements({schema:2,entries});
+if(JSON.parse(gunzipSync(bytes)).schema!==3)throw Error('Expected compact attachment in transport fixture');
+writeFileSync(process.argv[2],bytes,{flag:'wx'});
+'@
+Push-Location $source
+try{
+  $fixture | & node --input-type=module - $attachment
+  if($LASTEXITCODE -ne 0){throw 'Could not create compact transport fixture'}
+}finally{Pop-Location}
+$appManifestPath=Join-Path $app 'manifest.json'
+$appManifest=Get-Content -LiteralPath $appManifestPath -Raw|ConvertFrom-EvidenceJson
+$appManifest|Add-Member -NotePropertyName data -NotePropertyValue @{measurementCodec='gzip-json'}
+Save $appManifestPath $appManifest
+Write-EvidenceChecksums $app
 $project=$previousProject
 $prior=@{}
 foreach($name in @('GITHUB_ACTIONS','RUNNER_ENVIRONMENT','GITHUB_REPOSITORY','GITHUB_RUN_ID','GITHUB_RUN_ATTEMPT','GITHUB_SHA')){$prior[$name]=[Environment]::GetEnvironmentVariable($name)}
@@ -74,7 +95,8 @@ Copy-Item -LiteralPath $zip -Destination (Join-Path $outerFolder 'bundle.zip')
 $outerZip=Join-Path $project 'artifact.zip';[IO.Compression.ZipFile]::CreateFromDirectory($outerFolder,$outerZip)
 $again=Import-GitHubEvidence $cloudReceiver $outerZip 'protocol/example' '456' '1' ('a'*40)
 $origin=Get-Content (Join-Path $saved 'origin.json') -Raw|ConvertFrom-EvidenceJson
-if($saved -ne $again -or @(Get-EvidenceFiles $saved).Count -ne 4 -or $origin.testStepOutcome -ne 'failure' -or $origin.originalChecksumsSha256 -ne (Get-FileHash (Join-Path $app 'SHA256SUMS.txt')).Hash -or (Get-FileHash (Join-Path $saved 'manifest.json')).Hash -ne (Get-FileHash (Join-Path $app 'manifest.json')).Hash){throw 'Cloud round-trip duplicated transports, changed results or lost identity'}
+if($saved -ne $again -or @(Get-EvidenceFiles $saved).Count -ne 5 -or $origin.testStepOutcome -ne 'failure' -or $origin.originalChecksumsSha256 -ne (Get-FileHash (Join-Path $app 'SHA256SUMS.txt')).Hash -or (Get-FileHash (Join-Path $saved 'manifest.json')).Hash -ne (Get-FileHash (Join-Path $app 'manifest.json')).Hash){throw 'Cloud round-trip duplicated transports, changed results or lost identity'}
+if((Get-FileHash -LiteralPath (Join-Path $saved 'measurements.json.gz')).Hash -ne (Get-FileHash -LiteralPath $attachment).Hash){throw 'Cloud transport changed the compressed measurements'}
 if(@(Get-ChildItem -LiteralPath (Join-Path (Get-EvidencePendingRoot $cloudReceiver) 'github-evidence-import') -Recurse -File).Count){throw 'Successful cloud import retained extracted transport copies'}
 $brokenOther=Join-Path (Get-EvidenceRoot $cloudReceiver) 'records/2026-10-02T01-02-03.000Z-1234ab07'
 $null=New-Item -ItemType Directory -Path $brokenOther
