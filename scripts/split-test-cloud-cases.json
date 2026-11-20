@@ -1,0 +1,53 @@
+{
+  "testing-tools/modules/ui/analysis-notes.test.mjs": [
+    "ui.unknown-and-changed-messages-resource-limits-and-unconfirmed-scene.38d4dfbc"
+  ],
+  "testing-tools/modules/reports/portable-repeat.test.mjs": [
+    "reports.a-generic-profile-rejects-mismatched-lengths-mixed-fields-wrong-in.7f14662b",
+    "reports.constant-interval-tables-and-integer-evidence-cannot-be-dropped-or.f5ec58cd",
+    "reports.equal-frames-require-matching-digests-but-a-digest-collision-does.a069397e",
+    "reports.generic-execution-identities-allow-extra-roles-without-removing-so.34cafc88",
+    "reports.legacy-0-4-and-draft-0-5-method-1-2-data-retain-their-original-evi.a7e520d9",
+    "reports.optional-metadata-rejects-values-that-json-would-lose-and-enforces.cee8a4bf",
+    "reports.shared-generic-descriptors-preserve-sha-256-sha-512-and-sha3-256-i.83c5456e",
+    "reports.unknown-declared-digests-are-preserved-as-data-while-unsupported-r.a8bbe55b"
+  ],
+  "testing-tools/tooling/test-system/github-archive.test.mjs": [
+    "test-system.tool.0876115f9747",
+    "test-system.tool.131309d222d6",
+    "test-system.tool.28b3ca93680d",
+    "test-system.tool.55b9a220c837",
+    "test-system.tool.5fa5ab2b8a48",
+    "test-system.tool.632415696eba",
+    "test-system.tool.7600debf7227",
+    "test-system.tool.9630dd2e255d",
+    "test-system.tool.9b83b3807dee",
+    "test-system.tool.b2d05c7c56c2",
+    "test-system.tool.d36f68e50f38",
+    "test-system.tool.deb7a896ebec",
+    "test-system.tool.f63745000e2b",
+    "test-system.tool.fb4e4979bd92"
+  ],
+  "testing-tools/tooling/test-system/product-contract.test.mjs": [
+    "test-system.software.complete",
+    "test-system.software.requirements",
+    "test-system.software.selection"
+  ],
+  "testing-tools/tooling/test-system/ci-scope.test.mjs": [
+    "test-system.split-plan.scope-and-stages",
+    "test-system.tool.2f6b559215ec",
+    "test-system.tool.4e1918853585",
+    "test-system.tool.59bcc1ac2208",
+    "test-system.tool.5e90cac3ffa3",
+    "test-system.tool.64463ad09881",
+    "test-system.tool.662deb87fcd1",
+    "test-system.tool.92e4c6974258",
+    "test-system.tool.971ab4c9bc0e",
+    "test-system.tool.c743b55a2a41",
+    "test-system.tool.c9271d36f03b",
+    "test-system.tool.d0df5766c581",
+    "test-system.tool.d6e62b441b9b",
+    "test-system.tool.d9ed535db49e",
+    "test-system.tool.f9f2338cac68"
+  ]
+}

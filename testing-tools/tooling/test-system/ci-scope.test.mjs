@@ -9,9 +9,9 @@ import {createServer} from 'node:http';
 import {fileURLToPath} from 'node:url';
 import {assessScope, baselinePassed, checkDocuments, comparisonBase, documentationChanges, forcedMainRecovery} from '../../../scripts/ci-scope.mjs';
 import {SplitGitHub} from '../../../scripts/split-test-github.mjs';
-import {splitPlan} from '../../../scripts/split-test-plan.mjs';
+import {reviewedCloudCase, splitPlan} from '../../../scripts/split-test-plan.mjs';
 import {repository} from '../../../scripts/split-test-receipts.mjs';
-import {selectCases} from '../../helpers/case-catalog.mjs';
+import {caseCatalog, selectCases} from '../../helpers/case-catalog.mjs';
 
 const a = 'a'.repeat(40), b = 'b'.repeat(40), c = 'c'.repeat(40);
 const successfulCheck = sha => ({name: 'Windows full regression', head_sha: sha,
@@ -195,14 +195,26 @@ test('verification tags can validate documentation before main accepts the same 
 
 test('split planning covers reviewed module integrations and escalates validation entrypoint changes', t => {
   const f = fixture(t);
+  const bitrate = 'public/bitrate-model.js', distribution = 'public/distribution-model.js';
+  const repeat = 'public/repeat-view.js', notes = 'public/analysis-notes.js';
+  const fixtureLock = 'testing-tools/fixtures.lock.json';
+  const fixtureEntry = {path:'siti/layout-reference.json', sourceFile:'testing-tools/data/layout-reference.json'};
+  const attachment = {path:'siti/test-attachment.json', sourceFile:'testing-tools/data/test-attachment.json'};
+  const locked = files => JSON.stringify({schema:2, files});
+  const sharedScripts = ['scripts/split-tests.mjs', 'scripts/read-measurements.mjs',
+    'scripts/github-archive-api.mjs', 'scripts/github-archive-store.mjs'];
   const base = f.commit({
     'runtime-lock.json': '{}\n',
-    'public/bitrate-model.js': '// baseline\n',
-    'public/repeat-view.js': '// baseline\n',
-    'scripts/split-tests.mjs': '// baseline\n',
+    [bitrate]: '// baseline\n',
+    [distribution]: '// baseline\n',
+    [repeat]: '// baseline\n',
+    [notes]: '// baseline\n',
+    [fixtureLock]: locked([{...fixtureEntry, attachments:[attachment.path]}, attachment]),
+    [attachment.sourceFile]: '{}\n',
+    ...Object.fromEntries(sharedScripts.map(file => [file, '// baseline\n'])),
   });
   const plan = (sha, options = {}) => splitPlan(f.repo, {sha, base, anchor: base, ...options});
-  for (const [file, modules] of [['public/bitrate-model.js', ['bitrate']], ['public/repeat-view.js', ['repeat', 'ui']]]) {
+  for (const [file, modules] of [[bitrate, ['bitrate']], [repeat, ['repeat', 'ui']]]) {
     f.git('checkout', '--detach', base);
     const sha = f.commit({[file]: '// changed\n'});
     const selected = plan(sha);
@@ -216,8 +228,55 @@ test('split planning covers reviewed module integrations and escalates validatio
     assert.equal(plan(mixed, {anchor: sha}).scope, 'full');
   }
   f.git('checkout', '--detach', base);
-  const sha = f.commit({'scripts/split-tests.mjs': '// changed gate\n'});
-  assert.deepEqual(plan(sha).stages, ['gpu', 'native', 'package', 'online']);
+  const first = f.commit({[bitrate]: '// changed window\n'});
+  const pair = f.commit({[distribution]: '// changed distribution\n'});
+  const selected = plan(pair, {base:first});
+  assert.equal(selected.scope, 'selected');
+  assert.equal(plan(pair, {base:first, anchor:first}).scope, 'selected');
+  assert.ok(selected.local.includes('bitrate.discrete-audio-evidence-preserves-negative-duplicate-pts-and-unkno.1807e06e'));
+  assert.ok(selected.local.includes('ui.actual-audio-packets-optional-rates-and-frame-axes-survive-export.db30a17e'));
+  assert.ok(selected.cloud.includes('reports.legacy-0-4-and-draft-0-5-method-1-2-data-retain-their-original-evi.a7e520d9'));
+  const full = plan(pair, {forceFull:true});
+  assert.ok(selected.local.length + selected.cloud.length < full.local.length + full.cloud.length);
+  const preview = plan(pair, {base:first, explain:true});
+  assert.equal(preview.hash, selected.hash);
+  assert.deepEqual(preview.explanation.baseChanges.map(c => c.file), [distribution]);
+  assert.deepEqual(preview.explanation.anchorChanges.map(c => c.file), [bitrate, distribution]);
+  assert.throws(() => plan(pair, {anchor:'invalid-anchor'}), /Exact candidate and baseline/);
+  assert.equal(plan(pair, {forceFull:true, anchor:null}).scope, 'full');
+  assert.equal(plan(pair, {forceFull:true, anchor:base}).anchor, base);
+  assert.equal(plan(pair, {release:true}).scope, 'full');
+
+  const mixed = f.commit({[repeat]: '// unrelated repeat view\n'});
+  assert.equal(plan(mixed, {base:pair}).scope, 'full');
+  assert.equal(plan(f.commit({[notes]: '// shared producer\n'}), {base:mixed}).scope, 'full');
+
+  f.git('checkout', '--detach', base);
+  const data = f.commit({[attachment.sourceFile]: '{"changed":true}\n'});
+  assert.equal(plan(data).scope, 'full');
+  assert.deepEqual(plan(data).stages, ['gpu']);
+  const detached = f.commit({[fixtureLock]: locked([fixtureEntry, {...attachment, bytes:2}])});
+  assert.deepEqual(plan(detached, {base:data}).stages, ['gpu']);
+  f.git('checkout', '--detach', base);
+  const orphan = f.commit({[fixtureLock]: locked([fixtureEntry, attachment, {path:'siti/orphan.json'}])});
+  assert.deepEqual(plan(orphan).stages, ['gpu', 'native', 'package', 'online']);
+  for (const file of sharedScripts) {
+    f.git('checkout', '--detach', base);
+    const gate = f.commit({[file]: '// changed gate\n'});
+    assert.deepEqual(plan(gate).stages, ['gpu', 'native', 'package', 'online']);
+  }
+  f.git('checkout', '--detach', base);
+  const doc = plan(f.commit({'README.md': '# Updated guide\n'}));
+  assert.equal(doc.scope, 'docs-only');
+  assert.deepEqual([doc.local, doc.cloud, doc.stages], [[], [], []]);
+
+  const approved = caseCatalog.cases.find(c => c.id ===
+    'ui.unknown-and-changed-messages-resource-limits-and-unconfirmed-scene.38d4dfbc');
+  assert.equal(reviewedCloudCase(approved), true);
+  assert.equal(reviewedCloudCase({...approved, id:'ui.new-unreviewed-case'}), false);
+  assert.equal(reviewedCloudCase({...approved, file:'testing-tools/modules/ui/other.test.mjs'}), false);
+  assert.throws(() => reviewedCloudCase({...approved, inputs:[fixtureEntry.path]}), /unreviewed prerequisites/);
+  assert.throws(() => reviewedCloudCase({...approved, requiresBrowser:true}), /unreviewed prerequisites/);
 });
 
 test('missing/failed baseline checks, API failures, missing objects and inconsistent checkout default to full', async t => {

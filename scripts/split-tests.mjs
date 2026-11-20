@@ -36,7 +36,7 @@ function options(argv){
   const settings = {};
   for(let i=0;i<argv.length;i++){
     const flag=argv[i];
-    if(['--release','--full','--recovery'].includes(flag)){
+    if(['--release','--full','--recovery','--explain'].includes(flag)){
       const key=flag==='--full'?'forceFull':flag.slice(2);
       if(key in settings)throw Error('Duplicate '+flag);
       settings[key]=true;
@@ -51,13 +51,14 @@ function options(argv){
 
 async function local(command,args){
   const opts=options(args);
+  if(opts.explain && command!=='plan')throw Error('--explain applies to plan only');
   const sha=head(repo);
   if(opts.recovery&&['base','anchor','release','forceFull'].some(key=>key in opts)){
     throw Error('--recovery supplies its own baseline and full non-release scope');
   }
   const settings=opts.recovery?recoveryOptions(prepareRecovery(sha)):
-    {...opts,base:opts.base??mainSha(),anchor:opts.anchor??process.env.MEDIASCOPE_SPLIT_BASELINE};
-  const plan=splitPlan(repo,{...settings,sha});
+    {...opts,base:opts.base??mainSha(),anchor:opts.forceFull?null:opts.anchor??process.env.MEDIASCOPE_SPLIT_BASELINE};
+  const plan=splitPlan(repo,{...settings,sha,explain:opts.explain});
   if(command==='plan'){console.log(JSON.stringify(plan,null,2));return;}
   assertClean();
   if(plan.scope==='docs-only'){console.log('Documentation-only plan; Actions checks the documents and no local test receipt is required.');return;}
@@ -122,7 +123,8 @@ async function ci(){
   }else{
     const tag=parseTag(github.ref);
     if(isRecoveryPreflightTag(tag)) recovery=prepareRecovery(sha);
-    const settings=recovery?recoveryOptions(recovery):{base:mainSha(),anchor,...profile(tag)};
+    const runProfile=profile(tag);
+    const settings=recovery?recoveryOptions(recovery):{base:mainSha(),anchor:runProfile.forceFull?null:anchor,...runProfile};
     const plan=splitPlan(repo,{sha,...settings});
     if(eventName==='push'){
       comparisonBase(eventName,event,sha,plan.base);
@@ -185,7 +187,7 @@ try {
   else if(command==='commits'&&!args.length)await commits();
   else if(command==='plan'||command==='local')await local(command,args);
   else if(command==='release')await release(args);
-  else throw Error('Usage: npm run test:split -- plan|local [--base <sha>] [--anchor <verified-sha>] [--full|--release|--recovery] [--archive <ZIP>]');
+  else throw Error('Usage: npm run test:split -- plan|local [--base <sha>] [--anchor <verified-sha>] [--full|--release|--recovery] [--archive <ZIP>] [--explain (plan only)]');
 }catch(error){
   console.error(error.message);
   process.exitCode=1;
