@@ -81,6 +81,7 @@ test('baseline requires completed successful checks from the expected SHA and Gi
   });
   const normal = run(1,'full'), recovery = run(2,'recovery');
   let runs = [normal,recovery];
+  let priorScope = 'full', priorAnchor = b;
   const reader = new SplitGitHub('',null,{get:async route=>{
     if(route.includes('/runs?'))return {data:{total_count:runs.length,workflow_runs:runs}};
     if(route==='')return {data:repo};
@@ -92,7 +93,7 @@ test('baseline requires completed successful checks from the expected SHA and Gi
   reader.receipt = async (origin, requirements) => {
     if(origin.conclusion!=='success'||origin.status!=='completed')return readReceipt(origin,requirements);
     return {
-      proof:{schema:2,kind:'split-acceptance',scope:'full',sha:a,
+      proof:{schema:2,kind:'split-acceptance',scope:priorScope,sha:a,base:b,anchor:priorAnchor,
         github:{repository,runId:String(origin.id),runAttempt:'1',ref:'refs/tags/'+origin.head_branch}},
       jobs:[{name:'Review MediaScope local evidence',head_sha:a,run_id:origin.id,run_attempt:1,status:'completed',conclusion:'success'}]
     };
@@ -101,6 +102,15 @@ test('baseline requires completed successful checks from the expected SHA and Gi
   runs = [normal,recovery,failedRecovery];
   assert.equal((await reader.previousAcceptance(a)).origin.id,normal.id);
   await reader.verifyAnchor({scope:'selected',anchor:a});
+  for (const scope of ['selected','docs-only']) {
+    priorScope = scope;
+    await reader.verifyAnchor({scope:'selected',base:a,anchor:a});
+    await assert.rejects(reader.verifyAnchor({scope:'selected',base:b,anchor:a}), /historical anchor/);
+  }
+  priorAnchor = null;
+  await assert.rejects(reader.verifyAnchor({scope:'selected',base:a,anchor:a}), /exact base/);
+  priorAnchor = b;
+  priorScope = 'full';
   await assert.rejects(reader.previousAcceptance(a,{recovery:true}), /missing a completed passing result/);
 
   const failedNormal = run(4,'full','failure');
@@ -197,6 +207,8 @@ test('split planning covers reviewed module integrations and escalates validatio
   const f = fixture(t);
   const bitrate = 'public/bitrate-model.js', distribution = 'public/distribution-model.js';
   const repeat = 'public/repeat-view.js', notes = 'public/analysis-notes.js';
+  const basic = 'public/basic-info.js', properties = 'public/properties.js';
+  const selectionPolicy = 'scripts/split-test-plan.mjs';
   const fixtureLock = 'testing-tools/fixtures.lock.json';
   const fixtureEntry = {path:'siti/layout-reference.json', sourceFile:'testing-tools/data/layout-reference.json'};
   const attachment = {path:'siti/test-attachment.json', sourceFile:'testing-tools/data/test-attachment.json'};
@@ -209,6 +221,9 @@ test('split planning covers reviewed module integrations and escalates validatio
     [distribution]: '// baseline\n',
     [repeat]: '// baseline\n',
     [notes]: '// baseline\n',
+    [basic]: '// baseline\n',
+    [properties]: '// baseline\n',
+    [selectionPolicy]: '// baseline\n',
     [fixtureLock]: locked([{...fixtureEntry, attachments:[attachment.path]}, attachment]),
     [attachment.sourceFile]: '{}\n',
     ...Object.fromEntries(sharedScripts.map(file => [file, '// baseline\n'])),
@@ -250,6 +265,28 @@ test('split planning covers reviewed module integrations and escalates validatio
   const mixed = f.commit({[repeat]: '// unrelated repeat view\n'});
   assert.equal(plan(mixed, {base:pair}).scope, 'full');
   assert.equal(plan(f.commit({[notes]: '// shared producer\n'}), {base:mixed}).scope, 'full');
+
+  f.git('checkout', '--detach', base);
+  const oldMain = f.commit({'engine.mjs': '// previously accepted shared change\n'});
+  const basicChange = f.commit({[basic]: '// changed display\n', [properties]: '// changed properties\n'});
+  assert.equal(plan(basicChange, {base:oldMain}).scope, 'full');
+  const media = plan(basicChange, {base:oldMain,anchor:oldMain});
+  assert.equal(media.scope, 'selected');
+  assert.deepEqual(media.stages, []);
+  assert.ok(media.local.includes('ui.real-subtitles-attachments-chapters-and-narrow-layout-remain-acces.02e8812b'));
+
+  f.git('checkout', '--detach', base);
+  const policy = f.commit({[selectionPolicy]: '// changed selection\n','docs/testing.md':'# Updated policy\n'});
+  const verification = plan(policy);
+  assert.equal(verification.scope, 'selected');
+  assert.deepEqual(verification.stages, []);
+  const verificationFiles = new Set(['ci-scope','github-archive','selection','product-contract']
+    .map(name => 'testing-tools/tooling/test-system/'+name+'.test.mjs'));
+  assert.deepEqual([...verification.local,...verification.cloud].sort(), selectCases().cases
+    .filter(c => verificationFiles.has(c.file)).map(c => c.id).sort());
+  const execution = f.commit({'scripts/split-tests.mjs': '// changed execution\n'});
+  assert.equal(plan(execution, {base:policy,anchor:policy}).scope, 'full');
+  assert.deepEqual(plan(execution).stages, ['gpu', 'native', 'package', 'online']);
 
   f.git('checkout', '--detach', base);
   const data = f.commit({[attachment.sourceFile]: '{"changed":true}\n'});

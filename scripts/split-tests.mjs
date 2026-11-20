@@ -49,6 +49,10 @@ function options(argv){
   return settings;
 }
 
+function ordinaryOptions(base, profile, anchor) {
+  return {...profile,base,anchor:anchor??(profile.forceFull||profile.release?null:base)};
+}
+
 async function local(command,args){
   const opts=options(args);
   if(opts.explain && command!=='plan')throw Error('--explain applies to plan only');
@@ -56,8 +60,9 @@ async function local(command,args){
   if(opts.recovery&&['base','anchor','release','forceFull'].some(key=>key in opts)){
     throw Error('--recovery supplies its own baseline and full non-release scope');
   }
+  if(opts.anchor && command!=='plan')throw Error('--anchor applies to historical plan previews only');
   const settings=opts.recovery?recoveryOptions(prepareRecovery(sha)):
-    {...opts,base:opts.base??mainSha(),anchor:opts.forceFull?null:opts.anchor??process.env.MEDIASCOPE_SPLIT_BASELINE};
+    ordinaryOptions(opts.base??mainSha(),opts,opts.forceFull?null:opts.anchor);
   const plan=splitPlan(repo,{...settings,sha,explain:opts.explain});
   if(command==='plan'){console.log(JSON.stringify(plan,null,2));return;}
   assertClean();
@@ -100,7 +105,6 @@ async function ci(){
   const sha=head(repo);
   if(sha!==process.env.GITHUB_SHA)throw Error('GitHub and checkout SHA differ');
   const eventName=process.env.GITHUB_EVENT_NAME,event=await read(process.env.GITHUB_EVENT_PATH);
-  const anchor=process.env.MEDIASCOPE_SPLIT_BASELINE;
   const dir=await scratch(),identity=await identities(repo);
   const api=new SplitGitHub(repo,dir);
   let report,recovery;
@@ -115,7 +119,7 @@ async function ci(){
     const base=recovery?.base??(mainPush?comparisonBase(eventName,event,sha):mainSha());
     const {origin,row,approval}=await api.previousAcceptance(sha,{recovery:Boolean(recovery)});
     const prior=row.proof;
-    const settings=recovery?recoveryOptions(recovery):{base,anchor:prior.scope==='full'?prior.anchor:anchor,...profile(origin.head_branch)};
+    const settings=recovery?recoveryOptions(recovery):{base,anchor:prior.anchor,...profile(origin.head_branch)};
     const plan=splitPlan(repo,{sha,...settings});
     verifyAcceptance(prior,plan,identity);
     await api.verifyAnchor(plan);
@@ -123,8 +127,7 @@ async function ci(){
   }else{
     const tag=parseTag(github.ref);
     if(isRecoveryPreflightTag(tag)) recovery=prepareRecovery(sha);
-    const runProfile=profile(tag);
-    const settings=recovery?recoveryOptions(recovery):{base:mainSha(),anchor:runProfile.forceFull?null:anchor,...runProfile};
+    const settings=recovery?recoveryOptions(recovery):ordinaryOptions(mainSha(),profile(tag));
     const plan=splitPlan(repo,{sha,...settings});
     if(eventName==='push'){
       comparisonBase(eventName,event,sha,plan.base);
@@ -187,7 +190,7 @@ try {
   else if(command==='commits'&&!args.length)await commits();
   else if(command==='plan'||command==='local')await local(command,args);
   else if(command==='release')await release(args);
-  else throw Error('Usage: npm run test:split -- plan|local [--base <sha>] [--anchor <verified-sha>] [--full|--release|--recovery] [--archive <ZIP>] [--explain (plan only)]');
+  else throw Error('Usage: npm run test:split -- plan|local [--base <sha>] [--full|--release|--recovery] [--archive <ZIP>] [--anchor <sha> / --explain (plan only)]');
 }catch(error){
   console.error(error.message);
   process.exitCode=1;

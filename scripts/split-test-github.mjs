@@ -155,7 +155,11 @@ export class SplitGitHub {
   async verifyAnchor(plan) {
     if(plan.scope==='full')return;
     const {row}=await this.previousAcceptance(plan.anchor);
-    if(row.proof.scope!=='full')throw Error('Scope reduction requires a completed full acceptance for the anchor SHA');
+    const prior=row.proof;
+    if(prior.scope==='full')return;
+    if(plan.anchor===plan.base && ['selected','docs-only'].includes(prior.scope) &&
+       [prior.base,prior.anchor].every(sha=>/^(?!0{40}$)[a-f0-9]{40}$/.test(sha??'')&&sha!==plan.anchor))return;
+    throw Error('Scope reduction requires a completed acceptance for the exact base or a full acceptance for a historical anchor');
   }
 
   async prepareAcceptance({plan,identity,tag,token}) {

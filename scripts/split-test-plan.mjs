@@ -13,7 +13,15 @@ const distributionModel = 'public/distribution-model.js';
 const selectedGroups = [
   [bitrateModel, distributionModel],
   ['public/repeat-view.js'],
+  ['public/basic-info.js', 'public/properties.js'],
 ];
+const scopeTests = tooling + 'ci-scope.test.mjs';
+const selectionPolicyFiles = new Set([
+  'scripts/split-test-plan.mjs', 'scripts/split-test-cloud-cases.json', scopeTests, 'docs/testing.md',
+]);
+const selectionPolicyTests = new Set([scopeTests,
+  ...['selection', 'product-contract', 'github-archive'].map(name => tooling + name + '.test.mjs'),
+]);
 const validationEntrypoints = new Set([
   '.gitattributes',
   'scripts/check-commits.mjs',
@@ -144,15 +152,17 @@ export function splitPlan(repo, {sha, base, anchor, release = false, forceFull =
     throw Error('Main history recovery requires its authorized baseline and full non-release acceptance');
   }
   const diff = changes(repo, base, sha);
-  const anchorDiff = anchor && !forceFull && !release ? changes(repo, anchor, sha) : [];
+  const anchorDiff = anchor && !forceFull && !release ? (anchor === base ? diff : changes(repo, anchor, sha)) : [];
   const canNarrow = !forceFull && !release && Boolean(anchor) && diff.length > 0 && anchorDiff.length > 0;
   const considered = [...diff,...anchorDiff];
   const paths = [...new Set(considered.map(c=>c.file))];
+  const regular = canNarrow && considered.every(change => change.regularEdit);
   const docsOnly = canNarrow && considered.every(c=>c.regularEdit && c.file.endsWith('.md')) &&
     git(repo,'check-attr','--source='+sha,'-z','mediascope-validation','--',...paths)===
       paths.map(file=>file+'\0mediascope-validation\0docs\0').join('');
   const reviewedGroup = selectedGroups.some(group => paths.every(file => group.includes(file)));
-  const sources = canNarrow && reviewedGroup && considered.every(change => change.regularEdit)
+  const policyOnly = regular && paths.every(file => selectionPolicyFiles.has(file));
+  const sources = regular && reviewedGroup
     ? paths.map(file => productContract.sources.find(source => source.file === file)) : [];
   if (sources.some(source => !source)) throw Error('Reviewed source is missing from the product contract');
   const modules = [...new Set(sources.flatMap(source => source.modules))].sort();
@@ -160,10 +170,14 @@ export function splitPlan(repo, {sha, base, anchor, release = false, forceFull =
   const reviewedRequirements = productContract.requirements.filter(r => requirements.has(r.id));
   if (reviewedRequirements.length !== requirements.size) throw Error('Reviewed source has an unknown product requirement');
   const requirementCases = new Set(reviewedRequirements.flatMap(r => [...r.cases, ...(r.integrationCases ?? [])]));
-  const selected = modules.length > 0;
-  const moduleCases = new Set(selected ? selectCases({modules}).caseIds : []);
-  const selection = docsOnly ? [] : selectCases().cases.filter(c =>
+  const selected = policyOnly || modules.length > 0;
+  const moduleCases = new Set(modules.length ? selectCases({modules}).caseIds : []);
+  const general = docsOnly ? [] : selectCases().cases;
+  const selection = general.filter(c => policyOnly ? selectionPolicyTests.has(c.file) :
     !selected || requirementCases.has(c.id) || moduleCases.has(c.id));
+  if (policyOnly && ![...selectionPolicyTests].every(file => selection.some(c => c.file === file))) {
+    throw Error('Selection policy verification is missing required tests');
+  }
   const extraStages = caseCatalog.cases.filter(c => requirementCases.has(c.id) &&
     (c.scope === 'gpu' || c.scope === 'native'));
   for (const id of requirementCases) {
@@ -176,7 +190,8 @@ export function splitPlan(repo, {sha, base, anchor, release = false, forceFull =
     if (c.file === commitFile) continue;
     (reviewedCloudCase(c) ? cloud : local).push(c.id);
   }
-  const stageReasons = docsOnly ? {} : localStages(repo, base, sha, diff, extraStages, release || Boolean(recovery));
+  const stageReasons = docsOnly || policyOnly ? {} :
+    localStages(repo, base, sha, diff, extraStages, release || Boolean(recovery));
   const stages = Object.keys(stageReasons);
   const stageCases = Object.fromEntries(stages.filter(id => ['gpu','native'].includes(id))
     .map(id => [id, selectCases({suite:id}).caseIds.sort()]));
@@ -193,6 +208,7 @@ export function splitPlan(repo, {sha, base, anchor, release = false, forceFull =
   if (!explain) return result;
   let reason = 'Changed paths are outside a reviewed file group or documentation policy';
   if (docsOnly) reason = 'Both comparisons contain only reviewed documentation edits';
+  else if (policyOnly) reason = 'Only reviewed selection policy files changed';
   else if (selected) reason = 'Both comparisons fit a reviewed group of regular source edits';
   else if (recovery || release || forceFull) reason = 'Explicit full profile';
   else if (!anchor) reason = 'No full acceptance anchor configured';

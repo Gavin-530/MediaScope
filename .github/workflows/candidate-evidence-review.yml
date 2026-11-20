@@ -27,7 +27,6 @@ jobs:
       - name: Verify the candidate and both partitions
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          MEDIASCOPE_SPLIT_BASELINE: ${{ vars.MEDIASCOPE_SPLIT_BASELINE }}
           MEDIASCOPE_MAIN_RECOVERY: ${{ vars.MEDIASCOPE_MAIN_RECOVERY }}
           MEDIASCOPE_SPLIT_RECEIPT: ${{ inputs.local_receipt }}
           MEDIASCOPE_ACCEPTANCE_MODE: review

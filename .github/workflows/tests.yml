@@ -49,7 +49,6 @@ jobs:
         if: env.SPLIT_ENABLED == 'true'
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          MEDIASCOPE_SPLIT_BASELINE: ${{ vars.MEDIASCOPE_SPLIT_BASELINE }}
           MEDIASCOPE_MAIN_RECOVERY: ${{ vars.MEDIASCOPE_MAIN_RECOVERY }}
           MEDIASCOPE_ACCEPTANCE_MODE: docs
         run: node scripts/split-tests.mjs ci
