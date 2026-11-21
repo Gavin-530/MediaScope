@@ -14,7 +14,7 @@ export async function hdrControl(directory){
  await mkdir(directory,{recursive:true});const file=path.join(directory,'hdr-pcm.mov');
  await run(FF,['-hide_banner','-v','error','-y','-f','lavfi','-i','testsrc2=size=192x108:rate=12:duration=0.5','-f','lavfi','-i','sine=duration=0.5','-c:v','libx265','-preset','ultrafast','-pix_fmt','yuv420p10le','-x265-params','log-level=error:pools=1:colorprim=9:transfer=16:colormatrix=9:master-display=G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1):max-cll=1000,400','-tag:v','hvc1','-c:a','pcm_s16le',file]);return file;
 }
-export async function av1Control(directory){
+export async function av1Control(directory,{duration=0.5}={}){
  await mkdir(directory,{recursive:true});const file=path.join(directory,'av1.mp4');
- await run(FF,['-hide_banner','-v','error','-y','-f','lavfi','-i','testsrc2=size=192x108:rate=12:duration=0.5','-c:v','libaom-av1','-cpu-used','8','-crf','35',file]);return file;
+ await run(FF,['-hide_banner','-v','error','-y','-f','lavfi','-i',`testsrc2=size=192x108:rate=12:duration=${duration}`,'-c:v','libaom-av1','-cpu-used','8','-crf','35',file]);return file;
 }

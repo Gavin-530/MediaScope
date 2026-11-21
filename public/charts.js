@@ -137,8 +137,11 @@ export function plot(
   data,
   {
     unit = "",
+    unitNote = "",
     axis = "时间 s",
     frames = false,
+    frameLegend,
+    idleLabel = frames ? "点击帧查看证据。" : "",
     describe,
     onPick,
     onReset,
@@ -201,7 +204,14 @@ export function plot(
     xBounds = host.querySelector('.plot-x-bounds');
   xScale.value = xMode;
   if (height) canvas.style.height = height + "px";
-  host.querySelector(".plot-axis-y").textContent = "纵轴：" + unit;
+  const axisY = host.querySelector(".plot-axis-y");
+  axisY.textContent = "纵轴：" + unit + (unitNote ? " · " + unitNote : "");
+  const frameLegendElement = frameLegend ? document.createElement("div") : null;
+  if (frameLegendElement) {
+    frameLegendElement.className = "plot-legend hidden";
+    frameLegendElement.textContent = frameLegend;
+    axisY.after(frameLegendElement);
+  }
   const axisLabel = "横轴：" + axis + "；纵轴：" + unit;
   canvas.setAttribute("aria-label", axisLabel + '；单击新位置固定读数，单击固定线取消。');
   const scale = host.querySelector("[data-field=scale]");
@@ -228,13 +238,16 @@ export function plot(
   let a = minimum,
     b = maximum,
     w = 0,
+    frameLabelHeight = 0,
     drag = null,
     hoverX = null,
     pinned = false,
     currentY = null;
   const fullExtent = extent(data, frames || stems || integerY);
   const left = 76,
-    right = 25;
+    right = 25,
+    top = 12,
+    bottom = 50;
   const xValue = (x) =>
     a + ((x - left) / Math.max(1, w - left - right)) * (b - a);
   const clickPins = [];
@@ -270,7 +283,7 @@ export function plot(
       hoverLine.style.left = (left + (hoverX - a) / (b - a) * (w - left - right)) + 'px';
   };
   const inPlot = (e) => e.offsetX >= left && e.offsetX <= w - right &&
-    e.offsetY >= 12 && e.offsetY <= canvas.clientHeight - 50;
+    e.offsetY >= top && e.offsetY <= canvas.clientHeight - bottom + frameLabelHeight;
   const hitsPinnedLine = (e) => {
     if (!pinned || hoverLine.hidden) return false;
     const rect = hoverLine.getBoundingClientRect();
@@ -328,11 +341,13 @@ export function plot(
     const below = finite.filter(p => p[1] < lo).length, above = finite.filter(p => p[1] > hi).length;
     yStatus.textContent = manual && lo !== 0 ? 'Y 轴下限非零。' : '';
     if (below || above) yStatus.textContent += ` 当前区间超出 Y 轴：上方 ${above} 项、下方 ${below} 项（仅裁剪显示）。`;
-    const base = h - 50,
-      top = 12,
+    const base = h - bottom,
+      frameWidth = (w - left - right) / (b - a),
       px = (x) => left + ((x - a) / (b - a)) * (w - left - right),
       py = (y) => base - ((y - lo) / (hi - lo)) * (base - top),
       zero = py(0);
+    frameLabelHeight = frames && frameLegendElement && frameWidth > 18 && visible.length ? 14 : 0;
+    frameLegendElement?.classList.toggle("hidden", frameLabelHeight === 0);
     const digits = Math.min(
       manual ? 15 : 6,
       Math.max(1, Math.ceil(-Math.log10((hi - lo) / 4)) + 1),
@@ -369,7 +384,7 @@ export function plot(
     }
     c.setLineDash([]);
     if (frames) {
-      const bw = Math.max(1, (w - left - right) / (b - a));
+      const bw = Math.max(1, frameWidth);
       for (const p of finite) {
         const f = p[2],
           x = px(p[0]), y = py(p[1]);
@@ -385,10 +400,6 @@ export function plot(
         if (f.key) {
           c.fillStyle = "#f5f1ce";
           c.fillRect(x, top, Math.max(1, bw - 1), 4);
-        }
-        if (bw > 18) {
-          c.fillStyle = "#e7edf5";
-          c.fillText(f.type ?? "?", x + 2, base + 13);
         }
       }
     } else if (stems) {
@@ -476,7 +487,16 @@ export function plot(
     }
     c.restore();
     c.fillStyle = "#98a7ba";
+    if (frameLabelHeight) {
+      c.save();
+      c.beginPath();
+      c.rect(left, base, w - left - right, frameLabelHeight);
+      c.clip();
+      for (const point of visible) c.fillText(point[2].type, px(point[0]) + 2, base + 11);
+      c.restore();
+    }
     c.lineWidth = 1;
+    const tickY = base + 18 + frameLabelHeight;
     const ticks = Math.max(1, Math.min(4, Math.floor((w - left - right) / 90))),
       xd = Math.min(
         6,
@@ -496,7 +516,7 @@ export function plot(
       }
       c.textAlign = "center";
       if (zeroX === null || Math.abs(x - zeroX) > (c.measureText(text).width + zeroLabelWidth) / 2 + 8)
-        c.fillText(text, x, base + 18);
+        c.fillText(text, x, tickY);
     }
     // Zero is a coordinate reference, not a replacement for the source start.
     // Merge nearby grid marks/labels instead of moving zero or the viewport.
@@ -506,7 +526,7 @@ export function plot(
       c.moveTo(zeroX, top);
       c.lineTo(zeroX, base + 4);
       c.stroke();
-      c.fillText('0', zeroX, base + 18);
+      c.fillText('0', zeroX, tickY);
     }
     c.textAlign = "center";
     c.fillText("横轴：" + axis, left + (w - left - right) / 2, h - 7);
@@ -677,7 +697,7 @@ export function plot(
   });
   ro.observe(canvas);
   setRange(...(initial || [minimum, maximum]), false);
-  label.textContent = frames ? "点击帧查看证据。" : "";
+  label.textContent = idleLabel;
   return { setRange, dispose: () => ro.disconnect() };
 }
 

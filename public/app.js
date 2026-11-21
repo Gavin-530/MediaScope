@@ -1336,6 +1336,12 @@ function renderMedia(r,owner) {
   if (r.type === "analyze" || r.frames) {
     if (r.frames && frameEnabled) {
     const gops = r.coding?.gops || legacyGops(r.frames);
+    const av1Events = r.coding?.codec === "av1" ? `<details id="av1-events" open>
+      <summary>AV1 编码事件</summary>
+      <p>新编码帧 ${fmt(r.coding.counts.encoded, 0)} · 显示事件 ${fmt(r.coding.counts.shown, 0)} · 隐藏帧 ${fmt(r.coding.counts.hidden, 0)} · 显示已有帧 ${fmt(r.coding.counts.showExisting, 0)}</p>
+      <div id="av1-plot"></div><label>编码事件 #<input id="av1-index" type="number" min="0" max="${r.coding.events.length - 1}" value="0"></label>
+      <div id="av1-detail"></div>${raw(r.coding.sequences, "AV1 序列头（去重）")}
+    </details>` : "";
     html += section(
       "帧结构与 GOP",
       metricStrip([
@@ -1343,7 +1349,8 @@ function renderMedia(r,owner) {
         ['GOP / 关键帧区间',gops.length],['非递增时间戳',r.summary.nonIncreasing],
       ]) + `<div id="gop-overview"></div><div class="pager"><button id="gop-prev" class="secondary">上一 GOP</button><label>GOP #<input id="gop-index" type="number" min="0" max="${gops.length - 1}" value="0"></label><button id="gop-next" class="secondary">下一 GOP</button><span id="gop-info"></span></div><div id="frame-plot"><label>坐标<select id="frame-axis" aria-label="帧大小图 X 轴坐标"><option value="time">呈现时间（s）</option><option value="frame">显示帧序号</option></select></label></div><p class="notice hidden" id="frame-axis-warning"></p><div id="frame-detail" class="frame-detail"></div>` +
       explanation('GOP 与帧大小的读取说明', '<p class="hint">显示顺序视图。I / P / B 是预测类型；IDR / CRA / BLA 是码流访问类型，二者不混用。GOP 以随机访问/关键帧区间呈现，不据此猜测开放或闭合。</p><p class="hint" id="frame-axis-note"></p>' + hintNotes(notes.frames)) +
-      '<details><summary>逐帧列表 / CSV</summary><div class="pager"><button id="prev" class="secondary">上一页</button><span id="page"></span><button id="next" class="secondary">下一页</button><button id="csv" class="secondary">导出帧 CSV</button></div><div id="frames"></div></details>',
+      '<details><summary>逐帧列表 / CSV</summary><div class="pager"><button id="prev" class="secondary">上一页</button><span id="page"></span><button id="next" class="secondary">下一页</button><button id="csv" class="secondary">导出帧 CSV</button></div><div id="frames"></div></details>' +
+      av1Events,
       "frames",
     );
     }
@@ -1373,12 +1380,6 @@ function renderMedia(r,owner) {
         "complexity",
       );
     } else if (r.content) html += section("SI/TI 内容复杂度", notices([r.content.reason])+sitiAttemptsHTML(r.content.attempts)+(r.content.errorCode==='luma-outside-nominal'&&owner&&!owner.startsWith('imported-')?'<button id="retry-clipped-siti" class="secondary">按标称黑白裁剪后重算 SI/TI</button>':''), "complexity");
-    if (r.coding?.codec === "av1")
-      html += section(
-        "AV1 编码帧 / 显示事件",
-        `<p>新编码帧 ${r.coding.counts.encoded} · 隐藏帧 ${r.coding.counts.hidden} · SHOW_EXISTING ${r.coding.counts.showExisting} · 显示事件 ${r.coding.counts.shown}</p><p class="hint">按码流编码顺序列出所有帧头事件，包含 KEY / INTER / INTRA_ONLY / SWITCH、隐藏帧和 SHOW_EXISTING。H=隐藏、S=显示已有帧、V=新帧直接显示。点击色带查看结构字段、刷新掩码与参考槽。OBU 负载字节不一定等于完整图像大小。</p><div id="av1-plot"></div><label>编码事件 #<input id="av1-index" type="number" min="0" max="${r.coding.events.length - 1}" value="0"></label><div id="av1-detail"></div>${raw(r.coding.sequences, "AV1 序列头（去重）")}`,
-        "frames",
-      );
     const audio = (r.tracks || []).filter((t) => t.type === "audio");
     if (audio.length && frameEnabled) html += `<section class="section"><details class="report-section-body" id="audio-packets-optional"><summary><h3>音轨包大小时间分布</h3></summary>${audio.map(audioPacketHTML).join("")}</details></section>`;
     if (r.packets) {
@@ -1699,9 +1700,11 @@ function initFrames(r) {
       ]),
       {
         unit: `OBU 负载体积（${eventScale.unit}）`,
+        unitNote: "OBU 负载大小与完整图像大小可能不同",
         axis: "编码事件",
         frames: true,
-        initial: [0, Math.min(60, Math.max(1, events.length))],
+        frameLegend: "H 隐藏 · S 显示已有帧 · V 新帧直接显示",
+        idleLabel: "",
         onPick: eventDetail,
         describe: (p) => {
           const e = events[p[0]];
