@@ -137,7 +137,11 @@ scenario('actual AV1 event navigation and a legacy optional GOP view preserve fr
  const saved=await exported(page,dir,'legacy-preserved.json','#inspect-export');assert.deepEqual(saved.value.results[0].report,legacy);
  const hevcFile=await hdrControl(dir),hevc=await completed(app,{type:'analyze',file:hevcFile,frameAnalysis:true,bitrate:false,complexity:false});
  assert.equal(hevc.report.coding.codec,'hevc');
- await importMeasured(page,dir,hevc.report,'hevc-frames.json');
+  await page.locator(`#queue-history-list [data-job="${hevc.id}"][data-action="report"]`).waitFor({state:'attached'});
+  await page.waitForFunction(()=>!document.querySelector('#import-button').disabled);
+  const hevcReportName='hevc-frames.json';
+  await importMeasured(page,dir,hevc.report,hevcReportName);
+  await page.waitForFunction(name=>document.querySelector('#task-message').textContent.includes('已导入 '+name),hevcReportName);
  await frames.locator('#frame-plot canvas').waitFor();
  assert.equal(await frames.locator('#gop-overview canvas').isVisible(),true);
  assert.equal(await page.locator('#av1-events').count(),0);

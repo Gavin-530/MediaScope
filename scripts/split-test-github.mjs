@@ -38,7 +38,8 @@ export function verifyCloudReceipt(proof, plan, identity, origin) {
   }
   verifyCaseSummary(proof.general,plan.cloud,{runtime:true});
   if(proof.general?.tools.some(tool=>tool.name!=='node'))throw Error('Cloud preflight used media tools');
-  if(plan.scope==='docs-only'&&(proof.documentationChecks?.documents!==plan.files.length||
+  const documents=plan.scope==='docs-only'?plan.files:plan.documents;
+  if(documents&&(proof.documentationChecks?.documents!==documents.length||
      ['whitespace','utf8','fences'].some(key=>proof.documentationChecks[key]!=='passed')))throw Error('Missing documentation check receipt');
 }
 

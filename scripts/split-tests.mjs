@@ -94,7 +94,8 @@ async function cloudReceipt(plan,identity,dir,github) {
   const execution=await executeFormal(repo,dir,plan,identity,{side:'cloud'});
   const report={schema:1,kind:'split-cloud',sha:plan.sha,plan:plan.hash,scope:plan.scope,identity,github,
     base:plan.base,anchor:plan.anchor,general:execution?.summary??null};
-  if(plan.scope==='docs-only')report.documentationChecks=checkDocuments(repo,{...plan,testedSha:plan.sha});
+  const documents=plan.scope==='docs-only'?plan.files:plan.documents;
+  if(documents)report.documentationChecks=checkDocuments(repo,{...plan,files:documents,testedSha:plan.sha});
   if(execution&&process.env.GITHUB_OUTPUT)await fs.appendFile(process.env.GITHUB_OUTPUT,'cloud_record='+execution.record+'\n');
   return report;
 }

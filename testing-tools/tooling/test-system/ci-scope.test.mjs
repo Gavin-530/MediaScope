@@ -8,9 +8,9 @@ import {execFileSync, spawn} from 'node:child_process';
 import {createServer} from 'node:http';
 import {fileURLToPath} from 'node:url';
 import {assessScope, baselinePassed, checkDocuments, comparisonBase, documentationChanges, forcedMainRecovery} from '../../../scripts/ci-scope.mjs';
-import {SplitGitHub} from '../../../scripts/split-test-github.mjs';
+import {SplitGitHub, verifyCloudReceipt} from '../../../scripts/split-test-github.mjs';
 import {reviewedCloudCase, splitPlan} from '../../../scripts/split-test-plan.mjs';
-import {repository} from '../../../scripts/split-test-receipts.mjs';
+import {caseDigest, repository} from '../../../scripts/split-test-receipts.mjs';
 import {caseCatalog, selectCases} from '../../helpers/case-catalog.mjs';
 
 const a = 'a'.repeat(40), b = 'b'.repeat(40), c = 'c'.repeat(40);
@@ -215,6 +215,12 @@ test('split planning covers reviewed module integrations and escalates validatio
   const locked = files => JSON.stringify({schema:2, files});
   const sharedScripts = ['scripts/split-tests.mjs', 'scripts/read-measurements.mjs',
     'scripts/github-archive-api.mjs', 'scripts/github-archive-store.mjs'];
+  const leafHelper = 'testing-tools/helpers/encoded-controls.mjs';
+  const charts = 'public/charts.js';
+  const repeatReport = 'testing-tools/modules/reports/portable-repeat.test.mjs';
+  const helperFiles = ['bitrate/packet-engine', 'frames/codec-structure', 'media-info/engine',
+    'quality/comparison', 'trials/encoder-matrix', 'ui/workflow']
+    .map(name=>'testing-tools/modules/'+name+'.test.mjs');
   const base = f.commit({
     'runtime-lock.json': '{}\n',
     [bitrate]: '// baseline\n',
@@ -223,9 +229,12 @@ test('split planning covers reviewed module integrations and escalates validatio
     [notes]: '// baseline\n',
     [basic]: '// baseline\n',
     [properties]: '// baseline\n',
+    [charts]: 'export const version = 1;\n',
     [selectionPolicy]: '// baseline\n',
     [fixtureLock]: locked([{...fixtureEntry, attachments:[attachment.path]}, attachment]),
     [attachment.sourceFile]: '{}\n',
+    [leafHelper]: '// baseline helper\n',
+    ...Object.fromEntries(helperFiles.map(file=>[file,"import '../../helpers/encoded-controls.mjs';\n"])),
     ...Object.fromEntries(sharedScripts.map(file => [file, '// baseline\n'])),
   });
   const plan = (sha, options = {}) => splitPlan(f.repo, {sha, base, anchor: base, ...options});
@@ -263,8 +272,67 @@ test('split planning covers reviewed module integrations and escalates validatio
   assert.equal(plan(pair, {release:true}).scope, 'full');
 
   const mixed = f.commit({[repeat]: '// unrelated repeat view\n'});
-  assert.equal(plan(mixed, {base:pair}).scope, 'full');
+  const combined = plan(mixed, {base:pair});
+  assert.equal(combined.scope, 'selected');
+  assert.deepEqual([...combined.local,...combined.cloud].sort(), selectCases({modules:['bitrate','repeat','ui']}).caseIds.sort());
   assert.equal(plan(f.commit({[notes]: '// shared producer\n'}), {base:mixed}).scope, 'full');
+
+  f.git('checkout', '--detach', base);
+  const mixedDocs = f.commit({[bitrate]:'// updated model\n','README.md':'# Updated guide\n'});
+  const documented = plan(mixedDocs);
+  assert.equal(documented.scope, 'selected');
+  assert.deepEqual(documented.documents, ['README.md']);
+  const origin = {id:1,run_attempt:1,head_branch:'verify-main-mixed'};
+  const proof = {schema:1,kind:'split-cloud',sha:mixedDocs,base,anchor:base,scope:'selected',plan:documented.hash,
+    identity:{},github:{repository,runId:'1',runAttempt:'1',ref:'refs/tags/'+origin.head_branch},
+    general:{cases:documented.cloud.length,caseHash:caseDigest(documented.cloud),manifest:'a'.repeat(64),tools:[{name:'node',sha256:'b'.repeat(64)}]}};
+  assert.throws(()=>verifyCloudReceipt(proof,documented,{},origin), /Missing documentation check receipt/);
+  verifyCloudReceipt({...proof,documentationChecks:{documents:1,whitespace:'passed',utf8:'passed',fences:'passed'}},documented,{},origin);
+
+  f.git('checkout', '--detach', base);
+  const fixtureEdit = f.commit({[leafHelper]:'// changed fixture content\n'});
+  const impacted = plan(fixtureEdit);
+  assert.equal(impacted.scope, 'selected');
+  assert.deepEqual(impacted.stages, []);
+  assert.deepEqual([...impacted.local,...impacted.cloud].sort(), selectCases().cases
+    .filter(c=>helperFiles.includes(c.file)).map(c=>c.id).sort());
+  const intermediary = 'testing-tools/helpers/another-fixture.mjs';
+  const repeatImports = "import '../../helpers/another-fixture.mjs';\nawait import('../../helpers/encoded-' + 'controls.mjs');\n";
+  const newConsumer = f.commit({
+    [intermediary]:"export {version} from '../../public/charts.js';\n",
+    [repeatReport]:repeatImports,
+  });
+  const furtherEdit = f.commit({[leafHelper]:'// changed again\n'});
+  const dynamic = plan(furtherEdit, {base:newConsumer,anchor:newConsumer});
+  assert.equal(dynamic.scope, 'selected');
+  assert.deepEqual(dynamic.stages, []);
+  const plannedCases = p => [...p.local,...p.cloud].sort();
+  const casesIn = files => selectCases().cases.filter(c=>files.includes(c.file)).map(c=>c.id).sort();
+  assert.deepEqual(plannedCases(dynamic), casesIn([...helperFiles,repeatReport]));
+  const workflow = 'testing-tools/modules/ui/workflow.test.mjs';
+  const linkedTests = f.commit({[repeatReport]: "import '../ui/workflow.test.mjs';\n" + repeatImports});
+  const workflowEdit = f.commit({[workflow]:"import '../../helpers/encoded-controls.mjs';\n// revised workflow\n"});
+  assert.deepEqual(plannedCases(plan(workflowEdit, {base:linkedTests,anchor:linkedTests})), casesIn([workflow,repeatReport]));
+  const chartEdit = f.commit({[charts]:'export const version = 2;\n'});
+  const transitive = plan(chartEdit, {base:workflowEdit,anchor:workflowEdit});
+  assert.equal(transitive.scope, 'selected');
+  assert.deepEqual(plannedCases(transitive), [...new Set([
+    ...selectCases({modules:['ui']}).caseIds, ...casesIn([repeatReport]),
+  ])].sort());
+  const removed = f.commit({[charts]:'export const version = 3;\n', [repeatReport]:'// dependency removed\n'});
+  const beforeOnly = plan(removed, {base:chartEdit,anchor:chartEdit});
+  assert.ok(casesIn([repeatReport]).every(id=>plannedCases(beforeOnly).includes(id)));
+
+  const opaqueTest = f.commit({[repeatReport]:'await import(process.env.TEST_MODULE_PATH);\n'});
+  const bounded = plan(f.commit({[leafHelper]:'// changed with opaque test\n'}), {base:opaqueTest,anchor:opaqueTest,explain:true});
+  assert.equal(bounded.scope, 'selected');
+  assert.deepEqual(bounded.explanation.uncertainTests, [repeatReport]);
+  assert.deepEqual(plannedCases(bounded), casesIn([...helperFiles,repeatReport]));
+  const opaqueHelper = f.commit({[intermediary]:'await import(process.env.TEST_MODULE_PATH);\n'});
+  const unbounded = plan(f.commit({[leafHelper]:'// changed with unbounded load\n'}), {base:opaqueHelper,anchor:opaqueHelper,explain:true});
+  assert.equal(unbounded.scope, 'full');
+  assert.match(unbounded.explanation.reason, /Unresolved runtime load.*another-fixture/);
+  assert.deepEqual(unbounded.stages, ['gpu','native','package','online']);
 
   f.git('checkout', '--detach', base);
   const oldMain = f.commit({'engine.mjs': '// previously accepted shared change\n'});
@@ -278,12 +346,8 @@ test('split planning covers reviewed module integrations and escalates validatio
   f.git('checkout', '--detach', base);
   const policy = f.commit({[selectionPolicy]: '// changed selection\n','docs/testing.md':'# Updated policy\n'});
   const verification = plan(policy);
-  assert.equal(verification.scope, 'selected');
-  assert.deepEqual(verification.stages, []);
-  const verificationFiles = new Set(['ci-scope','github-archive','selection','product-contract']
-    .map(name => 'testing-tools/tooling/test-system/'+name+'.test.mjs'));
-  assert.deepEqual([...verification.local,...verification.cloud].sort(), selectCases().cases
-    .filter(c => verificationFiles.has(c.file)).map(c => c.id).sort());
+  assert.equal(verification.scope, 'full');
+  assert.deepEqual(verification.stages, ['gpu', 'native', 'package', 'online']);
   const execution = f.commit({'scripts/split-tests.mjs': '// changed execution\n'});
   assert.equal(plan(execution, {base:policy,anchor:policy}).scope, 'full');
   assert.deepEqual(plan(execution).stages, ['gpu', 'native', 'package', 'online']);

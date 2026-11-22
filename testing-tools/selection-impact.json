@@ -1,0 +1,34 @@
+{
+  "schema": 2,
+  "sources": [
+    "public/app.js",
+    "public/basic-info.js",
+    "public/bitrate-model.js",
+    "public/charts.js",
+    "public/distribution-model.js",
+    "public/properties.js",
+    "public/repeat-view.js"
+  ],
+  "testHelpers": ["testing-tools/helpers/encoded-controls.mjs"],
+  "runtimeLoaders": {
+    "scripts/check-environment.mjs": {
+      "blob": "27c93cb3402731b7cd6a49855798cf22dda7fb0f",
+      "targets": ["repeat.mjs"]
+    },
+    "scripts/replay-bitrate-evidence.mjs": {
+      "blob": "3f3217d956aa370baa91377cd753e4a883d4a8f7",
+      "targets": []
+    },
+    "testing-tools/extensions/index.mjs": {
+      "blob": "50d6eaa14867d5d0e0da2a490f772c6f482eda1e",
+      "targets": [
+        "testing-tools/extensions/benchmark.mjs",
+        "testing-tools/extensions/bitrate.mjs",
+        "testing-tools/extensions/export.mjs",
+        "testing-tools/extensions/repeat.mjs",
+        "testing-tools/extensions/research.mjs",
+        "testing-tools/extensions/siti.mjs"
+      ]
+    }
+  }
+}

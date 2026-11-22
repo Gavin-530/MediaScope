@@ -4,29 +4,24 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {caseCatalog, selectCases} from '../testing-tools/helpers/case-catalog.mjs';
 import {productContract} from '../testing-tools/helpers/product-contract.mjs';
+import {dependencyImpact} from './split-test-dependencies.mjs';
 
 const tooling = 'testing-tools/tooling/test-system/';
 const commitFile = tooling + 'check-commits.test.mjs';
 const cloudCases = JSON.parse(fs.readFileSync(new URL('./split-test-cloud-cases.json', import.meta.url)));
-const bitrateModel = 'public/bitrate-model.js';
-const distributionModel = 'public/distribution-model.js';
-const selectedGroups = [
-  [bitrateModel, distributionModel],
-  ['public/repeat-view.js'],
-  ['public/basic-info.js', 'public/properties.js'],
-];
-const scopeTests = tooling + 'ci-scope.test.mjs';
-const selectionPolicyFiles = new Set([
-  'scripts/split-test-plan.mjs', 'scripts/split-test-cloud-cases.json', scopeTests, 'docs/testing.md',
-]);
-const selectionPolicyTests = new Set([scopeTests,
-  ...['selection', 'product-contract', 'github-archive'].map(name => tooling + name + '.test.mjs'),
-]);
+const reviewedImpact = JSON.parse(fs.readFileSync(new URL('../testing-tools/selection-impact.json', import.meta.url)));
+if (reviewedImpact.schema !== 2) throw Error('Unknown selection impact schema');
+const reviewedSources = new Set(reviewedImpact.sources);
+const reviewedHelpers = new Set(reviewedImpact.testHelpers);
+const trackedTestFiles = new Set(caseCatalog.cases.filter(c => !c.archiveMaintenance && c.file !== commitFile).map(c => c.file));
+const formalTestFiles = new Set([...trackedTestFiles].filter(file => file.startsWith('testing-tools/modules/')));
+const productSources = new Map(productContract.sources.map(source => [source.file, source]));
 const validationEntrypoints = new Set([
   '.gitattributes',
   'scripts/check-commits.mjs',
   'scripts/ci-scope.mjs',
   'scripts/split-tests.mjs',
+  'testing-tools/selection-impact.json',
   'scripts/evidence-lib.ps1',
   'scripts/github-archive-api.mjs',
   'scripts/github-archive-store.mjs',
@@ -56,6 +51,36 @@ function changes(repo, base, sha) {
     if (!match || !fields[index + 1]) throw Error('Unsupported Git change metadata');
     return [{file:fields[index + 1], status:match[3], regularEdit:match[1] === '100644' && match[2] === '100644' && match[3] === 'M'}];
   });
+}
+
+function documentedFiles(repo, sha, paths) {
+  const markdown = paths.filter(file=>file.endsWith('.md'));
+  if (!markdown.length) return [];
+  const fields = git(repo,'check-attr','--source='+sha,'-z','mediascope-validation','--',...markdown).split('\0');
+  return markdown.filter((file,i)=>fields[i*3]===file && fields[i*3+1]==='mediascope-validation' && fields[i*3+2]==='docs');
+}
+
+function reviewedChanges(repo, revisions, files) {
+  const unknown = files.find(file => !formalTestFiles.has(file) && !reviewedHelpers.has(file) &&
+    !(reviewedSources.has(file) && productSources.get(file)?.shipment === 'source'));
+  if (unknown) return {reason:'Changed path has no reviewed impact mapping: ' + unknown};
+  try {
+    const helpers = files.filter(file=>reviewedHelpers.has(file));
+    const {affected, uncertain, usedHelpers} = dependencyImpact(
+      repo,revisions,files,reviewedImpact.runtimeLoaders,helpers,trackedTestFiles);
+    const unbounded = [...uncertain].find(file => !trackedTestFiles.has(file));
+    if (unbounded) return {reason:'Unresolved runtime load: ' + unbounded, allStages:true};
+    const unused = helpers.find(file=>!usedHelpers.has(file));
+    if (unused) return {reason:'No formal consumers found for changed test helper: ' + unused};
+    return {impact:{
+      sources:[...affected].map(file=>productSources.get(file)).filter(Boolean),
+      tests:new Set([...affected].filter(file=>trackedTestFiles.has(file))),
+      uncertain:[...uncertain].sort(),
+      testInputs:new Set(files.filter(file=>trackedTestFiles.has(file) || reviewedHelpers.has(file))),
+    }};
+  } catch (error) {
+    return {reason:'Dependency analysis failed: ' + error.message.split(/\r?\n/, 1)[0], allStages:true};
+  }
 }
 
 function fixtureStages(repo, base, sha, paths, add) {
@@ -110,18 +135,18 @@ function fixtureStages(repo, base, sha, paths, add) {
   }
 }
 
-function localStages(repo, base, sha, files, specialCases, allStages) {
+function localStages(repo, base, sha, files, specialCases, allStagesReason) {
   const stages = new Map();
   const add = (id, reason) => {
     if (!stages.has(id)) stages.set(id, new Set());
     stages.get(id).add(reason);
   };
-  if (allStages) for (const id of stageOrder) add(id, 'Release or history recovery');
+  if (allStagesReason) for (const id of stageOrder) add(id, allStagesReason);
   for (const c of specialCases) add(c.scope, c.id);
   const fixturePaths = [];
-  for (const {file} of files) {
+  for (const file of files) {
     if (file === fixtureLockPath || file.startsWith('testing-tools/data/')) fixturePaths.push(file);
-    const source = productContract.sources.find(entry => entry.file === file);
+    const source = productSources.get(file);
     const desktop = source?.modules.includes('desktop') || file.startsWith('testing-tools/modules/desktop/');
     if (source?.modules.includes('siti') || /^(gpu\/|testing-tools\/modules\/siti\/|analysis\.mjs$|engine\.mjs$|server\.mjs$)/.test(file)) add('gpu', file);
     if (desktop) add('native', file);
@@ -157,28 +182,22 @@ export function splitPlan(repo, {sha, base, anchor, release = false, forceFull =
   const considered = [...diff,...anchorDiff];
   const paths = [...new Set(considered.map(c=>c.file))];
   const regular = canNarrow && considered.every(change => change.regularEdit);
-  const docsOnly = canNarrow && considered.every(c=>c.regularEdit && c.file.endsWith('.md')) &&
-    git(repo,'check-attr','--source='+sha,'-z','mediascope-validation','--',...paths)===
-      paths.map(file=>file+'\0mediascope-validation\0docs\0').join('');
-  const reviewedGroup = selectedGroups.some(group => paths.every(file => group.includes(file)));
-  const policyOnly = regular && paths.every(file => selectionPolicyFiles.has(file));
-  const sources = regular && reviewedGroup
-    ? paths.map(file => productContract.sources.find(source => source.file === file)) : [];
-  if (sources.some(source => !source)) throw Error('Reviewed source is missing from the product contract');
+  const documents = regular ? documentedFiles(repo,sha,paths) : [];
+  const docsOnly = regular && documents.length===paths.length;
+  const assessment = regular && !docsOnly
+    ? reviewedChanges(repo,[...new Set([base,anchor,sha])],paths.filter(file=>!documents.includes(file))) : null;
+  const impact = assessment?.impact;
+  const sources = impact?.sources ?? [];
   const modules = [...new Set(sources.flatMap(source => source.modules))].sort();
   const requirements = new Set(sources.flatMap(source => source.requirements));
   const reviewedRequirements = productContract.requirements.filter(r => requirements.has(r.id));
   if (reviewedRequirements.length !== requirements.size) throw Error('Reviewed source has an unknown product requirement');
   const requirementCases = new Set(reviewedRequirements.flatMap(r => [...r.cases, ...(r.integrationCases ?? [])]));
-  const selected = policyOnly || modules.length > 0;
+  const selected = Boolean(impact);
   const moduleCases = new Set(modules.length ? selectCases({modules}).caseIds : []);
   const general = docsOnly ? [] : selectCases().cases;
-  const selection = general.filter(c => policyOnly ? selectionPolicyTests.has(c.file) :
-    !selected || requirementCases.has(c.id) || moduleCases.has(c.id));
-  if (policyOnly && ![...selectionPolicyTests].every(file => selection.some(c => c.file === file))) {
-    throw Error('Selection policy verification is missing required tests');
-  }
-  const extraStages = caseCatalog.cases.filter(c => requirementCases.has(c.id) &&
+  const selection = general.filter(c => !selected || requirementCases.has(c.id) || moduleCases.has(c.id) || impact?.tests.has(c.file));
+  const extraStages = caseCatalog.cases.filter(c => (requirementCases.has(c.id) || impact?.tests.has(c.file)) &&
     (c.scope === 'gpu' || c.scope === 'native'));
   for (const id of requirementCases) {
     if (!selection.some(c => c.id === id) && !extraStages.some(c => c.id === id)) {
@@ -190,8 +209,9 @@ export function splitPlan(repo, {sha, base, anchor, release = false, forceFull =
     if (c.file === commitFile) continue;
     (reviewedCloudCase(c) ? cloud : local).push(c.id);
   }
-  const stageReasons = docsOnly || policyOnly ? {} :
-    localStages(repo, base, sha, diff, extraStages, release || Boolean(recovery));
+  const stagePaths = new Set([...paths.filter(file=>!impact?.testInputs.has(file)), ...sources.map(source=>source.file)]);
+  const stageReasons = docsOnly ? {} : localStages(repo, base, sha, stagePaths, extraStages,
+    assessment?.allStages ? assessment.reason : release || recovery ? 'Release or history recovery' : null);
   const stages = Object.keys(stageReasons);
   const stageCases = Object.fromEntries(stages.filter(id => ['gpu','native'].includes(id))
     .map(id => [id, selectCases({suite:id}).caseIds.sort()]));
@@ -199,6 +219,7 @@ export function splitPlan(repo, {sha, base, anchor, release = false, forceFull =
     files:diff.map(c => c.file), local:local.sort(), cloud:cloud.sort(), commits:commitCases(), stages, stageCases,
     runtimeLock:digest(fs.readFileSync(path.join(repo,'runtime-lock.json')))};
   if (recovery) plan.recovery = recovery;
+  if (selected && documents.length) plan.documents = documents.sort();
   const combined = [...plan.local,...plan.cloud,...plan.commits];
   const required = new Set([...selection.map(c => c.id),...plan.commits]);
   if (new Set(combined).size !== combined.length || combined.length !== required.size || combined.some(id => !required.has(id))) {
@@ -206,15 +227,15 @@ export function splitPlan(repo, {sha, base, anchor, release = false, forceFull =
   }
   const result = {...plan, hash:digest(JSON.stringify(plan))};
   if (!explain) return result;
-  let reason = 'Changed paths are outside a reviewed file group or documentation policy';
+  let reason = assessment?.reason ?? 'At least one changed path or test dependency has no reviewed impact mapping';
   if (docsOnly) reason = 'Both comparisons contain only reviewed documentation edits';
-  else if (policyOnly) reason = 'Only reviewed selection policy files changed';
-  else if (selected) reason = 'Both comparisons fit a reviewed group of regular source edits';
+  else if (selected) reason = impact.uncertain.length
+    ? 'Included tests with an unresolved runtime load' : 'Both comparisons have reviewed source, test or documentation impact';
   else if (recovery || release || forceFull) reason = 'Explicit full profile';
   else if (!anchor) reason = 'No full acceptance anchor configured';
   else if (!canNarrow) reason = 'At least one comparison is empty';
   else if (considered.some(change => !change.regularEdit)) reason = 'At least one comparison contains a non-regular edit';
   return {...result, explanation:{reason, baseChanges:diff, anchorChanges:anchorDiff, modules,
-    requirements:[...requirements].sort(), stages:stageReasons,
+    requirements:[...requirements].sort(), stages:stageReasons, uncertainTests:impact?.uncertain ?? [],
     anchorEvidence:'GitHub verification is separate from this local plan'}};
 }
