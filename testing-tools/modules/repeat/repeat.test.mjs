@@ -8,8 +8,9 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {FF,FP,run,probe} from '../../helpers/subject.mjs';
 import {analyzeRepeats,repeatPreview,verifyRepeatPadding} from '../../helpers/subject.mjs';
-import {repeatFrameFormat,repeatExactSummary,repeatTimeline,validateRepeatAnalysis} from '../../../public/repeat-model.js';
+import {repeatFrameFormat,repeatExactSummary,repeatTimeline,measureEffectiveFrameRate,validateRepeatAnalysis} from '../../../public/repeat-model.js';
 import {oracleComponents,oracleDifference} from './tools/repeat-oracle.mjs';
+import {fixtures} from '../../helpers/fixtures.mjs';
 
 const root=workRoot;let dir;
 before(async()=>{await mkdir(root,{recursive:true});dir=await mkdtemp(path.join(root,'repeat-analysis-'));});
@@ -150,10 +151,78 @@ test('[repeat-analysis] original PTS, offset and VFR holds agree with separate F
   assert.deepEqual(close.frames.map(f=>f.sha256),c.frames.map(digest));
   assert.equal(close.timeline.status,'complete');
   assert.equal(close.freeze.status,'complete',close.freeze.reason);
+  // Four picture updates over 320 ms, including the 79 ms hold and final 40 ms frame.
+  assert.equal(close.effectiveFrameRate.fps,12.5);
   const hashes=c.frames.slice(3,5).map(digest);
   const preview=await repeatPreview({file:closePts,signature:close.source.signature,stream:closeStream.index,frame:4,hashes},ctx);
   assert.deepEqual(preview.images.map(i=>i.sha256),hashes);
-  await writeFile(path.join(dir,'timestamps.json'),JSON.stringify({outcome:'passed',official,result:r,closePts:close,commands:ctx.commands}));
+  const effectiveRateControls=[];
+  // BT.1866 Annex 4 and P.930 Appendix I: known recurring holds, generated losslessly.
+  for(const {fps,repetitions,expected} of [{fps:25,repetitions:2,expected:12.5},{fps:30,repetitions:3,expected:10}]){
+    const frameCount=fps*2,raw=path.join(dir,`effective-rate-${fps}.raw`),video=path.join(dir,`effective-rate-${fps}.nut`);
+    await writeFile(raw,Buffer.concat(Array.from({length:frameCount},(_,i)=>Buffer.alloc(16*16,Math.floor(i/repetitions)))));
+    await run(FF,['-v','error','-y','-f','rawvideo','-pixel_format','gray','-video_size','16x16','-framerate',String(fps),'-i',raw,'-c:v','rawvideo','-threads:v','1',video],ctx);
+    const control=await analyzeRepeats(video,(await probe(video,ctx)).raw.streams[0],ctx);
+    assert.equal(control.exact.frames,frameCount);
+    assert.equal(control.exact.duplicates,frameCount-frameCount/repetitions);
+    // The first eight frames of the pairwise control reproduce the PVS pattern
+    // in BT.1908-0 Fig. 15. Frame numbering in the figure starts at one.
+    if(repetitions===2){
+      const repeated=control.frames.slice(0,8).filter(frame=>frame.equalPrevious).map(frame=>frame.frame+1);
+      assert.deepEqual(repeated,[2,4,6,8]);
+    }
+    assert.equal(control.effectiveFrameRate.fps,expected);
+    assert.equal(control.nonAdjacentFingerprintRuns,0);
+    assert.equal(control.duplicateFingerprintFrames,control.exact.duplicates);
+    effectiveRateControls.push({fps,repetitions,expected,report:control});
+  }
+  await writeFile(path.join(dir,'timestamps.json'),JSON.stringify({outcome:'passed',official,result:r,closePts:close,effectiveRateControls,commands:ctx.commands}));
+});
+
+test('[repeat-analysis] full-clip SHA-256 duplicates and recurrences agree with the locked FFmpeg FATE tpad reference',async()=>{
+  const prefix='repeat/ffmpeg-n8.1.3/',ctx={commands:[]};
+  const inputs=await fixtures.readMany([prefix+'tests/fate/filter-video.mak',prefix+'tests/ref/fate/filter-tpad-add']);
+  const definition=inputs.get(prefix+'tests/fate/filter-video.mak').toString('utf8');
+  assert.ok(definition.includes('fate-filter-tpad-add:   CMD = framecrc -lavfi testsrc2=d=1:r=2,tpad=start=1:stop=3:color=gray'));
+  const canonical=text=>text.replace(/\r\n/g,'\n').trimEnd()+'\n';
+  const reference=canonical(inputs.get(prefix+'tests/ref/fate/filter-tpad-add').toString('utf8'));
+  const filter='testsrc2=d=1:r=2,tpad=start=1:stop=3:color=gray';
+  const actual=canonical(await run(FF,['-v','error','-f','lavfi','-i',filter,'-bitexact','-c:v','rawvideo','-threads:v','1','-f','framecrc','-'],ctx));
+  assert.equal(actual,reference);
+  const file=path.join(dir,'fate-tpad.nut'),raw=path.join(dir,'fate-tpad.raw');
+  await run(FF,['-v','error','-y','-noauto_conversion_filters','-f','lavfi','-i',filter,'-c:v','rawvideo','-threads:v','1','-fps_mode','passthrough',file],ctx);
+  const mediaReference=canonical(await run(FF,['-v','error','-i',file,'-bitexact','-c:v','rawvideo','-threads:v','1','-f','framecrc','-'],ctx));
+  assert.equal(mediaReference,reference);
+  await run(FF,['-v','error','-y','-noauto_conversion_filters','-i',file,'-c:v','rawvideo','-threads:v','1','-pix_fmt','+yuv420p','-f','rawvideo',raw],ctx);
+  const samples=await readFile(raw),rows=reference.trim().split('\n').filter(line=>!line.startsWith('#')).map(line=>line.split(',').map(part=>part.trim()));
+  assert.equal(rows.length,6);
+  const frameBytes=Number(rows[0][4]);
+  assert.equal(samples.length,rows.length*frameBytes);
+  const frames=rows.map((_,i)=>samples.subarray(i*frameBytes,(i+1)*frameBytes));
+  // All earlier frames are compared directly. No product hash table or counting helper
+  // supplies the expected result, and every equality is checked against the upstream CRC pattern.
+  const firstMatches=frames.map((frame,i)=>{
+    let first=i;
+    for(let j=0;j<i;j++){
+      const equal=Buffer.compare(frame,frames[j])===0;
+      assert.equal(equal,rows[i][5]===rows[j][5]);
+      if(equal&&first===i)first=j;
+    }
+    return first;
+  });
+  assert.deepEqual(firstMatches,[0,1,2,0,0,0]);
+  const stream=(await probe(file,ctx)).raw.streams[0],result=await analyzeRepeats(file,stream,ctx);
+  assert.equal(result.status,'complete');
+  assert.deepEqual(result.frames.map(frame=>frame.sha256),frames.map(digest));
+  assert.deepEqual(result.frames.map(frame=>frame.equalPrevious),[null,false,false,false,true,true]);
+  assert.equal(result.duplicateFingerprintFrames,3);
+  assert.equal(result.exact.duplicates,2);
+  assert.equal(result.nonAdjacentFingerprintRuns,1);
+  assert.equal(result.effectiveFrameRate.fps,4/3);
+  await writeFile(path.join(dir,'non-adjacent-fingerprint.json'),JSON.stringify({
+    outcome:'passed',upstreamCommit:'1041abdc962f4cc4f394aa8de9dc5236c0c3b9e7',upstreamCase:'fate-filter-tpad-add',
+    reference,actual,mediaReference,firstMatches,result,commands:ctx.commands,
+  }));
 });
 
 test('[repeat-analysis] integer rational grid, missing PTS, one frame and open boundaries have explicit meanings',()=>{
@@ -168,6 +237,24 @@ test('[repeat-analysis] integer rational grid, missing PTS, one frame and open b
   assert.deepEqual(repeatExactSummary([frame('0'),frame('1')]).runs[0],{startFrame:0,endFrame:1,frameCount:2,extraFrames:1,startPts:'0',endPts:null,endSource:'unknown'});
   assert.equal(repeatExactSummary([frame('0'),frame('1'),frame('8','b')]).runs[0].endPts,'8');
   assert.equal(repeatExactSummary([frame('0'),frame(null)]).runs[0].endPts,null);
+
+  const measure=(pts,duration,timeBase='1/25',duplicates=0)=>{
+    const frames=pts.map(value=>({pts:value,duration}));
+    return measureEffectiveFrameRate(frames,timeBase,{frames:frames.length,duplicates},repeatTimeline(frames,timeBase));
+  };
+  assert.equal(measure(['-1'],'1').fps,25);
+  assert.equal(measure(['-2','-1','0','1'],'1','1/25',1).fps,18.75);
+  assert.equal(measure(['90071992547409930','90071992547409931'],'1','1001/30000').fps,30000/1001);
+  for(const [result,reason] of [
+    [measure(['0'],'1',null),'invalid-time-base'],
+    [measure(['0',null,'2'],'1'),'missing-pts'],
+    [measure(['0','0'],'1'),'non-increasing-pts'],
+    [measure(['0','2','1'],'1'),'non-increasing-pts'],
+    ...[null,'0','-1'].map(duration=>[measure(['0'],duration),'invalid-last-duration']),
+  ]){
+    assert.equal(result.fps,null);
+    assert.equal(result.reason,reason);
+  }
 });
 
 test('[repeat-analysis] P010 P012 P016 native raw paths match official hashes and reject non-sample bits without a container claim',async()=>{
@@ -197,6 +284,7 @@ test('[repeat-analysis] missing source PTS never borrows generated framehash tim
   await run(FF,['-v','error','-y','-f','lavfi','-i','color=size=32x32:rate=24:duration=0.5','-c:v','libx264','-bf','0','-f','h264',file],ctx);
   const stream=(await probe(file,ctx)).raw.streams[0],r=await analyzeRepeats(file,stream,ctx,{freeze:true});
   assert.ok(r.frames.every(f=>f.pts===null));assert.ok(r.frames.every(f=>f.hashPts!==null));assert.equal(r.timeline.status,'unavailable');assert.equal(r.freeze.status,'unavailable');
+  assert.deepEqual(r.effectiveFrameRate,{method:'adjacent-exact-presentation-span/v1',fps:null,reason:'missing-pts'});
   await writeFile(path.join(dir,'missing-pts.json'),JSON.stringify({outcome:'passed',result:r,commands:ctx.commands}));
 });
 

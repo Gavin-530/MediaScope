@@ -1,6 +1,6 @@
 import {createBrowserScenario} from '../../helpers/browser-harness.mjs';
 import {workPath} from '../../helpers/workspace.mjs';
-import {readFixture} from '../../helpers/fixtures.mjs';
+import {readFixture,fixtures} from '../../helpers/fixtures.mjs';
 import {before,after} from 'node:test';
 import {projectTest} from '../../helpers/case-test.mjs';
 const test=projectTest(import.meta.url);
@@ -588,11 +588,19 @@ scenario('[repeat-analysis] independent target displays actual runs, original ti
   await page.locator('#repeat-enabled').check();assert.equal(await page.locator('#repeat-options').isVisible(),true);await enableFreeze(page);
   const {report}=await runTask(page,app,'#enqueue-analyze');assert.equal(report.repeatAnalysis.exact.duplicates,71);assert.equal(report.repeatAnalysis.exact.comparisons,71);
   const host=page.locator('#repeat-result');assert.match(await host.textContent(),/精确重复/);assert.match(await host.textContent(),/N−1/);
-  await singleRow(host.locator('.repeat-cards > .card'),3);
+  assert.equal(report.repeatAnalysis.effectiveFrameRate.fps,1/3);
+  const rateCard=host.locator('.repeat-cards > #repeat-effective-frame-rate');
+  assert.equal(await rateCard.locator('strong').innerText(),'0.33333333 fps');
+  assert.equal(await rateCard.locator('span').last().innerText(),'扣除相邻精确重复');
+  assert.equal(report.repeatAnalysis.nonAdjacentFingerprintRuns,0);
+  assert.equal(report.repeatAnalysis.duplicateFingerprintFrames,71);
+  assert.match(await host.locator('#repeat-fingerprint-duplicates').innerText(),/全片同指纹重复 71 帧/);
+  assert.equal(await host.locator('#repeat-non-adjacent').innerText(),'非相邻同指纹复现 0 段');
+  await singleRow(host.locator('.repeat-cards > .card'),4);
   assert.ok((await host.locator('.repeat-cards').boundingBox()).height<85,'important repeat statistics use a compact strip');
-  assert.deepEqual(await host.locator('.repeat-cards > .card > span:first-child').allTextContents(),['分析规模','精确重复','连续重复段']);
-  assert.deepEqual(await host.locator('.repeat-cards > .card > strong').allTextContents(),['72 帧','71 次','1 段']);
-  assert.match(await host.locator('.repeat-cards > .card').nth(0).innerText(),/71 次相邻比较/);
+  assert.deepEqual(await host.locator('.repeat-cards > .card > span:first-child').allTextContents(),['分析规模','相邻精确重复','有效帧率','连续重复段']);
+  assert.deepEqual(await host.locator('.repeat-cards > .card > strong').allTextContents(),['72 帧','71 帧','0.33333333 fps','1 段']);
+  assert.match(await host.locator('.repeat-cards > .card').first().innerText(),/^分析规模\s+72 帧$/);
   assert.match(await host.locator('.repeat-cards > .card').nth(1).innerText(),/占相邻比较 100%/);
   await singleRow(page.locator('#repeat-overview .plot-controls > div'),3);
   await host.locator('.repeat-cards').screenshot({path:path.join(dir,'repeat-summary-desktop.png')});
@@ -639,7 +647,7 @@ scenario('[repeat-analysis] independent target displays actual runs, original ti
   }
   assert.equal(await host.locator('#repeat-method').evaluate(el=>el.open),false);
   await host.locator('#repeat-method > summary').click();
-  assert.match(await host.locator('#repeat-method').innerText(),/直接核对全部有效样本逐值相等.*SHA-256.*N−1/s);
+  assert.match(await host.locator('#repeat-method').innerText(),/直接核对全部有效样本逐值相等.*SHA-256.*71 次相邻比较.*N−1/s);
   assert.match(await host.locator('#repeat-method').innerText(),/不代表录制丢帧率.*色彩解释标签不属于样本相等判据/s);
   await host.locator('#repeat-method > summary').click();
   await host.locator('[data-rows="constant"] tbody tr').waitFor();
@@ -677,12 +685,22 @@ scenario('[repeat-analysis] independent target displays actual runs, original ti
   const pending=page.waitForEvent('download');await host.locator('[data-csv="runs"]').click();const csv=await pending;const csvFile=path.join(dir,'runs.csv');await csv.saveAs(csvFile);assert.match(await readFile(csvFile,'utf8'),/next-original-pts|last-ffprobe-duration|unknown/);
   const exported=path.join(dir,'repeat-report.json');const portable=await download(page,'#inspect-export',exported);assert.deepEqual(portable.results[0].report.repeatAnalysis,report.repeatAnalysis);
   await importReport(page,exported);assert.match(await page.locator('#repeat-result').textContent(),/精确重复/);
+  assert.equal(await rateCard.locator('strong').innerText(),'0.33333333 fps');
+  assert.match(await host.locator('#repeat-fingerprint-duplicates').innerText(),/全片同指纹重复 71 帧/);
   assert.equal(await evidence.evaluate(el=>el.open),false,'importing a report also starts with collapsed evidence');
   assert.equal(await host.locator('#repeat-differences').isVisible(),false);
   assert.equal(await host.locator('[data-rows="runs"] tbody tr').count(),0);
   await evidence.locator(':scope > summary').click();await host.locator('[data-rows="runs"] tbody tr').waitFor();
   assert.equal(await host.locator('[data-rows="runs"] tbody tr').count(),1);
   await page.setViewportSize({width:390,height:844});
+  const cardPositions=await host.locator('.repeat-cards > .card').evaluateAll(cards=>cards.map(card=>{
+    const {left,top}=card.getBoundingClientRect();
+    return {left,top};
+  }));
+  assert.equal(cardPositions[0].top,cardPositions[1].top);
+  assert.equal(cardPositions[2].top,cardPositions[3].top);
+  assert.ok(cardPositions[2].top>cardPositions[0].top);
+  assert.equal(cardPositions[2].left,cardPositions[0].left);
   await page.locator('#repeat-overview [data-field="scale"]').selectOption('manual');
   await page.locator('#repeat-overview [data-field="x-scale"]').selectOption('manual');
   const fits=await host.evaluate(el=>{
@@ -694,11 +712,46 @@ scenario('[repeat-analysis] independent target displays actual runs, original ti
   await page.locator('#repeat-overview .plot-controls').screenshot({path:path.join(dir,'repeat-controls-mobile.png')});
   await writeFile(path.join(dir,'report.json'),JSON.stringify(report));
 });
+scenario('[repeat-analysis] official FATE tpad frame and run counts survive display and JSON import',async({page,app,dir})=>{
+  const reference=await fixtures.read('repeat/ffmpeg-n8.1.3/tests/ref/fate/filter-tpad-add');
+  const file=path.join(dir,'fate-tpad.nut');
+  await run(FF,['-v','error','-y','-noauto_conversion_filters','-f','lavfi','-i','testsrc2=d=1:r=2,tpad=start=1:stop=3:color=gray',
+    '-c:v','rawvideo','-threads:v','1','-fps_mode','passthrough',file]);
+  const crc=await run(FF,['-v','error','-i',file,'-bitexact','-c:v','rawvideo','-threads:v','1','-f','framecrc','-']);
+  assert.equal(crc.replace(/\r\n/g,'\n').trim(),reference.toString('utf8').replace(/\r\n/g,'\n').trim());
+  await preview(page,file);
+  for(const selector of ['#frame-analysis','#bitrate-enabled','#complexity'])await page.locator(selector).uncheck();
+  await page.locator('#repeat-enabled').check();
+  const {report}=await runTask(page,app,'#enqueue-analyze'),r=report.repeatAnalysis;
+  assert.equal(r.exact.duplicates,2);
+  assert.equal(r.duplicateFingerprintFrames,3);
+  assert.equal(r.nonAdjacentFingerprintRuns,1);
+  const host=page.locator('#repeat-result');
+  assert.match(await host.locator('.repeat-cards > .card').nth(1).innerText(),/相邻精确重复\s+2 帧/);
+  assert.match(await host.locator('#repeat-fingerprint-duplicates').innerText(),/全片同指纹重复 3 帧/);
+  assert.match(await host.locator('#repeat-non-adjacent').innerText(),/非相邻同指纹复现 1 段/);
+  const exported=path.join(dir,'report.json'),saved=await download(page,'#inspect-export',exported);
+  assert.deepEqual(saved.results[0].report,report);
+  const before=(await app.request('status')).jobs.length;
+  await importReport(page,exported);
+  assert.equal((await app.request('status')).jobs.length,before);
+  assert.match(await host.locator('#repeat-fingerprint-duplicates').innerText(),/全片同指纹重复 3 帧/);
+  assert.match(await host.locator('#repeat-non-adjacent').innerText(),/非相邻同指纹复现 1 段/);
+  const restored=await download(page,'#inspect-export',path.join(dir,'restored.json'));
+  assert.deepEqual(restored.results[0].report,report);
+  await page.setViewportSize({width:390,height:844});
+  assert.equal(await host.evaluate(element=>element.scrollWidth<=element.clientWidth),true);
+  await host.screenshot({path:path.join(dir,'fingerprint-counts-mobile.png')});
+  await writeFile(path.join(dir,'fingerprint-counts.json'),JSON.stringify({outcome:'passed',
+    adjacentFrames:r.exact.duplicates,duplicateFingerprintFrames:r.duplicateFingerprintFrames,
+    recurrenceRuns:r.nonAdjacentFingerprintRuns,jsonRoundTrip:true}));
+});
 scenario('[repeat-analysis] empty and single-frame results explain what was measured without empty tables or success labels',async({page,app,dir})=>{
   await preview(page,media.sitiSource);await page.locator('#frame-analysis').uncheck();await page.locator('#bitrate-enabled').uncheck();await page.locator('#complexity').uncheck();
   await page.locator('#repeat-enabled').check();await enableFreeze(page);
   const {report}=await runTask(page,app,'#enqueue-analyze');
   assert.equal(report.repeatAnalysis.exact.duplicates,0);assert.equal(report.repeatAnalysis.freeze.segments.length,0);
+  assert.equal(report.repeatAnalysis.duplicateFingerprintFrames,0);
   const host=page.locator('#repeat-result');
   await host.locator('#repeat-evidence > summary').click();await host.locator('[data-rows="runs"] p').waitFor();
   assert.match(await host.locator('[data-rows="runs"]').textContent(),/未发现相邻帧/);
@@ -715,6 +768,8 @@ scenario('[repeat-analysis] empty and single-frame results explain what was meas
   const single=path.join(dir,'single.nut');
   await run(FF,['-v','error','-y','-f','lavfi','-i','color=size=128x96:rate=24','-frames:v','1','-c:v','rawvideo',single]);
   await preview(page,single);const result=await runTask(page,app,'#enqueue-analyze');assert.equal(result.report.repeatAnalysis.frames.length,1);
+  assert.equal(result.report.repeatAnalysis.duplicateFingerprintFrames,0);
+  assert.match(await host.locator('#repeat-fingerprint-duplicates').innerText(),/全片同指纹重复 0 帧/);
   assert.match(await host.locator('#repeat-summary').innerText(),/仅有一帧，无法比较相邻画面或计算相邻间隔/);
   assert.match(await host.locator('.repeat-cards > .card').nth(1).innerText(),/比例不可计算/);
   await host.locator('#repeat-evidence > summary').click();await host.locator('[data-rows="runs"] p').waitFor();
@@ -727,15 +782,18 @@ scenario('[repeat-analysis] empty and single-frame results explain what was meas
   const statusMessages=await page.evaluate(async original=>{
     const {repeatHTML}=await import('/repeat-view.js');
     const cases=[
-      {...original,timeBase:null,constant:{...original.constant,status:'unavailable',unresolvedRuns:1},freeze:{status:'unavailable',reason:'时间证据不足'}},
+      {...original,timeBase:null,effectiveFrameRate:{method:original.effectiveFrameRate.method,fps:null,reason:'invalid-time-base'},constant:{...original.constant,status:'unavailable',unresolvedRuns:1},freeze:{status:'unavailable',reason:'时间证据不足'}},
       {...original,timeline:{...original.timeline,status:'partial'},constant:{...original.constant,status:'partial',unresolvedRuns:1},freeze:{status:'failed',reason:'检测进程退出'}},
     ];
     return cases.map(value=>{
       const doc=new DOMParser().parseFromString(repeatHTML(value),'text/html');
-      return {summary:doc.querySelector('#repeat-summary').textContent,constant:doc.querySelector('#repeat-constant-summary').textContent,freeze:doc.querySelector('#repeat-freeze').textContent};
+      const rate=doc.querySelector('#repeat-effective-frame-rate');
+      return {summary:doc.querySelector('#repeat-summary').textContent,constant:doc.querySelector('#repeat-constant-summary').textContent,freeze:doc.querySelector('#repeat-freeze').textContent,rate:rate.querySelector('strong').textContent,rateNote:rate.lastElementChild.textContent};
     });
   },report.repeatAnalysis);
   assert.match(statusMessages[0].summary,/缺少有效时间基.*1 段重复的持续时间未能核定/);
+  assert.equal(statusMessages[0].rate,'无法计算');
+  assert.equal(statusMessages[0].rateNote,'缺少有效时间基');
   assert.match(statusMessages[1].summary,/时间戳有缺失或非递增.*持续时间未能核定/);
   assert.match(statusMessages[0].freeze,/无法判断.*时间证据不足/);
   assert.match(statusMessages[1].freeze,/检测失败.*检测进程退出/);
@@ -838,17 +896,23 @@ scenario('[repeat-analysis] default analysis exposes one evidence panel and omit
   assert.deepEqual(await host.locator('#repeat-evidence > summary, #repeat-review > summary').allTextContents(),['检测明细与导出','原帧复核']);
   const layout=await host.evaluate(el=>{
     const heading=el.querySelector('h3').getBoundingClientRect(),canvas=el.querySelector('#repeat-overview canvas').getBoundingClientRect();
-    return {beforeCanvas:canvas.top-heading.top,numberFont:getComputedStyle(el.querySelector('.repeat-cards strong')).fontSize};
+    return {beforeCanvas:canvas.top-heading.top,numberFont:getComputedStyle(el.querySelector('.repeat-cards strong')).fontSize,
+      statistics:[...el.querySelectorAll('.repeat-statistics > p')].map(p=>({id:p.id,height:p.getBoundingClientRect().height,margin:getComputedStyle(p).margin})),
+      cardsHeight:el.querySelector('.repeat-cards').getBoundingClientRect().height,
+      blocks:[...el.querySelector('.report-section-body').children].slice(0,7).map(node=>({
+        tag:node.tagName,id:node.id,className:node.className,top:node.getBoundingClientRect().top-heading.top,
+        width:node.getBoundingClientRect().width,height:node.getBoundingClientRect().height,
+        margin:getComputedStyle(node).margin,gap:getComputedStyle(node).gap,display:getComputedStyle(node).display}))};
   });
   await writeFile(path.join(dir,'repeat-default-layout.json'),JSON.stringify(layout));
   assert.ok(parseFloat(layout.numberFont)>=23,'primary measured values keep their original visual prominence');
-  assert.ok(layout.beforeCanvas<230,'normal metadata and method paragraphs do not push the chart down');
+  assert.ok(layout.beforeCanvas<230,'normal metadata and method paragraphs do not push the chart down '+JSON.stringify(layout));
   const spread=await host.locator('.repeat-cards > .card').evaluateAll(cards=>cards.map(card=>card.getBoundingClientRect().left));
   const stripWidth=(await host.locator('.repeat-cards').boundingBox()).width;
-  assert.ok(spread[2]-spread[0]>stripWidth*.6,'statistics use the available horizontal space');
+  assert.ok(spread.at(-1)-spread[0]>stripWidth*.6,'statistics use the available horizontal space');
   assert.equal(await host.locator('#repeat-freeze').count(),0);assert.doesNotMatch(await host.textContent(),/静止筛查|持续静止候选|本次未选择/);
   assert.equal(await host.locator('#repeat-summary').isVisible(),false,'zero duplicates are already explicit in the primary statistic');
-  assert.equal(await host.locator('.repeat-cards > .card').nth(1).locator('strong').textContent(),'0 次');
+  assert.equal(await host.locator('.repeat-cards > .card').nth(1).locator('strong').textContent(),'0 帧');
   assert.doesNotMatch(await host.locator('#repeat-summary').innerText(),/比较 11/);
   assert.equal(await host.locator('#repeat-review').evaluate(el=>el.open),false);
   await host.evaluate(el=>scrollTo(0,Math.max(0,scrollY+el.querySelector('h3').getBoundingClientRect().top-360)));
@@ -895,10 +959,11 @@ scenario('[repeat-analysis] one native 16-bit code difference is nonzero and leg
   const row=await host.locator('[data-rows="frames"] tbody tr').nth(2).locator('td').allTextContents();
   assert.deepEqual(row.slice(5,9),['否','1','1','1']);
   const legacy=structuredClone(report);legacy.repeatAnalysis.configurationVersion=1;legacy.repeatAnalysis.algorithm='FFmpeg/rawvideo/framehash/SHA256';
-  for(const key of ['differenceConfiguration','differenceSummary','constant','sourceClassification','tools'])delete legacy.repeatAnalysis[key];delete legacy.repeatAnalysis.source.contentSha256;
+  for(const key of ['differenceConfiguration','differenceSummary','constant','sourceClassification','tools','effectiveFrameRate','nonAdjacentFingerprintRuns','duplicateFingerprintFrames'])delete legacy.repeatAnalysis[key];delete legacy.repeatAnalysis.source.contentSha256;
   for(const f of legacy.repeatAnalysis.frames){delete f.equalPrevious;delete f.difference;}
   const saved=path.join(dir,'legacy.json');await saveImportFixture(saved,legacy);await importReport(page,saved);
   assert.match(await host.textContent(),/旧方法版本 1.*未进行逐值确认/);assert.doesNotMatch(await host.textContent(),/相邻帧最大样本差分布/);
+  assert.match(await host.locator('#repeat-effective-frame-rate').innerText(),/该报告未保存此指标/);
   assert.equal(await host.locator('#repeat-constant-summary').count(),0,'legacy reports do not invent a measured constant-interval count');
   assert.match(await host.locator('#repeat-summary').innerText(),/旧版指纹比较，未进行逐值确认/);
   assert.equal(await host.locator('#repeat-summary').isVisible(),true,'legacy method limitations must remain visible');
@@ -2046,13 +2111,16 @@ scenario('[portable] 0.5 export and 0.4 import restore measured frames without q
 scenario('[portable-repeat] saved generic repeat evidence and optional metadata survive GUI import and export',async({page,app,dir})=>{
   // Protocol fixture, not a claimed media measurement or newly supported calculation backend.
   const report=repeatReportFixture({algorithm:'sha512',encoding:'base64'});report.extensions={example:{note:'preserve this optional metadata',values:[1,null,'text']}};
+  report.repeatAnalysis.effectiveFrameRate={method:'adjacent-exact-presentation-span/v1',fps:12.5};
   const value=makePortable({results:[{entryId:'saved-repeat',report}],applicationVersion:'protocol-fixture'}),file=path.join(dir,'saved-repeat.json');
   await writeFile(file,JSON.stringify(value));const before=(await app.request('status')).jobs.length;
   await importReport(page,file);await page.getByRole('heading',{name:'保存的重复帧结果',exact:true}).waitFor();
   const saved=page.locator('#inspect-details > .section').filter({has:page.getByRole('heading',{name:'保存的重复帧结果',exact:true})}).locator(':scope > .report-section-body');
   assert.equal(await saved.evaluate(el=>el.open),false);
   await saved.locator(':scope > summary').click();
-  assert.match(await page.locator('#inspect-details').innerText(),/精确重复次数/);
+  assert.match(await saved.innerText(),/相邻精确重复帧数/);
+  assert.equal(await saved.locator('#repeat-effective-frame-rate strong').innerText(),'有效帧率');
+  assert.match(await saved.locator('#repeat-effective-frame-rate').innerText(),/12\.5 fps（扣除相邻精确重复）/);
   const restored=await download(page,'#inspect-export',path.join(dir,'saved-repeat-restored.json'));
   assert.deepEqual(restored.results[0].report,report);assert.deepEqual(restored.requires,['frame-digest/1','repeat/2']);
   assert.equal((await app.request('status')).jobs.length,before);

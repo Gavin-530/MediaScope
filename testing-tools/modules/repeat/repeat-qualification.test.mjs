@@ -28,7 +28,7 @@ test('[repeat-analysis] cancellation during interval aggregation and final valid
   const dir=await directory(),file=path.join(dir,'cooperative.nut');
   await run(FF,['-v','error','-y','-f','lavfi','-i','color=s=8x8:r=120','-frames:v','20000','-c:v','ffv1','-threads:v','1',file]);
   const stream=(await probe(file)).raw.streams[0],cases=[];
-  for(const stage of ['汇总精确重复区间','核对原始时间网格','核对持续样本不变区间','复核完整重复分析证据']){
+  for(const stage of ['统计全片同指纹重复与跨段复现','汇总精确重复区间','核对原始时间网格','核对持续样本不变区间','复核完整重复分析证据']){
     const controller=new AbortController(),commands=[];let requested=false;
     await assert.rejects(analyzeRepeats(file,stream,{commands,signal:controller.signal,update:value=>{
       if(value.detail===stage){requested=true;controller.abort();}

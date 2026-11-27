@@ -51,7 +51,13 @@ JSON 数据类型依据 [RFC 8259](https://www.rfc-editor.org/rfc/rfc8259)，Bas
 
 导入按方法版本核对完整字段、整数边界及派生量；重新导出保留方法版本和原始测量。来源/工具摘要和内部一致性不能证明测量实现没有缺陷。已有实现缺陷影响的报告须在可靠实现中重新分析，不能通过修改JSON版本或补字段追认原结果。
 
+已完成的方法 2 报告可在 `repeatAnalysis.effectiveFrameRate` 中保存有效帧率。其 `method` 为 `adjacent-exact-presentation-span/v1`，`fps` 为分析时保存的有限正数，单位为帧/秒。不可计算时 `fps` 为 `null`，并保存一个 `reason`，取值为 `invalid-time-base`、`missing-pts`、`non-increasing-pts` 或 `invalid-last-duration`。对象缺失表示报告未保存此指标。导入校验该对象的方法、结构和值域，按原值展示及重新导出。计算仅在分析时执行，导入时仍按既有规则校验帧数、时间轴等原有证据。 [计算与取时规则](repeat-analysis.md#有效帧率)
+
 方法2有两种互斥的摘要表示：既有`algorithm: "native-bytes-equal+FFmpeg/rawvideo/framehash/SHA256"`配合逐帧`sha256`，不补写公共摘要配置；通用表示使用`algorithm: "native-bytes-equal+frame-digest/v1"`、公共`fingerprint`配置及逐帧`digest`，不同时保存`sha256`。方法1只接受原SHA-256表示。两种方法2表示均以直接比较决定精确相等，不以摘要相同反推样本相等；相等帧必须有相同摘要，摘要相同的非相等帧仍按非相等记录。
+
+采用既有 SHA‑256 表示且已完成的方法 2 报告可保存 `repeatAnalysis.nonAdjacentFingerprintRuns`。它是分析时得到的非相邻同指纹复现段数，值域为 `0` 至 `max(0, 帧数−2)` 的整数。打开、导入及重新导出使用已保存的值。字段缺失表示未保存，`0` 表示没有检出跨段复现。 [计数规则](repeat-analysis.md#非相邻同指纹复现)
+
+同一表示也可保存 `repeatAnalysis.duplicateFingerprintFrames`，即全片同指纹重复帧数，值域为 `0` 至 `帧数−1` 的整数。每个指纹首次出现后，所有后续同指纹帧各计一次。若两个字段同时存在，跨段段数须小于或等于全片重复帧数。导入校验方法、整数值域和这项关系，按保存值展示及重新导出。缺失字段显示未保存，打开或导入时无需重新统计哈希。 [计数规则](repeat-analysis.md#非相邻同指纹复现)
 
 ## 公共帧摘要配置
 

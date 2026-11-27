@@ -25,6 +25,30 @@ export function repeatSeconds(ticks,timeBase) {
   const value=Number(BigInt(ticks)*tb.n)/Number(tb.d);
   return Number.isFinite(value)?value:null;
 }
+
+const effectiveFrameRateMethod='adjacent-exact-presentation-span/v1';
+const effectiveFrameRateReasons=['invalid-time-base','missing-pts','non-increasing-pts','invalid-last-duration'];
+
+// Inputs are the completed method-2 scan and its exact and timing summaries.
+export function measureEffectiveFrameRate(frames,timeBase,exact,timeline) {
+  const result={method:effectiveFrameRateMethod,fps:null};
+  const tb=repeatRational(timeBase);
+  if(!tb)return {...result,reason:'invalid-time-base'};
+  if(timeline.missingPts)return {...result,reason:'missing-pts'};
+  if(timeline.nonIncreasing)return {...result,reason:'non-increasing-pts'};
+  const last=frames.at(-1);
+  if(!integer(last.duration)||BigInt(last.duration)<=0n)return {...result,reason:'invalid-last-duration'};
+
+  const spanTicks=BigInt(last.pts)+BigInt(last.duration)-BigInt(frames[0].pts);
+  const rate=rationalEvidence(BigInt(exact.frames-exact.duplicates)*tb.d,spanTicks*tb.n);
+  return {...result,fps:Number(rate.numerator)/Number(rate.denominator)};
+}
+
+function validEffectiveFrameRate(value) {
+  if(!value||typeof value!=='object'||Array.isArray(value)||value.method!==effectiveFrameRateMethod)return false;
+  if(value.fps===null)return Object.keys(value).length===3&&effectiveFrameRateReasons.includes(value.reason);
+  return Object.keys(value).length===2&&!Object.hasOwn(value,'reason')&&Number.isFinite(value.fps)&&value.fps>0;
+}
 export function repeatFrameFormat(name,width,height) {
   if(!Number.isSafeInteger(width)||!Number.isSafeInteger(height)||width<1||height<1) return null;
   let depth=8,storage=1,alpha=false,shift=0,endian='le',planes=[],m;
@@ -170,15 +194,25 @@ export function* validateRepeatAnalysisSteps(value,stream) {
   const fail=message=>{throw Error(`重复画面报告无效：${message}`);};
   if(!value||![1,2].includes(value.configurationVersion)||!['complete','unsupported'].includes(value.status)||!value.source||typeof value.source.signature!=='string'||!hash(value.source.signature))fail('配置/来源');
   const confirmed=value.configurationVersion===2;
+  if(Object.hasOwn(value,'effectiveFrameRate')&&(!confirmed||value.status!=='complete'||!validEffectiveFrameRate(value.effectiveFrameRate)))fail('有效帧率');
   const generic=Object.hasOwn(value,'fingerprint');
   if(generic){if(!confirmed||value.algorithm!==genericRepeatAlgorithm)fail('摘要配置与方法不一致');validateFrameFingerprint(value.fingerprint);}
   if(value.extensions!==undefined)validateReportMetadata(value.extensions);
   if(!stream||value.source.stream!==stream.index||value.source.pixelFormat!==stream.pix_fmt||value.source.width!==stream.width||value.source.height!==stream.height)fail('轨道/格式');
-  if(value.status==='unsupported') {if(typeof value.reason!=='string'||!value.reason||value.frames!==undefined)fail('不支持状态');return;}
+  if(value.status==='unsupported') {if(typeof value.reason!=='string'||!value.reason||value.frames!==undefined||Object.hasOwn(value,'nonAdjacentFingerprintRuns')||Object.hasOwn(value,'duplicateFingerprintFrames'))fail('不支持状态');return;}
   const format=repeatFrameFormat(value.source.pixelFormat,value.source.width,value.source.height);
   if(!format||!same(value.sampleFormat,format)||!generic&&value.algorithm!==(confirmed?'native-bytes-equal+FFmpeg/rawvideo/framehash/SHA256':'FFmpeg/rawvideo/framehash/SHA256'))fail('样本表示');
   if(confirmed&&(!hash(value.source.contentSha256)||!same(value.differenceConfiguration,differenceConfiguration(format))))fail('原生比较配置/内容身份');
   if(!Array.isArray(value.frames)||value.frames.length<1||value.frames.length>MAX_ANALYSIS_FRAMES)fail('显示帧');
+  if(Object.hasOwn(value,'nonAdjacentFingerprintRuns')){
+    const count=value.nonAdjacentFingerprintRuns;
+    if(!confirmed||generic||!Number.isSafeInteger(count)||count<0||count>Math.max(0,value.frames.length-2))fail('非相邻同指纹复现段数');
+  }
+  if(Object.hasOwn(value,'duplicateFingerprintFrames')){
+    const count=value.duplicateFingerprintFrames;
+    if(!confirmed||generic||!Number.isSafeInteger(count)||count<0||count>=value.frames.length)fail('全片同指纹重复帧数');
+    if(value.nonAdjacentFingerprintRuns!==undefined&&value.nonAdjacentFingerprintRuns>count)fail('同指纹帧数/段数关系');
+  }
   for(const [i,f]of value.frames.entries()) {
     if(i%8192===0)yield;
     if(!f||f.frame!==i||(generic?!validFrameDigest(f.digest,value.fingerprint)||Object.hasOwn(f,'sha256'):!hash(f.sha256)||Object.hasOwn(f,'digest'))||![f.pts,f.bestEffortPts,f.duration].every(x=>x===null||integer(x))||!integer(f.hashPts)||!integer(f.hashDuration)||f.hashBytes!==format.bytes||!['duration','pkt_duration',null].includes(f.durationSource)||(f.duration===null)!==(f.durationSource===null)||!Array.isArray(f.interpretation)||f.interpretation.length!==4||f.interpretation.some(v=>v!==null&&(typeof v!=='string'||v.length>80)))fail(`帧${i}`);

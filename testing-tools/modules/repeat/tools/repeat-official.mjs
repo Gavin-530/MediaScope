@@ -15,7 +15,9 @@ export async function auditOfficialRepeat(work,ctx={commands:[]}){
   const productFiles=['repeat.mjs','repeat-samples.mjs','engine.mjs','public/repeat-model.js','public/repeat-difference.js','public/analysis-limits.js','testing-tools/modules/repeat/tools/repeat-oracle.mjs','testing-tools/modules/repeat/tools/repeat-official.mjs'];
   try{
    for(const name of productFiles){const b=await fs.readFile(name);results.source.push({path:name,bytes:b.length,sha256:digest(b)});}
-   results.inputs=fixtureLock.files.filter(f=>f.path.startsWith('repeat/'));
+   const inputNames=['repeat/nist-shabytetestvectors.zip','repeat/ffmpeg-n8.1.3/tests/fate/filter-video.mak',
+    'repeat/ffmpeg-n8.1.3/tests/ref/fate/filter-metadata-freezedetect','repeat/ffmpeg-n8.1.3/COPYING.LGPLv2.1'];
+   results.inputs=fixtureLock.files.filter(f=>inputNames.includes(f.path));
    const inputs=await fixtures.readMany(results.inputs.map(entry=>entry.path));
    const members=zipMembers(inputs.get('repeat/nist-shabytetestvectors.zip'));
    const vector=name=>{const entry=members.get('shabytetestvectors/'+name);assert.ok(entry,'Missing locked vector '+name);return entry.toString('utf8');};

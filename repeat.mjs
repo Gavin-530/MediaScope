@@ -8,7 +8,7 @@ import {freemem} from 'node:os';
 import {setImmediate as yieldNow} from 'node:timers/promises';
 import {FF,FP,run,checkAnalysisMemory,decodeThreadCount,normalizeMediaPath,probe,video} from './engine.mjs';
 import {MAX_ANALYSIS_FRAMES} from './public/analysis-limits.js';
-import {repeatFrameFormat,repeatRational,repeatExactSummarySteps,repeatTimelineSteps,repeatFreezeSegments,repeatConstantSegmentsSteps,validateRepeatAnalysisSteps} from './public/repeat-model.js';
+import {repeatFrameFormat,repeatRational,repeatExactSummarySteps,repeatTimelineSteps,repeatFreezeSegments,repeatConstantSegmentsSteps,measureEffectiveFrameRate,validateRepeatAnalysisSteps} from './public/repeat-model.js';
 import {differenceConfiguration,differenceSummary,SOURCE_CLASSIFICATION} from './public/repeat-difference.js';
 import {NativeSampleComparison} from './repeat-samples.mjs';
 
@@ -181,6 +181,22 @@ async function collectSteps(iterator,ctx,detail){
     await yieldNow();
   }
 }
+
+function* countRepeatFingerprints(frames){
+  const seen=new Set();
+  let previous,duplicateFingerprintFrames=0,nonAdjacentFingerprintRuns=0;
+  for(const [index,{sha256}] of frames.entries()){
+    if(index%8192===0){checkAnalysisMemory();yield;}
+    if(seen.has(sha256)){
+      duplicateFingerprintFrames++;
+      if(sha256!==previous)nonAdjacentFingerprintRuns++;
+    }
+    else seen.add(sha256);
+    previous=sha256;
+  }
+  return {duplicateFingerprintFrames,nonAdjacentFingerprintRuns};
+}
+
 export async function analyzeRepeats(file,stream,ctx={},options={}) {
   if(ctx.signal?.aborted)throw Error('任务已取消');
   const signature=await repeatFileSignature(file),source={signature,stream:stream.index,pixelFormat:stream.pix_fmt,width:stream.width,height:stream.height};
@@ -192,6 +208,7 @@ export async function analyzeRepeats(file,stream,ctx={},options={}) {
   const frames=await repeatScan(file,stream,ctx);
   await unchanged(file,signature);
   const hashTimeBase=await fingerprints(file,stream,format,frames,ctx);
+  const fingerprintCounts=await collectSteps(countRepeatFingerprints(frames),ctx,'统计全片同指纹重复与跨段复现');
   const timeBase=repeatRational(stream.time_base)?stream.time_base:null,gridRates=[stream.r_frame_rate,stream.avg_frame_rate].filter(x=>typeof x==='string');
   const exact=await collectSteps(repeatExactSummarySteps(frames,true),ctx,'汇总精确重复区间');
   const timeline=await collectSteps(repeatTimelineSteps(frames,timeBase,gridRates),ctx,'核对原始时间网格');
@@ -201,8 +218,9 @@ export async function analyzeRepeats(file,stream,ctx={},options={}) {
   if(await repeatContentSha256(file,ctx)!==source.contentSha256)throw Error('源文件内容在重复分析期间发生变化；不采用已读取的结果');
   await unchanged(file,signature);
   const constant=await collectSteps(repeatConstantSegmentsSteps(frames,timeBase,exact),ctx,'核对持续样本不变区间');
+  const effectiveFrameRate=measureEffectiveFrameRate(frames,timeBase,exact,timeline);
   const result={configurationVersion:2,status:'complete',source,sampleFormat:format,algorithm:'native-bytes-equal+FFmpeg/rawvideo/framehash/SHA256',
-    tools,sourceClassification:{...SOURCE_CLASSIFICATION},differenceConfiguration:differenceConfiguration(format),differenceSummary:differenceSummary(frames),constant,timeBase,hashTimeBase,gridRates,frames,exact,timeline,freeze};
+    tools,sourceClassification:{...SOURCE_CLASSIFICATION},differenceConfiguration:differenceConfiguration(format),differenceSummary:differenceSummary(frames),constant,timeBase,hashTimeBase,gridRates,frames,exact,timeline,freeze,effectiveFrameRate,...fingerprintCounts};
   await collectSteps(validateRepeatAnalysisSteps(result,stream),ctx,'复核完整重复分析证据');
   return result;
 }

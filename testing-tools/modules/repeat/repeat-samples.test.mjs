@@ -100,7 +100,7 @@ test('[repeat-analysis] native MSAD cross-check and file identity agree with ind
     const channels=name.startsWith('yuv')?['Y','U','V']:name.startsWith('gbr')?['G','B','R','A']:['Y'];
     expected.forEach((row,i)=>{const answer=row[0]/(layout.components[i].width*layout.components[i].height*peak);assert.ok(Math.abs(events[1][channels[i]]-answer)<=0.00000051,`${name} ${channels[i]} ${events[1][channels[i]]} vs ${answer}`);});
     const legacy=structuredClone(r);legacy.configurationVersion=1;legacy.algorithm='FFmpeg/rawvideo/framehash/SHA256';
-    for(const key of ['differenceConfiguration','differenceSummary','constant','sourceClassification','tools'])delete legacy[key];delete legacy.source.contentSha256;
+    for(const key of ['differenceConfiguration','differenceSummary','constant','sourceClassification','tools','effectiveFrameRate','nonAdjacentFingerprintRuns','duplicateFingerprintFrames'])delete legacy[key];delete legacy.source.contentSha256;
     for(const frame of legacy.frames){delete frame.equalPrevious;delete frame.difference;}validateRepeatAnalysis(legacy,stream);
     const tampered=structuredClone(r);tampered.frames[2].difference[0][0]=-1;assert.throws(()=>validateRepeatAnalysis(tampered,stream));
     await assert.rejects(()=>repeatPreview({file,signature:r.source.signature,contentSha256:'0'.repeat(64),stream:0,frame:1,hashes:r.frames.slice(0,2).map(f=>f.sha256)}),/内容摘要/);

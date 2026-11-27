@@ -879,6 +879,23 @@
       "inputMode": "declared-fixed-and-or-generated-real-media"
     },
     {
+      "id": "ui.fate-fingerprint-counts",
+      "module": "ui",
+      "scope": "browser",
+      "file": "testing-tools/modules/ui/browser.test.mjs",
+      "name": "[repeat-analysis] official FATE tpad frame and run counts survive display and JSON import",
+      "inputs": [
+        "repeat/ffmpeg-n8.1.3/tests/ref/fate/filter-tpad-add",
+        "repeat/ffmpeg-n8.1.3/COPYING.LGPLv2.1"
+      ],
+      "artifacts": [
+        "^browser\\/[0-9]+-[A-Za-z0-9]{6}\\/fingerprint-counts\\.json$"
+      ],
+      "requiresMedia": true,
+      "covers": ["ui","repeat","reports"],
+      "inputMode": "declared-fixed-and-or-generated-real-media"
+    },
+    {
       "id": "ui.empty-and-single-frame-results-explain-what-was-measured-without-e.859def9d",
       "module": "ui",
       "scope": "browser",
@@ -3441,6 +3458,26 @@
       "inputs": [],
       "artifacts": [
         "^repeat-analysis-[A-Za-z0-9]{6}\\/timestamps\\.json$"
+      ],
+      "requiresMedia": true,
+      "covers": [
+        "repeat"
+      ],
+      "inputMode": "declared-fixed-and-or-generated-real-media"
+    },
+    {
+      "id": "repeat.non-adjacent-sha256-recurrence",
+      "module": "repeat",
+      "scope": "general",
+      "file": "testing-tools/modules/repeat/repeat.test.mjs",
+      "name": "[repeat-analysis] full-clip SHA-256 duplicates and recurrences agree with the locked FFmpeg FATE tpad reference",
+      "inputs": [
+        "repeat/ffmpeg-n8.1.3/tests/fate/filter-video.mak",
+        "repeat/ffmpeg-n8.1.3/tests/ref/fate/filter-tpad-add",
+        "repeat/ffmpeg-n8.1.3/COPYING.LGPLv2.1"
+      ],
+      "artifacts": [
+        "^repeat-analysis-[A-Za-z0-9]{6}\\/non-adjacent-fingerprint\\.json$"
       ],
       "requiresMedia": true,
       "covers": [

@@ -10,17 +10,54 @@ const read=value=>parsePortable(JSON.stringify(value));
 test('[portable-repeat] legacy 0.4 and draft 0.5 method-1/2 data retain their original evidence',()=>{
   for(const version of [1,2])for(const formatVersion of ['0.4','0.5']){
     const report=repeatReportFixture({version}),wire={...save(report),formatVersion};delete wire.requires;
-    assert.deepEqual(read(wire).results[0].report,report);
-    const exported=makePortable({...read(wire),applicationVersion:'new-exporter'});assert.equal(exported.formatVersion,'0.5');
-    assert.deepEqual(read(exported).results[0].report,report);assert.deepEqual(exported.requires,['repeat/'+version]);
+    const imported=read(wire);assert.deepEqual(imported.results[0].report,report);
+    const exported=makePortable({...imported,applicationVersion:'new-exporter'});assert.equal(exported.formatVersion,'0.5');
+    const restored=read(exported).results[0].report;
+    assert.deepEqual(restored,report);assert.deepEqual(exported.requires,['repeat/'+version]);
     assert.equal(Object.hasOwn(report.repeatAnalysis,'fingerprint'),false);
+    assert.equal(Object.hasOwn(restored.repeatAnalysis,'effectiveFrameRate'),false);
+    assert.equal(Object.hasOwn(restored.repeatAnalysis,'nonAdjacentFingerprintRuns'),false);
+    assert.equal(Object.hasOwn(restored.repeatAnalysis,'duplicateFingerprintFrames'),false);
+    if(version===1&&formatVersion==='0.4'){
+      report.repeatAnalysis.effectiveFrameRate={method:'adjacent-exact-presentation-span/v1',fps:12.5};
+      assert.throws(()=>save(report),/有效帧率/);
+    }
+  }
+  const report=repeatReportFixture();
+  report.repeatAnalysis.nonAdjacentFingerprintRuns=0;
+  assert.deepEqual(read(save(report)).results[0].report,report);
+  for(const invalid of [-1,0.5,4,'0',null]){
+    report.repeatAnalysis.nonAdjacentFingerprintRuns=invalid;
+    assert.throws(()=>save(report),/非相邻同指纹复现段数/);
+  }
+  report.repeatAnalysis.nonAdjacentFingerprintRuns=0;
+  report.repeatAnalysis.duplicateFingerprintFrames=3;
+  assert.deepEqual(read(save(report)).results[0].report,report);
+  for(const invalid of [-1,0.5,5,'3',null]){
+    report.repeatAnalysis.duplicateFingerprintFrames=invalid;
+    assert.throws(()=>save(report),/全片同指纹重复帧数/);
+  }
+  report.repeatAnalysis.duplicateFingerprintFrames=0;
+  report.repeatAnalysis.nonAdjacentFingerprintRuns=1;
+  assert.throws(()=>save(report),/帧数\/段数关系/);
+  for(const legacy of [repeatReportFixture({version:1}),repeatReportFixture({algorithm:'sha256'})]){
+    legacy.repeatAnalysis.duplicateFingerprintFrames=0;
+    assert.throws(()=>save(legacy),/全片同指纹重复帧数/);
   }
 });
 
 test('[portable-repeat] shared generic descriptors preserve SHA-256 SHA-512 and SHA3-256 in hex and base64',()=>{
   for(const algorithm of ['sha256','sha512','sha3-256'])for(const encoding of ['hex','base64']){
-    const report=repeatReportFixture({algorithm,encoding}),wire=save(report);
-    assert.deepEqual(read(wire).results[0].report,report);assert.deepEqual(wire.requires,['frame-digest/1','repeat/2']);
+    const report=repeatReportFixture({algorithm,encoding});
+    // The saved value deliberately differs from the fixture's timestamps and counts.
+    report.repeatAnalysis.effectiveFrameRate=encoding==='hex'
+      ?{method:'adjacent-exact-presentation-span/v1',fps:12.5}
+      :{method:'adjacent-exact-presentation-span/v1',fps:null,reason:'invalid-last-duration'};
+    const wire=save(report);
+    const imported=read(wire).results[0].report;
+    assert.deepEqual(imported,report);assert.deepEqual(wire.requires,['frame-digest/1','repeat/2']);
+    // Re-export one numeric and one unavailable result through the common serializer.
+    if(algorithm==='sha256')assert.deepEqual(read(save(imported)).results[0].report,report);
     const r=wire.results[0].report.repeatAnalysis;assert.equal(r.constant.segments.count,1);
     assert.equal(r.frames.columns.includes('fingerprint'),false);assert.equal(r.frames.columns.includes('sha256'),false);
     assert.equal(report.repeatAnalysis.exact.duplicates,3);assert.equal(report.repeatAnalysis.frames[3].equalPrevious,false);
@@ -41,6 +78,13 @@ test('[portable-repeat] unknown declared digests are preserved as data while uns
 
 test('[portable-repeat] a generic profile rejects mismatched lengths mixed fields wrong inputs and malformed encodings',()=>{
   const report=repeatReportFixture({algorithm:'sha256'});
+  const wire=save(report),method='adjacent-exact-presentation-span/v1';
+  for(const invalid of [null,[],{method},{method,fps:'12.5'},{method,fps:0},{method,fps:-1},{method,fps:null},
+    {method,fps:null,reason:'unknown'},{method,fps:12.5,reason:'missing-pts'},{method,fps:12.5,duplicateCount:1},
+    {method:'adjacent-exact-presentation-span/v2',fps:12.5}]){
+    const broken=structuredClone(wire);broken.results[0].report.repeatAnalysis.effectiveFrameRate=invalid;
+    assert.throws(()=>read(broken),/有效帧率/);
+  }
   for(const damage of [r=>r.fingerprint.version=2,r=>r.fingerprint.bits=128,r=>r.fingerprint.parameters={seed:1},r=>r.fingerprint.input='scaled-rgb',r=>r.algorithm='FFmpeg/rawvideo/framehash/SHA256',r=>r.frames[0].sha256=r.frames[0].digest,r=>r.frames[0].digest=r.frames[0].digest.toUpperCase(),r=>r.frames[0].digest=r.frames[0].digest.slice(1),r=>r.frames[0].equalPrevious=true,r=>r.configurationVersion=3]){
     const broken=structuredClone(report);damage(broken.repeatAnalysis);assert.throws(()=>save(broken));
   }

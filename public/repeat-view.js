@@ -11,6 +11,28 @@ const pager=(name,label)=>`<div class="pager"><button class="secondary" data-pag
 const equalPrevious=(r,f)=>r.configurationVersion===2?f.equalPrevious:r.frames[f.frame-1].sha256===f.sha256;
 const bandNames={equal:'逐值相等','one-code':'最大差 1 码值','two-codes':'最大差 2 码值',larger:'最大差超过 2 码值','no-predecessor':'无前帧'};
 
+const effectiveFrameRateReasons={
+  'invalid-time-base':'缺少有效时间基',
+  'missing-pts':'存在缺失的原始 PTS',
+  'non-increasing-pts':'原始 PTS 未严格递增',
+  'invalid-last-duration':'末帧时长缺失或非正值',
+};
+
+export function effectiveFrameRateHTML(r,{card=false}={}){
+  const rate=r.effectiveFrameRate;
+  let value='未保存',note='该报告未保存此指标';
+  if(rate?.fps===null){
+    value='无法计算';
+    note=effectiveFrameRateReasons[rate.reason];
+  }else if(rate){
+    value=`${rate.fps.toLocaleString('zh-CN',{maximumSignificantDigits:8})} fps`;
+    note='扣除相邻精确重复';
+  }
+  const timing=rate?.fps>0?' title="全程平均值，按 FFprobe 报告的末帧时长计算"':'';
+  if(card)return `<div class="card" id="repeat-effective-frame-rate"><span>有效帧率</span><strong>${esc(value)}</strong><span${timing}>${esc(note)}</span></div>`;
+  return `<p class="hint" id="repeat-effective-frame-rate"><strong${timing}>有效帧率</strong> ${esc(rate?`${value}（${note}）`:note)}</p>`;
+}
+
 export function repeatHTML(r){
   if(r.status!=='complete')return `<section class="section" id="repeat-result" data-analysis-target="repeat"><h3>重复帧与时间诊断</h3><p class="notice">不支持：${esc(r.reason)}</p></section>`;
   const x=r.exact,t=r.timeline,f=r.freeze;
@@ -21,18 +43,25 @@ export function repeatHTML(r){
   const normalTiming=!!r.timeBase&&r.frames.length>=2&&t.status==='complete';
   const summary=[exactNote,normalTiming?'':timingNote,constantNote,r.configurationVersion===2?'':'旧版指纹比较，未进行逐值确认。'].filter(Boolean).join(' ');
   const interpretation='正常静止画面也可能产生精确重复，不能据此认定录制故障。';
+  const adjacentLabel=r.configurationVersion===2?'相邻精确重复':'相邻指纹相同';
+  const card=(label,value,note,{title,noteId}={})=>`<div class="card"><span${title?` title="${esc(title)}"`:''}>${esc(label)}</span><strong>${esc(value)}</strong>${note===null?'':`<span${noteId?` id="${noteId}"`:''}>${esc(note)}</span>`}</div>`;
   const cards=[
-    ['分析规模',`${x.frames.toLocaleString('zh-CN')} 帧`,`${x.comparisons.toLocaleString('zh-CN')} 次相邻比较`],
-    ['精确重复',`${x.duplicates.toLocaleString('zh-CN')} 次`,x.ratio===null?'比例不可计算':`占相邻比较 ${(x.ratio*100).toLocaleString('zh-CN',{maximumFractionDigits:4})}%`],
-    ['连续重复段',`${x.runs.length.toLocaleString('zh-CN')} 段`,r.configurationVersion===2?`原 PTS 证实 ≥2 秒：${r.constant.segments.length.toLocaleString('zh-CN')} 段${r.constant.status==='complete'?'':` · ${states[r.constant.status]}`}`:null,'repeat-constant-summary'],
+    card('分析规模',`${x.frames.toLocaleString('zh-CN')} 帧`,null),
+    card(adjacentLabel,`${x.duplicates.toLocaleString('zh-CN')} 帧`,x.ratio===null?'比例不可计算':`占相邻比较 ${(x.ratio*100).toLocaleString('zh-CN',{maximumFractionDigits:4})}%`,{title:interpretation}),
+    effectiveFrameRateHTML(r,{card:true}),
+    card('连续重复段',`${x.runs.length.toLocaleString('zh-CN')} 段`,r.configurationVersion===2?`原 PTS 证实 ≥2 秒：${r.constant.segments.length.toLocaleString('zh-CN')} 段${r.constant.status==='complete'?'':` · ${states[r.constant.status]}`}`:null,{noteId:'repeat-constant-summary'}),
   ];
   return `<section class="section" id="repeat-result" data-analysis-target="repeat"><h3>重复帧与时间诊断</h3>
-    <div class="cards repeat-cards">${cards.map(([k,v,note,id])=>`<div class="card"><span${k==='精确重复'?` title="${esc(interpretation)}"`:''}>${esc(k)}</span><strong>${esc(v)}</strong>${note===null?'':`<span${id?` id="${id}"`:''}>${esc(note)}</span>`}</div>`).join('')}</div>
+    <div class="cards repeat-cards">${cards.join('')}</div>
+    ${r.configurationVersion===2?`<div class="repeat-statistics">
+    <p class="hint" id="repeat-fingerprint-duplicates"><strong>全片同指纹重复</strong> ${r.duplicateFingerprintFrames===undefined?'该报告未保存此指标':`${r.duplicateFingerprintFrames.toLocaleString('zh-CN')} 帧`}</p>
+    <p class="hint" id="repeat-non-adjacent"><strong>非相邻同指纹复现</strong> ${r.nonAdjacentFingerprintRuns===undefined?'该报告未保存此指标':`${r.nonAdjacentFingerprintRuns.toLocaleString('zh-CN')} 段`}</p>
+    </div>`:''}
     <p class="notice" id="repeat-summary">${summary}</p>
-    <div class="repeat-overview-heading"><h4>精确重复分布</h4><span class="hint" id="repeat-overview-note"></span>${f.status==='complete'&&f.segments.length?`<span class="repeat-region-key">静止候选 ${f.segments.length} 段</span>`:''}</div><div id="repeat-overview"></div>
+    <div class="repeat-overview-heading"><h4>${adjacentLabel}分布</h4><span class="hint" id="repeat-overview-note"></span>${f.status==='complete'&&f.segments.length?`<span class="repeat-region-key">静止候选 ${f.segments.length} 段</span>`:''}</div><div id="repeat-overview"></div>
     ${f.status==='not-requested'?'':`<div id="repeat-freeze">${f.status==='complete'?`<details id="repeat-freeze-details"><summary>静止候选 · ${f.segments.length?`${f.segments.length} 段`:'未检出'} · 明细与 CSV</summary><p class="hint">画面变化低于阈值 ${f.noise} 且持续至少 ${f.durationSeconds} s 时记为候选，需结合画面复核，不作为精确相等判据。阴影仅标记候选位置，不计入精确重复次数。原始时间戳完整且严格递增时，图表按原始时间展示相邻比较区间；否则按帧序号展示。时间保留检测器输出的精度；定位的是检测事件帧，并非区间起点帧。斜纹表示结束未报告，不据末帧时间补算结束或时长。</p>${pager('segments','静止区间')}<details><summary>检测事件明细与 CSV</summary>${pager('freeze','静止事件')}</details></details>`:`<p class="notice">持续静止候选 · ${states[f.status]}：${esc(f.reason)}</p>`}</div>`}
     <details id="repeat-evidence"><summary>检测明细与导出</summary>
-    <details id="repeat-method"><summary>方法与判读依据</summary><p id="repeat-source">原生格式 <strong>${esc(r.source.pixelFormat)}</strong> · <strong>${r.sampleFormat.depth}-bit</strong>${r.sampleFormat.alpha?' · 包含 Alpha':''}</p><p>${r.configurationVersion===2?'精确重复已直接核对全部有效样本逐值相等；SHA-256另用于完整性证据。':'旧方法版本 1：相邻帧有效样本的 SHA-256 相同，未进行逐值确认。'}N 帧比较 N−1 次。该比例不代表录制丢帧率、真实采集帧率或全片唯一画面比例。色彩解释标签不属于样本相等判据。</p><p id="repeat-interpretation">${interpretation}</p><p id="repeat-overview-method"></p><p>编码前是否复用同一画面无法据此判定。</p></details>
+    <details id="repeat-method"><summary>方法与判读依据</summary><p id="repeat-source">原生格式 <strong>${esc(r.source.pixelFormat)}</strong> · <strong>${r.sampleFormat.depth}-bit</strong>${r.sampleFormat.alpha?' · 包含 Alpha':''}</p><p>${r.configurationVersion===2?'相邻精确重复直接核对全部有效样本逐值相等。全片帧数和跨段段数按 SHA-256 匹配统计，每个指纹保留首次出现，后续同指纹帧各计一次。':'旧方法版本 1：相邻帧有效样本的 SHA-256 相同，未进行逐值确认。'}共 ${x.comparisons.toLocaleString('zh-CN')} 次相邻比较（N 帧比较 N−1 次）。该比例不代表录制丢帧率、真实采集帧率或全片唯一画面比例。色彩解释标签不属于样本相等判据。</p><p id="repeat-interpretation">${interpretation}</p><p id="repeat-overview-method"></p><p>编码前是否复用同一画面无法据此判定。</p></details>
     ${r.configurationVersion===2?`<div id="repeat-differences"><h4>相邻帧最大样本差分布</h4><dl class="repeat-metrics">${Object.entries(r.differenceSummary.counts).map(([k,v])=>`<div><dt>${bandNames[k]}</dt><dd>${v.toLocaleString('zh-CN')} 次</dd></div>`).join('')}</dl><p class="hint">按每对相邻帧的最大样本码值差分档，不代表异常等级或视觉差异程度；非零差异不计作精确重复。</p></div>`:''}
     <h4>连续重复段 · ${r.frames.length<2?'无相邻帧可比较':x.runs.length?`${x.runs.length} 段`:'未发现'}</h4><p class="hint">相邻两帧或更多帧${r.configurationVersion===2?'的全部有效样本逐值相等':'的有效样本指纹相同'}，记为一段；帧序号从 0 计。</p>${pager('runs','重复段')}
     ${r.configurationVersion===2?`<h4>连续样本不变区间 · ${r.constant.segments.length} 段</h4><p class="hint">至少 2 秒由已观察的原 PTS 跨度证实；末帧 duration 不能单独把不足 2 秒的观测补成合格区间。与低变化候选可重叠，不相加。</p>${pager('constant','样本不变区间')}`:''}
@@ -102,7 +131,8 @@ export function initRepeat(container,report,{api,download,draw}){
     if(!overview[bin])overview[bin]=[timed?time(i-1):i,0,{startFrame:i,endFrame:end-1,end:timed?time(end-1):end,firstDuplicate:null}];
     if(equalPrevious(r,r.frames[i])){overview[bin][1]++;overview[bin][2].firstDuplicate??=i;}
   }
-  const overviewMethod=`每柱统计最多 ${width} 次相邻比较中的精确重复次数；点击可定位。图表分组不改变原始计数。${timed?'横轴为原始 PTS 时间，覆盖相邻帧实际观测区间。':'横轴为显示帧序号，不重建缺失时间。'}${regions.length?'阴影为独立的持续静止候选，不改变纵轴重复次数。':''}`;
+  const comparisonLabel=r.configurationVersion===2?'精确重复次数':'指纹相同次数';
+  const overviewMethod=`每柱统计最多 ${width} 次相邻比较中的${comparisonLabel}；点击可定位。图表分组不改变原始计数。${timed?'横轴为原始 PTS 时间，覆盖相邻帧实际观测区间。':'横轴为显示帧序号，不重建缺失时间。'}${regions.length?'阴影为独立的持续静止候选，不改变纵轴重复次数。':''}`;
   find('#repeat-overview-note').textContent=r.exact.comparisons?`每柱最多 ${width} 次相邻比较`:'';
   find('#repeat-overview-note').title=overviewMethod;
   find('#repeat-overview-method').textContent=overviewMethod;
@@ -110,7 +140,7 @@ export function initRepeat(container,report,{api,download,draw}){
     const region=regionAt(x),s=region?.source;
     return [
     {label:'显示帧区间',value:`${p[2].startFrame}–${p[2].endFrame}`,width:18},
-    {label:'精确重复次数',value:p[1],digits:0},
+    {label:comparisonLabel,value:p[1],digits:0},
     ...(regions.length?[
       {label:'静止候选',value:region?`${region.index+1} / ${regions.length}`:'无',width:10},
       {label:'开始（s）',value:s?.start??'—',width:18},

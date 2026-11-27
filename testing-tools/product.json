@@ -836,6 +836,7 @@
         "repeatRational",
         "rationalEvidence",
         "repeatSeconds",
+        "measureEffectiveFrameRate",
         "repeatFrameFormat",
         "repeatExactSummary",
         "repeatConstantSegments",
@@ -844,6 +845,7 @@
         "validateRepeatAnalysis"
       ],
       "functions": [
+        "validEffectiveFrameRate",
         "finish",
         "same"
       ],
@@ -865,6 +867,7 @@
         "ui.interaction"
       ],
       "exports": [
+        "effectiveFrameRateHTML",
         "repeatHTML",
         "initRepeat"
       ],
@@ -3592,13 +3595,14 @@
       "id": "repeat.measurement",
       "module": "repeat",
       "title": "重复区间、时间、差异与预览",
-      "criterion": "真实视频的重复/变化、VFR/缺失时刻、静止候选、格式中途变化、取消和只读预览均检查；保留原样本和PTS。",
-      "oracle": "已知逐帧配方、独立指纹/差异、实际FFmpeg证据",
+      "criterion": "真实视频的重复/变化、VFR/缺失时刻、静止候选、格式中途变化、取消和只读预览均检查，保留原样本和PTS。保存按相邻精确重复计算的有效帧率或不可计算原因，以及全片同指纹重复帧数和非相邻同指纹复现段数。",
+      "oracle": "锁定的 FFmpeg FATE 逐帧参考、独立原始样本比较、整数差异和时间证据",
       "cases": [
         "repeat.changing-color-metadata-preserves-native-samples-freeze-history-an.f634935a",
         "repeat.real-midstream-dimensions-or-pixel-layout-changes-are-rejected-bef.561d9b01",
         "repeat.native-integer-layouts-preserve-every-plane-alpha-edge-and-lsb-aga.a611b93f",
         "repeat.original-pts-offset-and-vfr-holds-agree-with-separate-ffprobe-inte.b9ddd687",
+        "repeat.non-adjacent-sha256-recurrence",
         "repeat.integer-rational-grid-missing-pts-one-frame-and-open-boundaries-ha.c5870d22",
         "repeat.p010-p012-p016-native-raw-paths-match-official-hashes-and-reject-n.dbea9635",
         "repeat.missing-source-pts-never-borrows-generated-framehash-timestamps.ec4d1553",
@@ -3686,7 +3690,11 @@
         "reports.integer-evidence-remains-exact-and-capacity-policies-use-round-dec.4d455bc0",
         "ui.workflow.selection-export"
       ],
-      "inputs": []
+      "inputs": [
+        "repeat/ffmpeg-n8.1.3/tests/fate/filter-video.mak",
+        "repeat/ffmpeg-n8.1.3/tests/ref/fate/filter-tpad-add",
+        "repeat/ffmpeg-n8.1.3/COPYING.LGPLv2.1"
+      ]
     },
     {
       "id": "repeat.qualification",
@@ -5106,7 +5114,7 @@
       "id": "reports.repeat",
       "module": "reports",
       "title": "重复证据协议",
-      "criterion": "摘要算法/编码/长度/输入、直接比较与碰撞、区间整数、可选元数据和执行身份不能混淆。",
+      "criterion": "摘要算法/编码/长度/输入、直接比较与碰撞、区间整数、可选元数据和执行身份不能混淆。已保存的有效帧率按原值往返，旧报告缺失字段保持缺失，非法结果结构被拒绝。",
       "oracle": "独立协议控制数据与精确不变量",
       "cases": [
         "reports.legacy-0-4-and-draft-0-5-method-1-2-data-retain-their-original-evi.a7e520d9",
@@ -5470,6 +5478,7 @@
       "criterion": "真实画布、范围/悬浮/固定点、表分页/导出、折叠、主题、侧栏、任务状态、错误恢复及全部业务流程。",
       "oracle": "真实Edge DOM/Canvas、HTTP、下载、报告与独立数据模型",
       "cases": [
+        "ui.fate-fingerprint-counts",
         "ui.zero-references-and-hover-guides-match-actual-points-and-half-open.7390991f",
         "ui.clicking-relocates-a-pin-and-only-its-displayed-line-cancels-it-wi.7932ad4d",
         "ui.hover-readouts-keep-decimal-positions-and-original-text-across-mag.6702d2d5",
