@@ -10,6 +10,7 @@ export function measurementFile(relative) {
   if(/^bitrate-validation-[A-Za-z0-9]{6}$/.test(top))return /\.json(?:\.gz)?$/.test(name);
   if(/^(psnr|ssim|vmaf)\.(log|json)$/.test(name)&&(!relative.includes('/')||['bitdepth','trial','trial-libx265','trial-libaom-av1'].includes(top)))return true;
   if(/^(metrics-equivalence|reference-cache|vfr-equivalence|structure-equivalence|siti-parallel|siti-gpu|siti-p910|bitrate-equivalence|vmaf-official|repeat-analysis)-[A-Za-z0-9]{6}$/.test(top))return name.endsWith('.json');
+  if(top==='browser'&&name==='fingerprint-counts.json')return /^browser\/[0-9]+-[A-Za-z0-9]{6}\/fingerprint-counts\.json$/.test(relative);
   if(['browser','server-reports','chroma-assumption','portable','report-validation'].includes(top))return name==='report.json'||/^theme-.*\.json$/.test(name)||name==='sidebar-links.json';
   if(['trials-expanded','chart-model'].includes(top))return name==='measured-trial.json';
   if(top==='bd-reference')return ['bd-reference.json','bd-measurement.json','bd-trial-report.json'].includes(name);

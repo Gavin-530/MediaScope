@@ -69,7 +69,8 @@ test('[test-system] successful critical checks require retained measurement data
  try{
   const unique=new Map();
   for(const requirement of criticalMeasurements){
-   const sample=requirement.pathPattern.source.replace(/^\^|\$$/g,'').replaceAll('[A-Za-z0-9]{6}','Ab1234').replace(/\\(.)/g,'$1');
+   const sample=requirement.pathPattern.source.replace(/^\^|\$$/g,'')
+    .replaceAll('[0-9]+','1').replaceAll('[A-Za-z0-9]{6}','Ab1234').replace(/\\(.)/g,'$1');
    assert.ok(requirement.pathPattern.test(sample),'Artifact needs a reproducible protocol sample: '+sample);unique.set(sample,requirement);
   }
   for(const [sample]of unique){
